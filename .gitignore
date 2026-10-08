@@ -1,0 +1,51 @@
+# ==============================================================================
+# MMD Tools for Maya - Git Ignore Configuration
+# ==============================================================================
+
+# ドキュメント・仕様書・作業ログ
+docs/
+
+# テスト・サンプルメディアファイル
+vmd/
+wav/
+model00.pmx
+*.pmx
+*.pmd
+*.x
+tes_model/
+
+# バックアップおよびスクラッチ作業領域
+_old/
+scratch/
+
+# キャッシュ・自動生成構造データ
+asset/last_imported_structure.json
+last_imported_structure.json
+
+# ローカル設定ファイル
+asset/khatangton.txt
+asset/*.txt
+
+# Python キャッシュファイル
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+
+# Maya 一時ファイル・スウォッチ
+.mayaSwatches/
+*.swp
+*.lock
+
+# OS 自動生成ファイル
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# C++ ビルド中間生成物・旧バックアップ (※同梱DLL bin/mmd_xpbd.dll は除外しない)
+*_old_*.dll
+*.obj
+*.lib
+*.exp
+*.pdb
+*.ilk
