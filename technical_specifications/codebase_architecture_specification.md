@@ -53,9 +53,6 @@ mmd_tools_for_maya/
 ├── toon/                             # MMD標準共有トゥーンテクスチャ
 │   └── toon01.bmp 〜 toon10.bmp      # 階調陰影用標準BMPテクスチャ群
 │
-├── wav/                              # 音声データフォルダ
-│   └── NoTitle.wav                   # 動作確認用サンプル音源
-│
 └── docs/                             # プロジェクト技術ドキュメント
     ├── technical_specifications/     # 分離独立した専門技術仕様書群 (本フォルダ)
     │   ├── model_import_specification.md      # モデルインポート仕様
@@ -71,6 +68,7 @@ mmd_tools_for_maya/
 ## 2. ルート階層モジュール仕様
 
 ### 2-1. `mmd_tools_for_maya_plugin.py`
+
 - **種別**: Python (Mayaプラグインエントリポイント)
 - **役割**: Maya のプラグインマネージャから直接ロードされ、トップメニューバーに「MMD」メニューを登録。
 - **主要関数**:
@@ -80,6 +78,7 @@ mmd_tools_for_maya/
   - `on_show_about()`: バージョン・開発者・機能サマリー表示ダイアログ。
 
 ### 2-2. `gui.py`
+
 - **種別**: Python (UIモジュール)
 - **役割**: PySide6 (Maya 2025+) および PySide2 (Maya 2022-2024) 両対応のタブ型統合インターフェース。
 - **主要クラス**:
@@ -93,16 +92,19 @@ mmd_tools_for_maya/
   - `ExecutionLogDialog`: プログレスバー付きリアルタイムログダイアログ。
 
 ### 2-3. `pmxpaimaya.py`
+
 - **種別**: Python (モデルインポートエンジン)
 - **役割**: パース済み PMX 構造体から Maya API 2.0（`MFnMesh`）を用いた高速メッシュ生成、マテリアル構築、スケルトン階層構築、足IK構築、スキニング（SkinCluster）、モーフ（BlendShape）設定を統括。
 - **主要関数**: `import_pmx`, `create_mesh`, `setup_mmd_ik`, `create_mmd_lighting`。
 
 ### 2-4. `vmdpaimaya.py`
+
 - **種別**: Python (モーションインポートエンジン)
 - **役割**: VMD バイナリを解析し、Maya タイムラインへ 30fps キーフレームアニメーション（クォータニオン $\rightarrow$ オイラー角、ベジェ接線）を適用。カメラおよび WAV 音源も同期配置。
 - **主要関数**: `import_vmd`, `apply_bone_motion`, `apply_morph_motion`, `apply_camera_motion`, `delete_mmd_scene_elements`。
 
 ### 2-5. `mayapaipmx.py`
+
 - **種別**: Python (エクスポートエンジン)
 - **役割**: Maya シーン内の選択メッシュ、ボーン、ウェイト、マテリアル情報を収集し、PMX 2.0 バイナリとして書き出し。
 
