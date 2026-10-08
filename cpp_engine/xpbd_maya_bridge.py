@@ -513,12 +513,19 @@ class XpbdMayaBridge:
                 except Exception:
                     pass
 
-        # 可視化ノードのキーフレームもクリア
-        if mc.objExists(VIS_GROUP_NAME):
-            try:
-                mc.cutKey(VIS_GROUP_NAME, hierarchy='below', attribute=['translateX', 'translateY', 'translateZ', 'rotateX', 'rotateY', 'rotateZ'])
-            except Exception:
-                pass
-        # Dynamic追従コンストレイントを通常状態に復帰
-        mute_dynamic_constraints(mute=False)
-        print("[XPBD] 物理対象ボーンのキーフレームをクリアしました。")
+    def clear_physics_keyframes(self):
+        """
+        物理対象ボーン（DynamicおよびAligned剛体に対応するMayaジョイント）に書き込まれた
+        キーフレームをクリアし、可視化ノードを初期追従状態に復元します。
+        """
+        for rb_idx in self.dynamic_rb_indices:
+            b_idx = self.rb_to_bone.get(rb_idx, -1)
+            j_node = self.bone_mapping.get(b_idx, "")
+            if j_node and mc.objExists(j_node):
+                try:
+                    mc.cutKey(j_node, attribute=['translateX', 'translateY', 'translateZ', 'rotateX', 'rotateY', 'rotateZ'], clear=True)
+                except Exception:
+                    pass
+
+        reconnect_visualizers_to_bones()
+        print("[XPBD] 物理対象ボーンのキーフレームをクリアし、剛体・Jointを再吸着しました。")

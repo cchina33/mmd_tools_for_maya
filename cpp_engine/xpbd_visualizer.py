@@ -82,13 +82,16 @@ def mute_dynamic_constraints(mute=True):
     action_str = "一時無効化" if mute else "復元"
     print(f"[Visualizer] 剛体・Joint追従コンストレイント {count} 個を{action_str}しました。")
 
-def map_pmx_bones_to_maya(pmx_bones, all_joints):
+def map_pmx_bones_to_maya(pmx_bones, all_joints=None):
     """
     PMXボーンリストとMayaシーン内のジョイントを多層照合（Multi-layer Fallback）し、
     bone_idx -> maya_joint_node のマッピング辞書を高精度に構築します。
     last_imported_structure.json、モデルプレフィックス（Apose_等）の剥離、
     日英標準ボーン辞書、ローマ字変換、スカートボーン特殊規則に対応。
     """
+    if all_joints is None:
+        all_joints = mc.ls(type="joint", long=True) or []
+
     if not all_joints or not pmx_bones:
         return {}
 

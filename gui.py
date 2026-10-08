@@ -712,7 +712,7 @@ class HikTabWidget(QWidget):
         model_layout.addWidget(self.cbb_models)
 
         self.btn_refresh = QPushButton("更新")
-        self.btn_refresh.setFixedWidth(60)
+        self.btn_refresh.setFixedWidth(80)
         self.btn_refresh.clicked.connect(self._refresh_models)
         model_layout.addWidget(self.btn_refresh)
 
@@ -946,7 +946,7 @@ class VmdImportTabWidget(QWidget):
         h_model.addWidget(QLabel("適用先モデル:"))
         self.cbb_target_model = QComboBox()
         self.btn_refresh_models = QPushButton("更新")
-        self.btn_refresh_models.setFixedWidth(55)
+        self.btn_refresh_models.setFixedWidth(80)
         self.btn_refresh_models.clicked.connect(self._refresh_models)
         h_model.addWidget(self.cbb_target_model)
         h_model.addWidget(self.btn_refresh_models)
@@ -1271,50 +1271,99 @@ class PhysicsTabWidget(QWidget):
         h_scale.addStretch()
         param_layout.addLayout(h_scale)
 
-        # フレーム範囲
-        h_frame = QHBoxLayout()
-        h_frame.addWidget(QLabel("シミュレーション範囲:"))
-        self.cb_auto_frame = QCheckBox("タイムライン全体")
-        self.cb_auto_frame.setChecked(True)
-        self.cb_auto_frame.toggled.connect(self._on_auto_frame_toggled)
-        h_frame.addWidget(self.cb_auto_frame)
+        # フレーム範囲 (ラジオボタン選択 & 一段下げレイアウト)
+        h_frame_mode = QHBoxLayout()
+        h_frame_mode.addWidget(QLabel("シミュレーション範囲:"))
+        self.rb_auto_frame = QRadioButton("タイムライン全体")
+        self.rb_auto_frame.setChecked(True)
+        self.rb_custom_frame = QRadioButton("フレーム指定")
+        self.rb_auto_frame.toggled.connect(self._on_frame_mode_toggled)
 
+        self.bg_frame_mode = QButtonGroup(self)
+        self.bg_frame_mode.addButton(self.rb_auto_frame)
+        self.bg_frame_mode.addButton(self.rb_custom_frame)
+
+        h_frame_mode.addWidget(self.rb_auto_frame)
+        h_frame_mode.addWidget(self.rb_custom_frame)
+        h_frame_mode.addStretch()
+        param_layout.addLayout(h_frame_mode)
+
+        # 一段下げたフレーム数値入力レイアウト
+        h_custom_frame = QHBoxLayout()
+        h_custom_frame.setContentsMargins(24, 0, 0, 0)
+        h_custom_frame.addWidget(QLabel("開始フレーム:"))
         self.le_start_frame = QLineEdit()
         self.le_start_frame.setFixedWidth(60)
         self.le_start_frame.setEnabled(False)
+        h_custom_frame.addWidget(self.le_start_frame)
+
+        h_custom_frame.addWidget(QLabel("終了フレーム:"))
         self.le_end_frame = QLineEdit()
         self.le_end_frame.setFixedWidth(60)
         self.le_end_frame.setEnabled(False)
-        h_frame.addWidget(QLabel("開始:"))
-        h_frame.addWidget(self.le_start_frame)
-        h_frame.addWidget(QLabel("終了:"))
-        h_frame.addWidget(self.le_end_frame)
-        h_frame.addStretch()
-        param_layout.addLayout(h_frame)
+        h_custom_frame.addWidget(self.le_end_frame)
+        h_custom_frame.addStretch()
+        param_layout.addLayout(h_custom_frame)
 
         layout.addWidget(param_box)
         layout.addStretch()
 
         # 実行ボタンエリア
-        h_action = QHBoxLayout()
-        self.btn_reconnect = QPushButton("剛体・Jointをモデルに再吸着")
-        self.btn_reconnect.setFixedHeight(48)
-        self.btn_reconnect.clicked.connect(self._execute_reconnect)
-        h_action.addWidget(self.btn_reconnect)
+        v_action = QVBoxLayout()
 
-        self.btn_clear_keys = QPushButton("物理キーフレームをクリア")
-        self.btn_clear_keys.setFixedHeight(48)
-        self.btn_clear_keys.clicked.connect(self._execute_clear_keys)
-        h_action.addWidget(self.btn_clear_keys)
+        # 上段: 物理ベイク実行ボタン (Bullet と XPBD を横並び)
+        h_bake_action = QHBoxLayout()
+
+        self.btn_bullet_bake = QPushButton("Bullet 物理ベイク実行 (MMD本家仕様)")
+        self.btn_bullet_bake.setFixedHeight(44)
+        self.btn_bullet_bake.setStyleSheet("QPushButton { background-color: #2e6b9e; color: #fff; font-weight: bold; border-radius: 4px; } QPushButton:hover { background-color: #3b88c7; } QPushButton:disabled { background-color: #444; color: #888; }")
+        self.btn_bullet_bake.clicked.connect(self._execute_bullet_bake)
+        h_bake_action.addWidget(self.btn_bullet_bake)
 
         self.btn_bake = QPushButton("XPBD 物理ベイク実行")
         self.btn_bake.setProperty("class", "primary")
-        self.btn_bake.setFixedHeight(48)
-        self.btn_bake.setMinimumWidth(200)
+        self.btn_bake.setFixedHeight(44)
         self.btn_bake.clicked.connect(self._execute_bake)
-        h_action.addWidget(self.btn_bake)
+        h_bake_action.addWidget(self.btn_bake)
 
-        layout.addLayout(h_action)
+        v_action.addLayout(h_bake_action)
+
+        # 下段: ユーティリティ操作 (再吸着とキーフレームクリアを横並び)
+        h_sub_action = QHBoxLayout()
+
+        self.btn_reconnect = QPushButton("剛体・Jointをモデルに再吸着")
+        self.btn_reconnect.setFixedHeight(40)
+        self.btn_reconnect.clicked.connect(self._execute_reconnect)
+        h_sub_action.addWidget(self.btn_reconnect)
+
+        self.btn_clear_keys = QPushButton("物理キーフレームをクリア")
+        self.btn_clear_keys.setFixedHeight(40)
+        self.btn_clear_keys.clicked.connect(self._execute_clear_keys)
+        h_sub_action.addWidget(self.btn_clear_keys)
+
+        v_action.addLayout(h_sub_action)
+        layout.addLayout(v_action)
+
+        self._refresh_bullet_status()
+
+    def _is_bullet_available(self):
+        """Bullet物理モジュール (bullet_engine) が存在し利用可能か判定"""
+        try:
+            bullet_dir = os.path.join(os.path.dirname(__file__), "bullet_engine")
+            dll_path = os.path.join(bullet_dir, "bin", "mmd_bullet.dll")
+            bridge_path = os.path.join(bullet_dir, "bullet_maya_bridge.py")
+            return os.path.exists(dll_path) and os.path.exists(bridge_path)
+        except Exception:
+            return False
+
+    def _refresh_bullet_status(self):
+        """Bulletボタンの活性化状態を更新 (フォルダ削除時は自動無効化)"""
+        available = self._is_bullet_available()
+        self.btn_bullet_bake.setEnabled(available)
+        if available:
+            self.btn_bullet_bake.setToolTip("本家MMD仕様のBullet Physics (2.83.7) により、柔らかくしなやかな髪やスカートの物理をベイクします。")
+        else:
+            self.btn_bullet_bake.setToolTip("Bullet物理モジュール (bullet_engine) は削除または未導入です。\n下の「XPBD 物理ベイク実行」をご利用ください。")
 
     def showEvent(self, event):
         super(PhysicsTabWidget, self).showEvent(event)
@@ -1324,9 +1373,10 @@ class PhysicsTabWidget(QWidget):
             if last_pmx and os.path.exists(last_pmx):
                 self.le_pmx_path.setText(last_pmx)
 
-    def _on_auto_frame_toggled(self, checked):
-        self.le_start_frame.setEnabled(not checked)
-        self.le_end_frame.setEnabled(not checked)
+    def _on_frame_mode_toggled(self, checked):
+        is_custom = self.rb_custom_frame.isChecked()
+        self.le_start_frame.setEnabled(is_custom)
+        self.le_end_frame.setEnabled(is_custom)
 
     def _on_pmx_changed(self, text=""):
         path = self.le_pmx_path.text().strip()
@@ -1361,6 +1411,57 @@ class PhysicsTabWidget(QWidget):
                 self.le_pmx_path.setText(path)
                 mc.optionVar(sv=("MMDToolsForMaya_LastPmxPath", path))
 
+    def _execute_bullet_bake(self):
+        """Bullet Physics (MMD本家仕様) による物理ベイク実行"""
+        if not self._is_bullet_available():
+            QMessageBox.information(
+                self, "案内",
+                "Bullet物理モジュール (bullet_engine) は削除または未導入です。\n"
+                "「XPBD 物理ベイク実行」をご利用ください。"
+            )
+            return
+
+        pmx_path = self.le_pmx_path.text().strip()
+        if not pmx_path or not os.path.exists(pmx_path):
+            QMessageBox.warning(self, "エラー", "有効なPMXモデルファイルを指定してください。")
+            return
+
+        try:
+            scale = float(self.le_scale.text())
+            substeps = int(self.le_substeps.text())
+        except ValueError:
+            QMessageBox.warning(self, "エラー", "パラメータの数値が正しくありません。")
+            return
+
+        if self.rb_auto_frame.isChecked():
+            start_frame = int(mc.playbackOptions(query=True, minTime=True))
+            end_frame = int(mc.playbackOptions(query=True, maxTime=True))
+        else:
+            try:
+                start_frame = int(self.le_start_frame.text())
+                end_frame = int(self.le_end_frame.text())
+            except ValueError:
+                QMessageBox.warning(self, "エラー", "開始・終了フレーム番号を正しく入力してください。")
+                return
+
+        def run_bullet_task():
+            from .bullet_engine import bullet_maya_bridge
+            bridge = bullet_maya_bridge.BulletMayaBridge(pmx_path=pmx_path, scale=scale)
+            bridge.bake_simulation(
+                start_frame=start_frame,
+                end_frame=end_frame,
+                sub_steps=substeps
+            )
+
+        log_dialog = ExecutionLogDialog(self.parent_window or self, title="Bullet 物理演算ベイク実行ログ (MMD本家仕様)")
+        success = log_dialog.run_task(run_bullet_task)
+        if success:
+            mc.inViewMessage(
+                amg='<span style="color:#2ecc71;">MMD Tools for Maya:</span> Bullet物理シミュレーションのベイクが完了しました。',
+                pos='topCenter',
+                fade=True
+            )
+
     def _execute_bake(self):
         pmx_path = self.le_pmx_path.text().strip()
         if not pmx_path or not os.path.exists(pmx_path):
@@ -1375,7 +1476,7 @@ class PhysicsTabWidget(QWidget):
             QMessageBox.warning(self, "エラー", "パラメータの数値が正しくありません。")
             return
 
-        if self.cb_auto_frame.isChecked():
+        if self.rb_auto_frame.isChecked():
             start_frame = int(mc.playbackOptions(query=True, minTime=True))
             end_frame = int(mc.playbackOptions(query=True, maxTime=True))
         else:
@@ -1465,7 +1566,7 @@ class CleanupTabWidget(QWidget):
         h_model.addWidget(QLabel("削除対象モデル:"))
         self.cbb_target_model = QComboBox()
         self.btn_refresh = QPushButton("更新")
-        self.btn_refresh.setFixedWidth(65)
+        self.btn_refresh.setFixedWidth(80)
         self.btn_refresh.clicked.connect(self._refresh_models)
         h_model.addWidget(self.cbb_target_model)
         h_model.addWidget(self.btn_refresh)

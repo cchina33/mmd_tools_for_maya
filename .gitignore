@@ -8,7 +8,6 @@ docs/
 # テスト・サンプルメディアファイル
 vmd/
 wav/
-model00.pmx
 *.pmx
 *.pmd
 *.x
