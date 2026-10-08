@@ -9,7 +9,6 @@
 ```text
 mmd_tools_for_maya/
 ├── mmd_tools_for_maya_plugin.py      # Mayaプラグイン公式エントリポイント
-├── mmdpaimaya_plugin.py              # 旧プラグイン互換性維持ラッパー
 ├── gui.py                            # モダン統合タブ型UI (PySide6 / PySide2)
 ├── gui_style.py                      # UIダークテーマスタイルシート (QSS)
 ├── pmxpaimaya.py                     # MMDモデル (PMX/PMD/X) Mayaインポートエンジン
