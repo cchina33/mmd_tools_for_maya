@@ -1,0 +1,49 @@
+{
+  "face_skin_keywords_ja": [
+    "顔",
+    "目",
+    "瞳",
+    "眉",
+    "口",
+    "舌",
+    "牙",
+    "歯",
+    "唇",
+    "表情",
+    "涙",
+    "頬",
+    "肌",
+    "体",
+    "面",
+    "鼻"
+  ],
+  "face_skin_keywords_en": [
+    "head",
+    "face",
+    "eye",
+    "brow",
+    "mouth",
+    "teeth",
+    "tooth",
+    "lip",
+    "cheek",
+    "skin",
+    "body",
+    "nose"
+  ],
+  "toon_bypass_keywords_ja": [
+    "瞳-高光",
+    "高光",
+    "眼白",
+    "ハイライト"
+  ],
+  "toon_bypass_keywords_en": [
+    "highlight"
+  ],
+  "custom_bone_dict": {},
+  "custom_name_translations": {
+    "三": "san",
+    "眼": "me",
+    "第": "dai"
+  }
+}

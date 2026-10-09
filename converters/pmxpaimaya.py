@@ -16,9 +16,14 @@ import sys
 import json
 import unicodedata
 
-from . import mmd_core
-from .asset.jaka import romaji, safe_node_name
-from .asset.bone_dict import get_english_bone_name, get_japanese_bone_name
+try:
+    from .. import mmd_core
+    from ..asset.jaka import romaji, safe_node_name
+    from ..asset.bone_dict import get_english_bone_name, get_japanese_bone_name
+except Exception:
+    import mmd_core
+    from asset.jaka import romaji, safe_node_name
+    from asset.bone_dict import get_english_bone_name, get_japanese_bone_name
 import maya.cmds as mc
 import maya.api.OpenMaya as om
 import maya.api.OpenMayaAnim as oma
@@ -443,15 +448,20 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
 
         spec_factor = mat.specular[3]
 
-        # アニメモデルの顔・肌・表情保護判定
-        mat_name_lower = mat.name.lower()
-        mat_e_lower = getattr(mat, 'name_e', '').lower() if getattr(mat, 'name_e', None) else ''
-        face_skin_keywords = [
-            "顔", "head", "face", "目", "eye", "瞳", "眉", "brow", "口", "mouth",
-            "舌", "牙", "歯", "teeth", "tooth", "唇", "lip", "表情", "涙", "頬",
-            "cheek", "肌", "skin", "body", "体", "面", "nose", "鼻"
-        ]
-        is_face_material = any(k in mat_name_lower or k in mat_e_lower for k in face_skin_keywords)
+        # アニメモデルの顔・肌・表情保護判定 (ユーザー辞書連動)
+        try:
+            try:
+                from ..asset.user_dict_manager import is_face_or_skin_material, is_toon_bypass_material
+            except Exception:
+                from asset.user_dict_manager import is_face_or_skin_material, is_toon_bypass_material
+            is_face_material = is_face_or_skin_material(mat.name, getattr(mat, 'name_e', ''))
+        except Exception:
+            face_skin_keywords = [
+                "顔", "head", "face", "目", "eye", "瞳", "眉", "brow", "口", "mouth",
+                "舌", "牙", "歯", "teeth", "tooth", "唇", "lip", "表情", "涙", "頬",
+                "cheek", "肌", "skin", "body", "体", "面", "nose", "鼻"
+            ]
+            is_face_material = any(k in mat_name_lower or k in mat_e_lower for k in face_skin_keywords)
 
         # シェーダーの生成
         if material_type == 1: # Blinn
@@ -560,8 +570,15 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
                             except Exception:
                                 pass
 
-        # 全マテリアル種別（StandardSurface含む）に対してToonをカラー乗算合成 (瞳ハイライト等のみ除外)
-        is_highlight_part = any(k in mat_name_lower for k in ["瞳-高光", "高光", "眼白", "highlight"])
+        # 全マテリアル種別（StandardSurface含む）に対してToonをカラー乗算合成 (瞳ハイライト等のみ除外・ユーザー辞書連動)
+        try:
+            try:
+                from ..asset.user_dict_manager import is_toon_bypass_material
+            except Exception:
+                from asset.user_dict_manager import is_toon_bypass_material
+            is_highlight_part = is_toon_bypass_material(mat.name, getattr(mat, 'name_e', ''))
+        except Exception:
+            is_highlight_part = any(k in mat.name.lower() for k in ["瞳-高光", "高光", "眼白", "highlight"])
         if enable_toon and toon_node and not is_highlight_part:
             toon_mult = mc.shadingNode('multiplyDivide', asUtility=True, name=f"{safe_mat_id}_toon_mult_{model_node_name}")
             mc.setAttr(f"{toon_mult}.operation", 1) # Multiply
@@ -934,7 +951,8 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
         mc.addAttr(model_mesh_node, longName='mmdMorphStructure', dataType='string')
         mc.setAttr(f"{model_mesh_node}.mmdMorphStructure", json.dumps(structure_data['morphs'], ensure_ascii=False), typ='string')
 
-        cache_path = os.path.join(os.path.dirname(__file__), 'asset', 'last_imported_structure.json')
+        plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        cache_path = os.path.join(plugin_root, 'asset', 'last_imported_structure.json')
         os.makedirs(os.path.dirname(cache_path), exist_ok=True)
         with open(cache_path, 'w', encoding='utf-8') as f:
             json.dump(structure_data, f, ensure_ascii=False, indent=2)
@@ -1131,18 +1149,31 @@ def fix_toon_shading_in_scene(shadow_mode=1):
         except Exception:
             pass
 
-    # 顔・肌・表情マテリアルの保護とテカリ除去
-    face_skin_keywords = [
-        "顔", "head", "face", "目", "eye", "瞳", "眉", "brow", "口", "mouth",
-        "舌", "牙", "歯", "teeth", "tooth", "唇", "lip", "表情", "涙", "頬",
-        "cheek", "肌", "skin", "body", "体", "面", "nose", "鼻"
-    ]
+    # 顔・肌・表情マテリアルの保護とテカリ除去 (ユーザー辞書連動)
+    try:
+        try:
+            from ..asset.user_dict_manager import is_face_or_skin_material, is_toon_bypass_material
+        except Exception:
+            from asset.user_dict_manager import is_face_or_skin_material, is_toon_bypass_material
+    except Exception:
+        is_face_or_skin_material = None
+        is_toon_bypass_material = None
+
     all_shaders = mc.ls(materials=True) or []
     for shd in all_shaders:
         shd_name = shd.lower()
         orig_name = mc.getAttr(f"{shd}.originalName").lower() if mc.attributeQuery("originalName", node=shd, exists=True) else ""
-        is_skin_mat = any(k in shd_name or k in orig_name for k in face_skin_keywords)
-        is_highlight = any(k in shd_name or k in orig_name for k in ["瞳-高光", "高光", "眼白", "highlight"])
+        if is_face_or_skin_material:
+            is_skin_mat = is_face_or_skin_material(shd, orig_name)
+            is_highlight = is_toon_bypass_material(shd, orig_name)
+        else:
+            face_skin_keywords = [
+                "顔", "head", "face", "目", "eye", "瞳", "眉", "brow", "口", "mouth",
+                "舌", "牙", "歯", "teeth", "tooth", "唇", "lip", "表情", "涙", "頬",
+                "cheek", "肌", "skin", "body", "体", "面", "nose", "鼻"
+            ]
+            is_skin_mat = any(k in shd_name or k in orig_name for k in face_skin_keywords)
+            is_highlight = any(k in shd_name or k in orig_name for k in ["瞳-高光", "高光", "眼白", "highlight"])
 
         # 瞳のハイライトパーツ等のみToon乗算をバイパス（顔・肌はToon適用）
         if is_highlight:

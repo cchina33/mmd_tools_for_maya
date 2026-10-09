@@ -17,7 +17,7 @@ import maya.api.OpenMaya as om
 # プラグイン基本情報
 PLUGIN_NAME = "MMD Tools for Maya"
 PLUGIN_VENDOR = "Hina33"
-PLUGIN_VERSION = "1.0.0"
+PLUGIN_VERSION = "1.0.1"
 MENU_NAME = "mmd_tools_for_maya_main_menu"
 MENU_LABEL = "MMD"
 
@@ -79,6 +79,8 @@ def _ensure_sys_path(plugin_fn=None):
     current_dir = _get_plugin_dir(plugin_fn)
     candidates = [
         os.path.join(current_dir, "mmd_tools_for_maya"),
+        os.path.join(current_dir, "mmd_tools_for_maya", "ui"),
+        os.path.join(current_dir, "mmd_tools_for_maya", "converters"),
         os.path.join(current_dir, "mmd_tools_for_maya", "plug-ins"),
         current_dir,
     ]
@@ -107,12 +109,43 @@ def create_menu():
         command=lambda *args: on_open_gui(),
         annotation="PMX/PMDのインポート・エクスポート・物理演算ツールを開きます"
     )
+    mc.menuItem(
+        label="高度なユーザー辞書・マテリアル設定 (上級者向け)...",
+        command=lambda *args: on_open_advanced_dict(),
+        annotation="マテリアル保護キーワード、Toon除外設定、ボーン辞書、名称変換ルールを編集します (上級者向け)"
+    )
     mc.menuItem(divider=True)
     mc.menuItem(
         label="プラグインについて (About)",
         command=lambda *args: on_show_about(),
         annotation="MMD Tools for Maya の情報を表示します"
     )
+
+def on_open_advanced_dict():
+    """高度なユーザー辞書・マテリアル設定ダイアログを開くコールバック関数"""
+    _ensure_sys_path()
+    try:
+        try:
+            from mmd_tools_for_maya.ui.advanced_dict_dialog import show_advanced_dict_dialog
+            show_advanced_dict_dialog()
+            return
+        except Exception:
+            pass
+
+        try:
+            from mmd_tools_for_maya.advanced_dict_dialog import show_advanced_dict_dialog
+            show_advanced_dict_dialog()
+            return
+        except Exception:
+            pass
+
+        import advanced_dict_dialog
+        advanced_dict_dialog.show_advanced_dict_dialog()
+    except Exception as e:
+        import traceback
+        err_msg = traceback.format_exc()
+        om.MGlobal.displayError(f"[{PLUGIN_NAME}] 高度な設定の起動に失敗しました:\n{err_msg}")
+        mc.warning(f"{PLUGIN_NAME} 高度な設定の起動に失敗しました: {e}")
 
 def delete_menu():
     """作成したMMDメニューを削除します。"""
@@ -123,9 +156,27 @@ def delete_menu():
             pass
 
 def on_open_gui():
-    """GUIを開くコールバック関数（モジュール自動リロード対応）"""
+    """GUIを開くコールバック関数（既に表示されている場合は閉じて再表示）"""
     _ensure_sys_path()
     try:
+        # 多重起動防止: Maya上の既存MMDウィンドウを検索して破棄
+        try:
+            from PySide6.QtWidgets import QApplication
+        except ImportError:
+            try:
+                from PySide2.QtWidgets import QApplication
+            except ImportError:
+                QApplication = None
+
+        if QApplication and QApplication.instance():
+            for widget in QApplication.instance().topLevelWidgets():
+                try:
+                    if widget.objectName() == "MmdToolsForMayaMainWindow" or widget.__class__.__name__ == "MmdMayaMainWindow":
+                        widget.close()
+                        widget.deleteLater()
+                except Exception:
+                    pass
+
         import importlib
         # 更新されたコードを即時反映するための強制リロード
         for mod_name in list(sys.modules.keys()):
@@ -135,7 +186,15 @@ def on_open_gui():
                 except Exception:
                     pass
 
-        # 優先度1: mmd_tools_for_maya.gui から show_ui を実行
+        # 優先度1: mmd_tools_for_maya.ui.gui から show_ui を実行
+        try:
+            from mmd_tools_for_maya.ui import gui as mmd_gui
+            mmd_gui.show_ui()
+            return
+        except Exception:
+            pass
+
+        # 優先度2: mmd_tools_for_maya.gui から show_ui を実行
         try:
             from mmd_tools_for_maya import gui as mmd_gui
             mmd_gui.show_ui()
@@ -143,7 +202,7 @@ def on_open_gui():
         except Exception:
             pass
 
-        # 優先度2: sys.path 直下の gui から show_ui を実行
+        # 優先度3: sys.path 直下の gui から show_ui を実行
         try:
             import gui as mmd_gui
             mmd_gui.show_ui()
@@ -151,7 +210,7 @@ def on_open_gui():
         except Exception:
             pass
 
-        # 優先度3: パッケージの show_ui
+        # 優先度4: パッケージの show_ui
         import mmd_tools_for_maya
         mmd_tools_for_maya.show_ui()
 

@@ -47,8 +47,25 @@ import maya.cmds as mc
 from maya import mel
 import maya.OpenMayaUI as omui
 
-from . import pmxpaimaya, mayapaipmx, vmdpaimaya
-from .asset.hik import dic_hik, kangkhaen
+try:
+    from ..converters import pmxpaimaya, mayapaipmx, vmdpaimaya
+    from ..asset.hik import dic_hik, kangkhaen, setup_leg_stance_and_angles, normalize_bone_name, get_bone_matching_candidates
+    from ..pmx_analyzer import export_pmx_structure, check_and_prompt_user_dict
+except Exception:
+    try:
+        from converters import pmxpaimaya, mayapaipmx, vmdpaimaya
+        from asset.hik import dic_hik, kangkhaen, setup_leg_stance_and_angles, normalize_bone_name, get_bone_matching_candidates
+        from pmx_analyzer import export_pmx_structure, check_and_prompt_user_dict
+    except Exception:
+        import pmxpaimaya, mayapaipmx, vmdpaimaya
+        from asset.hik import dic_hik, kangkhaen, setup_leg_stance_and_angles, normalize_bone_name, get_bone_matching_candidates
+        try:
+            import pmx_analyzer
+            export_pmx_structure = pmx_analyzer.export_pmx_structure
+            check_and_prompt_user_dict = pmx_analyzer.check_and_prompt_user_dict
+        except Exception:
+            export_pmx_structure = None
+            check_and_prompt_user_dict = None
 
 # グローバルウィンドウ参照保持用（ガベージコレクション防止）
 _main_window_instance = None
@@ -209,7 +226,8 @@ class ImportTabWidget(QWidget):
         super(ImportTabWidget, self).__init__(parent)
         self.parent_window = parent
         self.setAcceptDrops(True)
-        self.config_file = os.path.join(os.path.dirname(__file__), 'asset', 'khatangton1.txt')
+        plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.config_file = os.path.join(plugin_root, 'asset', 'khatangton1.txt')
         
         self._init_ui()
         self._load_settings()
@@ -221,22 +239,32 @@ class ImportTabWidget(QWidget):
 
         # 1. ファイル選択ゾーン (ドラッグ＆ドロップ対応)
         file_box = QGroupBox("モデルファイル (.pmx / .pmd / .x)")
-        file_layout = QHBoxLayout(file_box)
+        file_layout = QVBoxLayout(file_box)
         
+        h_file_input = QHBoxLayout()
         self.le_file_path = QLineEdit()
         self.le_file_path.setPlaceholderText("ファイルパスを入力、またはここにファイルをドラッグ＆ドロップ")
         self.le_file_path.textChanged.connect(self._on_file_changed)
-        file_layout.addWidget(self.le_file_path)
+        h_file_input.addWidget(self.le_file_path)
 
         self.btn_browse = QPushButton("参照...")
         self.btn_browse.setFixedWidth(75)
         self.btn_browse.clicked.connect(self._browse_file)
-        file_layout.addWidget(self.btn_browse)
+        h_file_input.addWidget(self.btn_browse)
 
         self.btn_clear_file = QPushButton("クリア")
         self.btn_clear_file.setFixedWidth(65)
         self.btn_clear_file.clicked.connect(self._clear_file)
-        file_layout.addWidget(self.btn_clear_file)
+        h_file_input.addWidget(self.btn_clear_file)
+        file_layout.addLayout(h_file_input)
+
+        # モデル解析・データ一括保存および未登録ボーン辞書登録ボタン
+        h_tool_row = QHBoxLayout()
+        self.btn_analyze_model = QPushButton("PMXモデル解析・データ一括保存 (材質/ボーン/モーフ/剛体/Joint)")
+        self.btn_analyze_model.setToolTip("選択中PMXの全要素（材質・ボーン・モーフ・剛体・Joint）をJSONに一括保存し、未登録漢字のユーザー辞書登録を行います。")
+        self.btn_analyze_model.clicked.connect(self._analyze_and_save_structure)
+        h_tool_row.addWidget(self.btn_analyze_model)
+        file_layout.addLayout(h_tool_row)
 
         layout.addWidget(file_box)
 
@@ -499,11 +527,58 @@ class ImportTabWidget(QWidget):
         except Exception as e:
             QMessageBox.warning(self, "エラー", f"Toonシェーディング修復中にエラーが発生しました:\n{e}")
 
+    def _analyze_and_save_structure(self):
+        """選択中モデルの材質、ボーン、モーフ、剛体、Jointを一括保存し、未登録ボーン辞書チェックを実行"""
+        file_path = self.le_file_path.text().strip()
+        if not file_path or not os.path.exists(file_path):
+            QMessageBox.warning(self, "エラー", "有効なPMXモデルファイルを指定してください。")
+            return
+
+        if not file_path.lower().endswith('.pmx'):
+            QMessageBox.information(self, "案内", "詳細解析および辞書照合はPMXモデル形式 (.pmx) のみ対応しています。")
+            return
+
+        try:
+            # 1. ユーザー辞書の未登録ボーン名チェック & 登録GUI
+            if check_and_prompt_user_dict:
+                check_and_prompt_user_dict(self.parent_window or self, file_path)
+
+            # 2. モデル構造の一括保存 (JSON)
+            if export_pmx_structure:
+                saved_path, data = export_pmx_structure(file_path)
+                QMessageBox.information(
+                    self,
+                    "PMXモデル解析完了",
+                    f"モデル構造の一括保存が完了しました！\n\n"
+                    f"保存先:\n{saved_path}\n\n"
+                    f"・材質: {len(data['materials'])} 件\n"
+                    f"・ボーン: {len(data['bones'])} 件\n"
+                    f"・モーフ: {len(data['morphs'])} 件\n"
+                    f"・剛体: {len(data['rigid_bodies'])} 件\n"
+                    f"・Joint: {len(data['joints'])} 件"
+                )
+        except Exception as e:
+            QMessageBox.warning(self, "解析エラー", f"PMXモデルの解析中にエラーが発生しました:\n{e}")
+
     def _execute_import(self):
         file_path = self.le_file_path.text().strip()
         if not os.path.exists(file_path):
             QMessageBox.warning(self, "エラー", "指定されたモデルファイルが存在しません。")
             return
+
+        # PMX事前チェック & 未登録ボーン辞書確認
+        if file_path.lower().endswith('.pmx') and check_and_prompt_user_dict:
+            try:
+                check_and_prompt_user_dict(self.parent_window or self, file_path)
+            except Exception as e:
+                print(f"[PMX解析] 辞書チェック中に軽微な警告: {e}")
+
+        # 材質・ボーン・モーフ・剛体・Joint の一括保存
+        if file_path.lower().endswith('.pmx') and export_pmx_structure:
+            try:
+                export_pmx_structure(file_path)
+            except Exception as e:
+                print(f"[PMX解析] 一括保存中に軽微な警告: {e}")
 
         try:
             scale = float(self.le_scale.text())
@@ -529,7 +604,10 @@ class ImportTabWidget(QWidget):
             # ボーン作成時、Aポーズの状態で剛体・Jointコライダーを同時生成 (ログダイアログ内で実行)
             if create_bones and create_physics and file_path.lower().endswith('.pmx'):
                 try:
-                    from .cpp_engine import xpbd_visualizer
+                    try:
+                        from ..cpp_engine import xpbd_visualizer
+                    except Exception:
+                        from cpp_engine import xpbd_visualizer
                     xpbd_visualizer.create_rigidbody_visualizers(file_path, scale=scale)
                     print("[MMD Tools for Maya] 初期Aポーズにて剛体・Jointコライダーを自動生成しました。")
                 except Exception as e:
@@ -564,7 +642,8 @@ class ExportTabWidget(QWidget):
     def __init__(self, parent=None):
         super(ExportTabWidget, self).__init__(parent)
         self.parent_window = parent
-        self.config_file = os.path.join(os.path.dirname(__file__), 'asset', 'khatangton2.txt')
+        plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.config_file = os.path.join(plugin_root, 'asset', 'khatangton2.txt')
 
         self._init_ui()
         self._load_settings()
@@ -770,6 +849,9 @@ class HikTabWidget(QWidget):
     def __init__(self, parent=None):
         super(HikTabWidget, self).__init__(parent)
         self.parent_window = parent
+        self.current_hik_node = None
+        self.current_mapped_dict = {}
+        self.last_log_text = ""
         self._init_ui()
 
     def _init_ui(self):
@@ -777,12 +859,12 @@ class HikTabWidget(QWidget):
         layout.setSpacing(12)
         layout.setContentsMargins(12, 12, 12, 12)
 
-        # キャラクタモデルの選択
+        # キャラクターモデルの選択
         model_box = QGroupBox("対象モデル選択")
         model_layout = QHBoxLayout(model_box)
 
         self.cbb_models = QComboBox()
-        self.cbb_models.setEditable(True)
+        self.cbb_models.setEditable(False)
         model_layout.addWidget(self.cbb_models)
 
         self.btn_refresh = QPushButton("更新")
@@ -790,12 +872,17 @@ class HikTabWidget(QWidget):
         self.btn_refresh.clicked.connect(self._refresh_models)
         model_layout.addWidget(self.btn_refresh)
 
-        self.btn_define = QPushButton("キャラクタ定義を作成")
-        self.btn_define.setFixedWidth(150)
-        self.btn_define.clicked.connect(self._define_hik)
+        self.btn_define = QPushButton("キャラクター定義を作成")
+        self.btn_define.setFixedWidth(160)
+        self.btn_define.clicked.connect(self._on_click_define_hik)
         model_layout.addWidget(self.btn_define)
 
         layout.addWidget(model_box)
+
+        # ステータス情報表示
+        self.lbl_status = QLabel("※ モデルを選択し、「キャラクター定義を作成」を押してください。")
+        self.lbl_status.setStyleSheet("color: #aaa; font-size: 13px; margin: 2px 4px;")
+        layout.addWidget(self.lbl_status)
 
         # ボーンマッピング一覧
         mapping_box = QGroupBox("HumanIK ボーンマッピング一覧")
@@ -810,8 +897,20 @@ class HikTabWidget(QWidget):
 
         layout.addWidget(mapping_box)
 
-        # 3リグ生成アクション
+        # アクションボタン
         h_action = QHBoxLayout()
+
+        self.btn_show_log = QPushButton("実行ログを表示 / コピー")
+        self.btn_show_log.setFixedHeight(40)
+        self.btn_show_log.clicked.connect(self._show_last_log)
+        h_action.addWidget(self.btn_show_log)
+
+        self.btn_reapply_tpose = QPushButton("Tポーズ (腕水平化) を再適用")
+        self.btn_reapply_tpose.setFixedHeight(40)
+        self.btn_reapply_tpose.setEnabled(False)
+        self.btn_reapply_tpose.clicked.connect(self._reapply_tpose)
+        h_action.addWidget(self.btn_reapply_tpose)
+
         h_action.addStretch()
 
         self.btn_create_rig = QPushButton("コントロールリグを作成")
@@ -819,113 +918,415 @@ class HikTabWidget(QWidget):
         self.btn_create_rig.setFixedHeight(44)
         self.btn_create_rig.setMinimumWidth(200)
         self.btn_create_rig.setEnabled(False)
-        self.btn_create_rig.clicked.connect(self._create_control_rig)
+        self.btn_create_rig.clicked.connect(self._on_click_create_rig)
         h_action.addWidget(self.btn_create_rig)
 
         layout.addLayout(h_action)
 
         self._refresh_models()
 
+    def _show_last_log(self):
+        """直近の実行ログダイアログを表示します"""
+        dlg = ExecutionLogDialog(self.parent_window or self, title="HumanIK 実行ログ")
+        dlg.progress_bar.setRange(0, 1)
+        dlg.progress_bar.setValue(1)
+        dlg.btn_close.setEnabled(True)
+        dlg.lb_status.setText("直近の実行ログ")
+        dlg.append_log(self.last_log_text if self.last_log_text else "（まだ実行ログはありません）\n")
+        dlg.exec_()
+
     def _refresh_models(self):
+        """シーン内のMMDモデル一覧を取得してコンボボックスを更新します"""
         self.cbb_models.clear()
-        found_models = []
+        found = False
         try:
-            for shape in mc.ls('*Shape', shapes=True) or []:
-                transform = shape[:-5]
-                if mc.objExists(transform) and 'MMD_model' in (mc.listAttr(transform) or []):
-                    found_models.append(transform)
-                    self.cbb_models.addItem(transform)
+            try:
+                from ..converters import vmdpaimaya
+            except Exception:
+                try:
+                    from converters import vmdpaimaya
+                except Exception:
+                    import vmdpaimaya
+
+            models = vmdpaimaya.get_available_mmd_models()
+            for node_name, label in models:
+                self.cbb_models.addItem(label, node_name)
+                found = True
         except Exception:
             pass
 
-    def _define_hik(self):
-        model_name = self.cbb_models.currentText().strip()
-        root_joint = None
-        if mc.objExists(model_name):
-            for candidate in [f"{model_name}_sentaa", f"{model_name}_subetenooya"]:
-                if mc.objExists(candidate):
-                    root_joint = candidate
-                    break
+        # フォールバック検出
+        if not found:
+            try:
+                for node in mc.ls(type='transform') or []:
+                    if mc.attributeQuery('MMD_model', node=node, exists=True) or mc.attributeQuery('mmdModelRoot', node=node, exists=True):
+                        orig = mc.getAttr(f"{node}.originalName") if mc.attributeQuery('originalName', node=node, exists=True) else node
+                        self.cbb_models.addItem(f"{node} ({orig})", node)
+                        found = True
+            except Exception:
+                pass
 
-        if not root_joint:
-            QMessageBox.warning(self, "エラー", "該当するMMDジョイントのルートが見つかりません。")
+        if not found:
+            self.cbb_models.addItem("（シーン内にMMDモデルが見つかりません）", None)
+
+    def _on_click_define_hik(self):
+        """キャラクター定義作成タスクを事前確認の上で実行します"""
+        target_model = self.cbb_models.currentData()
+        if not target_model:
+            target_text = self.cbb_models.currentText().strip()
+            if target_text and not target_text.startswith("（"):
+                target_model = target_text.split(" ")[0].strip()
+
+        if not target_model or not mc.objExists(target_model):
+            QMessageBox.warning(self, "エラー", "有効なMMDモデルを選択してください。")
             return
 
-        # スクロールエリア内をクリア
+        # 事前ボーン存在チェック
+        joints = mc.listRelatives(target_model, allDescendents=True, type='joint') or []
+        if not joints and mc.nodeType(target_model) == 'joint':
+            joints = [target_model]
+        if not joints:
+            joints = mc.ls(type='joint') or []
+
+        if not joints:
+            QMessageBox.warning(
+                self,
+                "ボーン未検出",
+                "選択されたモデルにボーン（スケルトンジョイント）が存在しません。\n\n"
+                "「Maya → MMD (インポート)」タブにて、『ボーン（スケルトン）を作成』にチェックを入れて再度モデルをインポートしてください。"
+            )
+            return
+
+        log_dialog = ExecutionLogDialog(self.parent_window or self, title="HumanIK キャラクター定義実行ログ")
+        success = log_dialog.run_task(self._define_hik_task)
+        self.last_log_text = log_dialog.te_log.toPlainText()
+        self._build_mapping_widgets()
+
+    def _define_hik_task(self):
+        """キャラクター定義のバックエンド処理を実行します"""
+        print("==================================================")
+        print("HumanIK キャラクター定義処理を開始します...")
+        print("==================================================")
+
+        # HumanIKプラグインのロードとMEL環境の初期化
+        try:
+            if not mc.pluginInfo('mayaHIK', query=True, loaded=True):
+                print("[HumanIK] mayaHIK プラグインをロード中...")
+                mc.loadPlugin('mayaHIK', quiet=True)
+        except Exception as e:
+            print(f"[警告] プラグインロードエラー: {e}")
+
+        try:
+            mel.eval('source "hikGlobalUtils.mel";')
+            mel.eval('source "hikCharacterControlsUI.mel";')
+        except Exception as e:
+            print(f"[警告] MELスクリプト初期化エラー: {e}")
+
+        # 対象モデルの取得
+        target_model = self.cbb_models.currentData()
+        if not target_model:
+            target_text = self.cbb_models.currentText().strip()
+            if target_text and not target_text.startswith("（"):
+                target_model = target_text.split(" ")[0].strip()
+
+        if not target_model or not mc.objExists(target_model):
+            raise RuntimeError("有効なMMDモデルを選択してください。")
+
+        print(f"対象モデル: {target_model}")
+
+        # 対象モデル配下のジョイントを網羅的に収集
+        candidate_joints = []
+        if mc.nodeType(target_model) == 'joint':
+            candidate_joints.append(target_model)
+
+        desc_joints = mc.listRelatives(target_model, allDescendents=True, type='joint', fullPath=True) or []
+        candidate_joints.extend(desc_joints)
+
+        # モデル階層下にジョイントが見つからない場合のシーン全ジョイント探索（long=True）
+        if not candidate_joints:
+            print("[探索] モデル階層下にジョイントが見つからないため、シーン内全ジョイントを探索中...")
+            candidate_joints = mc.ls(type='joint', long=True) or []
+
+        if not candidate_joints:
+            raise RuntimeError(
+                "対象モデルにボーン（スケルトンジョイント）が存在しません。\n\n"
+                "モデルインポート画面にて、『ボーン（スケルトン）を作成』にチェックを入れて再インポートしてください。"
+            )
+
+        print(f"検出ジョイント総数: {len(candidate_joints)} 個")
+
+        # 和名・短縮名マップの構築（表記揺れ正規化対応）
+        norm_orig_to_joints = {}
+        for j in candidate_joints:
+            if mc.attributeQuery('originalName', node=j, exists=True):
+                orig = mc.getAttr(f"{j}.originalName")
+                if orig:
+                    norm_key = normalize_bone_name(orig)
+                    norm_orig_to_joints.setdefault(norm_key, []).append(j)
+
+            # ノード名短縮名も正規化マップにフォールバック追加
+            short_j = j.split('|')[-1]
+            norm_short = normalize_bone_name(short_j)
+            norm_orig_to_joints.setdefault(norm_short, []).append(j)
+
+        # HumanIKキャラクター定義ノードを作成
+        current_hik_nodes = set(mc.ls(type='HIKCharacterNode') or [])
+        print("[HumanIK] hikCreateDefinition を実行中...")
+        mel.eval('hikCreateDefinition;')
+
+        new_nodes = set(mc.ls(type='HIKCharacterNode') or []) - current_hik_nodes
+        raw_hik_node = new_nodes.pop() if new_nodes else 'Character1'
+
+        clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', target_model)
+        unique_hik_name = f"HIK_{clean_name}"
+        try:
+            hik_node = mc.rename(raw_hik_node, unique_hik_name)
+        except Exception:
+            hik_node = raw_hik_node
+
+        print(f"[HumanIK] 定義ノード作成完了: {hik_node}")
+
+        # カレントキャラクターとして同期設定
+        try:
+            mel.eval(f'hikSetCurrentCharacter "{hik_node}";')
+            mel.eval('hikUpdateCharacterList();')
+        except Exception as e:
+            print(f"[警告] カレントキャラクター同期警告: {e}")
+
+        # ボーンのマッピング（正規化候補優先 + アンダースコア正規表現フォールバック）
+        mapped_dict = {}
+        matched_count = 0
+        total_count = len(dic_hik)
+
+        print("--------------------------------------------------")
+        print("ボーンマッピングを開始します...")
+
+        for bone_id, bone_info in sorted(dic_hik.items()):
+            label_text, regex_name = bone_info[0], bone_info[1]
+            matched_joint = None
+
+            # 照合1: 日本語名正規化候補リストによる完全一致
+            candidates = get_bone_matching_candidates(label_text)
+            for cand in candidates:
+                if cand in norm_orig_to_joints:
+                    matched_joint = norm_orig_to_joints[cand][0]
+                    break
+
+            # 照合2: プレフィックス対応の正規表現照合 (アンダースコア有無吸収)
+            if not matched_joint:
+                pattern = re.compile(rf'(?:^|_){regex_name}$', re.IGNORECASE)
+                for j_path in candidate_joints:
+                    short = j_path.split('|')[-1]
+                    short_no_us = short.replace('_', '')
+                    if pattern.search(short) or pattern.search(short_no_us):
+                        matched_joint = j_path
+                        break
+
+            # 照合3: 指関節の連続性フォールバック（親ジョイントの唯一の子）
+            if not matched_joint and bone_id >= 51 and bone_id not in range(54, 94, 4):
+                prev_joint = mapped_dict.get(bone_id - 1)
+                if prev_joint and mc.objExists(prev_joint):
+                    children = mc.listRelatives(prev_joint, type='joint', fullPath=True) or []
+                    if len(children) == 1:
+                        matched_joint = children[0]
+
+            if matched_joint:
+                mapped_dict[bone_id] = matched_joint
+                matched_count += 1
+                try:
+                    mel.eval(f'hikSetCharacterObject "{matched_joint}" "{hik_node}" {bone_id} 0;')
+                    short_j_name = matched_joint.split('|')[-1]
+                    print(f"  [OK] ID {bone_id:02d} ({label_text}): {short_j_name}")
+                except Exception as e:
+                    print(f"  [エラー] ID {bone_id:02d} ({label_text}) マッピング失敗: {e}")
+            else:
+                print(f"  [未検出] ID {bone_id:02d} ({label_text})")
+
+        self.current_hik_node = hik_node
+        self.current_mapped_dict = mapped_dict
+
+        print("--------------------------------------------------")
+        print(f"マッピング完了: {matched_count} / {total_count} 個")
+
+        # 既存MMD足IKハンドルおよびコンストレイントの競合解除
+        self._cleanup_conflicting_mmd_ik(target_model)
+
+        # Tポーズ（腕水平化＆脚部スタンス安定化）の適用
+        print("[HumanIK] Tポーズ（腕水平化・脚部スタンス）を展開中...")
+        t_pose_ok = kangkhaen(mapped_dict)
+        if t_pose_ok:
+            print("[HumanIK] Tポーズ展開成功。")
+        else:
+            print("[警告] Tポーズ展開がスキップされました。")
+
+        # 必須ボーン充足判定
+        required_ids = [0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        missing_required = [rid for rid in required_ids if rid not in mapped_dict]
+
+        if missing_required:
+            missing_names = [dic_hik[rid][0] for rid in missing_required]
+            print(f"[警告] 必須ボーンが不足しています: {missing_names}")
+        else:
+            print("[HumanIK] 必須ボーンがすべて充足されました！コントロールリグを作成可能です。")
+
+        print("==================================================")
+        print("HumanIK キャラクター定義処理が完了しました！")
+        print("==================================================")
+        return True
+
+    def _build_mapping_widgets(self):
+        """スクロールエリア内にボーンマッピング行ウィジェットを再構築します"""
         while self.scroll_layout.count():
             item = self.scroll_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
-        self.btn_define.setEnabled(False)
-        self.cbb_models.setEnabled(False)
+        mapped_dict = getattr(self, 'current_mapped_dict', {})
+        total_count = len(dic_hik)
+        matched_count = len(mapped_dict)
 
-        if not root_joint.startswith('|'):
-            root_joint = '|' + root_joint
-
-        current_hik_nodes = set(mc.ls(type='HIKCharacterNode') or [])
-        mel.eval('hikCreateDefinition')
-        new_nodes = set(mc.ls(type='HIKCharacterNode') or []) - current_hik_nodes
-        hik_node = new_nodes.pop() if new_nodes else 'Character1'
-        hik_node = mc.rename(hik_node, f"HIK_{model_name}")
-
-        all_joints = [root_joint] + (mc.listRelatives(root_joint, allDescendents=True, fullPath=True) or [])
-        mapped_dict = {}
-
-        for bone_id, bone_info in dic_hik.items():
-            label_text, regex_name = bone_info[0], bone_info[1]
+        for bone_id, bone_info in sorted(dic_hik.items()):
+            label_text = bone_info[0]
             h_row = QHBoxLayout()
 
-            lb_name = QLabel(label_text)
-            lb_name.setFixedWidth(100)
+            lb_name = QLabel(f"{label_text} (ID:{bone_id})")
+            lb_name.setFixedWidth(140)
             h_row.addWidget(lb_name)
 
-            # ジョイント名を検索
-            matched_joint = None
-            for j_path in all_joints:
-                if re.findall(rf'\|{regex_name}$', j_path):
-                    matched_joint = j_path
-                    mapped_dict[bone_id] = j_path
-                    break
-            else:
-                # 指の末端などのフォールバック
-                if bone_id >= 51 and bone_id not in range(54, 94, 4):
-                    prev_joint = mapped_dict.get(bone_id - 1)
-                    if prev_joint:
-                        children = mc.listRelatives(prev_joint, fullPath=True) or []
-                        if len(children) == 1:
-                            matched_joint = children[0]
-                            mapped_dict[bone_id] = matched_joint
-
-            if matched_joint:
-                mel.eval(f'hikSetCharacterObject {matched_joint} {hik_node} {bone_id} 0')
+            matched_joint = mapped_dict.get(bone_id)
+            if matched_joint and mc.objExists(matched_joint):
                 btn_sel = QPushButton("選択")
-                btn_sel.setFixedSize(50, 28)
-                le_joint = QLineEdit(matched_joint)
+                btn_sel.setFixedSize(50, 26)
+                short_display = matched_joint.split('|')[-1]
+                le_joint = QLineEdit(short_display)
+                le_joint.setToolTip(matched_joint)
                 le_joint.setReadOnly(True)
-                btn_sel.clicked.connect(lambda _, j=matched_joint: mc.select(j))
+                btn_sel.clicked.connect(lambda _, j=matched_joint: mc.select(j) if mc.objExists(j) else None)
                 h_row.addWidget(btn_sel)
                 h_row.addWidget(le_joint)
             else:
                 lb_none = QLabel("未検出")
-                lb_none.setStyleSheet("color: #ff7675;")
+                lb_none.setStyleSheet("color: #ff7675; font-weight: bold;")
                 h_row.addWidget(lb_none)
 
             h_row.addStretch()
             self.scroll_layout.addLayout(h_row)
 
-        kangkhaen(mapped_dict) # Tポーズ（腕水平）への展開処理
-        self.btn_create_rig.setEnabled(True)
-        mc.inViewMessage(amg='<span style="color:#52b7ff;">HumanIK:</span> キャラクタ定義が完了しました。', pos='topCenter', fade=True)
+        required_ids = [0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        missing_required = [rid for rid in required_ids if rid not in mapped_dict]
 
-    def _create_control_rig(self):
-        try:
-            mel.eval('hikCreateControlRig')
-            mc.inViewMessage(amg='<span style="color:#52b7ff;">HumanIK:</span> コントロールリグを作成しました。', pos='topCenter', fade=True)
-            if self.parent_window:
-                self.parent_window.close()
-        except Exception as e:
-            QMessageBox.critical(self, "エラー", f"コントロールリグの作成に失敗しました:\n{str(e)}")
+        self.btn_reapply_tpose.setEnabled(matched_count > 0)
+        self.btn_create_rig.setEnabled(len(missing_required) == 0 and matched_count > 0)
+
+        if missing_required:
+            missing_names = [dic_hik[rid][0] for rid in missing_required]
+            status_text = f"検出: {matched_count}/{total_count} 件 | 不足必須ボーン: {', '.join(missing_names)}"
+            self.lbl_status.setText(f"<span style=\'color:#ff7675;\'>{status_text}</span>")
+            mc.warning(f"HumanIK: 必須ボーンが不足しています: {missing_names}")
+        else:
+            status_text = f"検出: {matched_count}/{total_count} 件 | 必須ボーン充足完了 (コントロールリグ作成可能)"
+            self.lbl_status.setText(f"<span style=\'color:#55efc4;\'>{status_text}</span>")
+            mc.inViewMessage(amg='<span style="color:#52b7ff;">HumanIK:</span> キャラクター定義が正常に完了しました。', pos='topCenter', fade=True)
+
+    def _reapply_tpose(self):
+        """現在のマッピングに基づき腕のTポーズ（水平化）を安全に再適用します"""
+        if not self.current_mapped_dict:
+            QMessageBox.warning(self, "エラー", "先にキャラクター定義を作成してください。")
+            return
+
+        # コントロールリグ作成後の破綻防止安全ガード
+        has_rig = False
+        if hasattr(self, 'current_hik_node') and self.current_hik_node and mc.objExists(self.current_hik_node):
+            rig_nodes = mc.ls(f"*{self.current_hik_node}*Ctrl*", type="transform") or []
+            if not rig_nodes:
+                rig_nodes = mc.ls(type="HIKControlRigNode") or []
+            has_rig = len(rig_nodes) > 0
+
+        if has_rig:
+            res = QMessageBox.warning(
+                self,
+                "コントロールリグ作成済み警告",
+                "コントロールリグ（IK/FKリグ）が作成された状態でスケルトンを直接Tポーズ化すると、\n"
+                "IKエフェクタとの整合性が崩れ手足が激しく破綻します。\n\n"
+                "リグを初期姿勢に戻すにはリグのポーズ初期化を実行するか、\n"
+                "クリーンアップタブからリグを削除した上で再実行してください。\n\n"
+                "強制的に実行しますか？（※非推奨）",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if res != QMessageBox.Yes:
+                return
+
+        success = kangkhaen(self.current_mapped_dict)
+        if success:
+            mc.inViewMessage(amg='<span style="color:#52b7ff;">HumanIK:</span> Tポーズを再適用しました。', pos='topCenter', fade=True)
+        else:
+            QMessageBox.warning(self, "警告", "Tポーズの適用に必要なジョイントが不足しています。")
+
+    def _on_click_create_rig(self):
+        """コントロールリグ作成タスクを ExecutionLogDialog 経由で実行します"""
+        log_dialog = ExecutionLogDialog(self.parent_window or self, title="HumanIK コントロールリグ作成実行ログ")
+        success = log_dialog.run_task(self._create_control_rig_task)
+        self.last_log_text = log_dialog.te_log.toPlainText()
+        if success:
+            # リグ作成後は誤操作による破綻防止のためTポーズボタンを無効化
+            self.btn_reapply_tpose.setEnabled(False)
+            self.btn_reapply_tpose.setToolTip("コントロールリグ作成後はスケルトンの直接Tポーズ変更は行えません（リグ破綻防止）。")
+            self.btn_create_rig.setEnabled(False)
+
+    def _cleanup_conflicting_mmd_ik(self, target_model=None):
+        """
+        HumanIK コントロールリグと二重衝突する既存の MMD 足IKハンドル (ikHandle) および
+        コンストレイントを安全に整理・削除し、足の跳ね上がり・逆関節破綻を防止します。
+        """
+        deleted_handles = []
+        patterns = ['ikHandle_leg_*', 'ikHandle_toe_*', '*ikHandle_leg*', '*ikHandle_toe*']
+        for pat in patterns:
+            handles = mc.ls(pat, type='ikHandle') or []
+            for h in handles:
+                if mc.objExists(h) and h not in deleted_handles:
+                    try:
+                        mc.delete(h)
+                        deleted_handles.append(h)
+                    except Exception:
+                        pass
+
+        # 足首・つま先ジョイントを直接ロックしている orientConstraint / pointConstraint の検出と解除
+        constraints = mc.ls(type=['orientConstraint', 'pointConstraint']) or []
+        for c in constraints:
+            if not mc.objExists(c):
+                continue
+            try:
+                targets = mc.listConnections(f"{c}.target", destination=False, source=True) or []
+                if any('ＩＫ' in t or 'IK' in t for t in targets):
+                    mc.delete(c)
+            except Exception:
+                pass
+
+        if deleted_handles:
+            print(f"[HumanIK] コントロールリグ競合防止のため既存のMMD足IKハンドルを整理しました: {deleted_handles}")
+        return deleted_handles
+
+    def _create_control_rig_task(self):
+        """コントロールリグのバックエンド処理を実行します"""
+        print("==================================================")
+        print("HumanIK コントロールリグ作成を開始します...")
+        print("==================================================")
+
+        # リグ作成直前にも既存IKハンドルの競合を完全排除
+        self._cleanup_conflicting_mmd_ik()
+
+        if hasattr(self, 'current_hik_node') and self.current_hik_node and mc.objExists(self.current_hik_node):
+            print(f"カレントキャラクター設定: {self.current_hik_node}")
+            mel.eval(f'hikSetCurrentCharacter "{self.current_hik_node}";')
+            mel.eval('hikUpdateCharacterList();')
+
+        print("[HumanIK] hikCreateControlRig を実行中...")
+        mel.eval('hikCreateControlRig;')
+        print("[HumanIK] コントロールリグの作成が完了しました！")
+        print("==================================================")
+        mc.inViewMessage(amg='<span style="color:#52b7ff;">HumanIK:</span> コントロールリグを作成しました。', pos='topCenter', fade=True)
+        return True
 
 # ==============================================================================
 # モーションインポートタブ (VMD → Maya)
@@ -1253,7 +1654,10 @@ class VmdImportTabWidget(QWidget):
 
         # VMDアナライザーによる概要診断の出力
         try:
-            from . import vmd_analyzer
+            try:
+                from ..converters import vmd_analyzer
+            except Exception:
+                from converters import vmd_analyzer
             if file_path and os.path.exists(file_path):
                 report = vmd_analyzer.analyze_vmd(file_path)
                 print(report.generate_summary_text())
@@ -1437,7 +1841,8 @@ class PhysicsTabWidget(QWidget):
     def _is_bullet_available(self):
         """Bullet物理モジュール (bullet_engine) が存在し利用可能か判定"""
         try:
-            bullet_dir = os.path.join(os.path.dirname(__file__), "bullet_engine")
+            plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            bullet_dir = os.path.join(plugin_root, "bullet_engine")
             dll_path = os.path.join(bullet_dir, "bin", "mmd_bullet.dll")
             bridge_path = os.path.join(bullet_dir, "bullet_maya_bridge.py")
             return os.path.exists(dll_path) and os.path.exists(bridge_path)
@@ -1560,7 +1965,10 @@ class PhysicsTabWidget(QWidget):
                 return
 
         def run_bullet_task():
-            from .bullet_engine import bullet_maya_bridge
+            try:
+                from ..bullet_engine import bullet_maya_bridge
+            except Exception:
+                from bullet_engine import bullet_maya_bridge
             bridge = bullet_maya_bridge.BulletMayaBridge(pmx_path=pmx_path, scale=scale)
             bridge.bake_simulation(
                 start_frame=start_frame,
@@ -1606,7 +2014,10 @@ class PhysicsTabWidget(QWidget):
                 return
 
         def run_physics_task():
-            from .cpp_engine import xpbd_maya_bridge
+            try:
+                from ..cpp_engine import xpbd_maya_bridge
+            except Exception:
+                from cpp_engine import xpbd_maya_bridge
             self.bridge = xpbd_maya_bridge.XpbdMayaBridge(scale=scale)
             ok = self.bridge.initialize_from_pmx(pmx_path)
             if not ok:
@@ -1635,7 +2046,10 @@ class PhysicsTabWidget(QWidget):
             return
 
         try:
-            from .cpp_engine import xpbd_maya_bridge
+            try:
+                from ..cpp_engine import xpbd_maya_bridge
+            except Exception:
+                from cpp_engine import xpbd_maya_bridge
             bridge = xpbd_maya_bridge.XpbdMayaBridge()
             if bridge.initialize_from_pmx(pmx_path):
                 bridge.clear_physics_keyframes()
@@ -1649,7 +2063,10 @@ class PhysicsTabWidget(QWidget):
 
     def _execute_reconnect(self):
         try:
-            from .cpp_engine import xpbd_visualizer
+            try:
+                from ..cpp_engine import xpbd_visualizer
+            except Exception:
+                from cpp_engine import xpbd_visualizer
             ok = xpbd_visualizer.reconnect_visualizers_to_bones()
             if ok:
                 mc.inViewMessage(
@@ -1674,7 +2091,10 @@ class PhysicsTabWidget(QWidget):
             scale = 8.0
 
         try:
-            from .cpp_engine import xpbd_visualizer
+            try:
+                from ..cpp_engine import xpbd_visualizer
+            except Exception:
+                from cpp_engine import xpbd_visualizer
             xpbd_visualizer.create_rigidbody_visualizers(pmx_path, scale=scale)
             mc.inViewMessage(
                 amg='<span style="color:#2ecc71;">MMD Tools for Maya:</span> 剛体とJointの可視化を生成しました。',
@@ -1894,7 +2314,8 @@ class MmdMayaMainWindow(QWidget):
             parent = get_maya_main_window()
         super(MmdMayaMainWindow, self).__init__(parent)
         
-        self.setWindowTitle("MMD Tools for Maya")
+        self.setWindowTitle("MMD Tools for Maya v1.0.1")
+        self.setObjectName("MmdToolsForMayaMainWindow")
 
         # メインウィンドウサイズ設定 (視認性向上・ボタン文字見切れ防止のワイドレイアウト)
         self.resize(880, 820)
@@ -1925,7 +2346,7 @@ class MmdMayaMainWindow(QWidget):
         main_layout.addWidget(self.tabs)
 
         # フッタークレジット
-        footer = QLabel("MMD Tools for Maya v1.0.0 | Developer: Hina33")
+        footer = QLabel("MMD Tools for Maya v1.0.1 | Developer: Hina33")
         footer.setAlignment(Qt.AlignCenter)
         footer.setStyleSheet("color: #777; font-size: 13px; padding: 4px;")
         main_layout.addWidget(footer)
@@ -1934,19 +2355,29 @@ class MmdMayaMainWindow(QWidget):
         if e.key() == Qt.Key_Escape:
             self.close()
 
+def close_existing_ui():
+    """既に表示されているMMD Tools for Mayaウィンドウを検索してすべて閉じます"""
+    app = QApplication.instance()
+    if app is None:
+        return
+    for widget in app.topLevelWidgets():
+        try:
+            if widget.objectName() == "MmdToolsForMayaMainWindow" or widget.__class__.__name__ == "MmdMayaMainWindow":
+                widget.close()
+                widget.deleteLater()
+        except Exception:
+            pass
+
 def show_ui():
-    """UIウィンドウを表示します（インスタンス保持 & 最前面化）"""
+    """UIウィンドウを表示します（既に表示されている場合は閉じてから再表示）"""
     global _main_window_instance
     app = QApplication.instance()
     if app is None:
         app = QApplication(sys.argv)
 
-    if _main_window_instance is not None:
-        try:
-            _main_window_instance.close()
-            _main_window_instance.deleteLater()
-        except Exception:
-            pass
+    # 既存ウィンドウを検索して安全に破棄（多重起動防止）
+    close_existing_ui()
+    _main_window_instance = None
 
     _main_window_instance = MmdMayaMainWindow()
     _main_window_instance.show()

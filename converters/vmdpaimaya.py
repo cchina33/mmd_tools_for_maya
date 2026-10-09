@@ -13,9 +13,14 @@ import json
 import re
 import unicodedata
 
-from . import mmd_core
-from .asset.jaka import safe_node_name
-from .asset.bone_dict import get_english_bone_name, get_japanese_bone_name
+try:
+    from .. import mmd_core
+    from ..asset.jaka import safe_node_name
+    from ..asset.bone_dict import get_english_bone_name, get_japanese_bone_name
+except Exception:
+    import mmd_core
+    from asset.jaka import safe_node_name
+    from asset.bone_dict import get_english_bone_name, get_japanese_bone_name
 import maya.cmds as mc
 import maya.api.OpenMaya as om
 
@@ -202,7 +207,8 @@ def resolve_model_structure(target_model_node=None):
 
     # 3. キャッシュファイル (last_imported_structure.json) からの復元
     if not bone_map:
-        cache_path = os.path.join(os.path.dirname(__file__), 'asset', 'last_imported_structure.json')
+        plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        cache_path = os.path.join(plugin_root, 'asset', 'last_imported_structure.json')
         if os.path.isfile(cache_path):
             try:
                 with open(cache_path, 'r', encoding='utf-8') as f:
@@ -267,7 +273,10 @@ def apply_bone_motion(motion, joint_map, scale=8.0, target_model=None):
 
     # 足IKハンドルが未構築の場合は自動構築
     try:
-        from .pmxpaimaya import setup_mmd_ik
+        try:
+            from .pmxpaimaya import setup_mmd_ik
+        except Exception:
+            from pmxpaimaya import setup_mmd_ik
         setup_mmd_ik(target_model, joint_map)
     except Exception as e:
         print(f"  [情報] IK自動構築チェック: {e}")
@@ -727,6 +736,41 @@ def delete_mmd_scene_elements(target_model_node=None, delete_lights=True, delete
                             deleted_count += 1
                         except Exception:
                             pass
+
+    # HumanIK キャラクタ定義およびコントロールリグのクリーンアップ
+    hik_characters = []
+    if target_model_node:
+        clean_target = re.sub(r'[^a-zA-Z0-9_]', '_', target_model_node)
+        hik_characters = mc.ls(f"HIK_{clean_target}*", type="HIKCharacterNode") or []
+    else:
+        hik_characters = mc.ls("HIK_*", type="HIKCharacterNode") or []
+
+    for char_node in hik_characters:
+        if mc.objExists(char_node):
+            try:
+                mel.eval(f'hikSetCurrentCharacter "{char_node}";')
+                mel.eval('hikDeleteControlRig;')
+            except Exception:
+                pass
+            try:
+                mel.eval(f'hikDeleteCharacter "{char_node}";')
+                deleted_count += 1
+            except Exception:
+                try:
+                    mc.delete(char_node)
+                    deleted_count += 1
+                except Exception:
+                    pass
+
+    # 残存するコントロールリグ・エフェクタノードの安全なフォールバック削除
+    hik_remnants = mc.ls("*_Ctrl_*", "*_Reference", "*_CtrlRig*", type="transform") or []
+    for r_node in hik_remnants:
+        if mc.objExists(r_node) and any(k in r_node for k in ["HIK_", "Ctrl_", "Reference"]):
+            try:
+                mc.delete(r_node)
+                deleted_count += 1
+            except Exception:
+                pass
 
     # 未使用マテリアル・テクスチャ・ユーティリティノードの削除 (指定時のみ実行)
     if delete_unused_nodes:

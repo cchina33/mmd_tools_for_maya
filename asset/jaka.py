@@ -339,6 +339,17 @@ def romaji(x):
     # Unicode正規化 (NFKC: 全角英数→半角、半角カナ→全角カナ等)
     x = unicodedata.normalize('NFKC', x)
 
+    # ユーザーカスタム名称変換ルールの優先適用
+    try:
+        from .user_dict_manager import load_user_settings
+        custom_trans = load_user_settings().get("custom_name_translations", {})
+        sorted_custom_keys = sorted(custom_trans.keys(), key=len, reverse=True)
+        for k in sorted_custom_keys:
+            if k in x:
+                x = x.replace(k, f"_{custom_trans[k]}_")
+    except Exception:
+        pass
+
     # 頻出MMD用語・漢字の置換（長い語句から順にマッチさせて置換）
     # ソートして長い語句優先にする
     sorted_kanji_keys = sorted(MMD_KANJI_DICT.keys(), key=len, reverse=True)
@@ -425,3 +436,19 @@ def safe_node_name(name, name_e=None, prefix="node", index=None):
         return f"{candidate}_{index:03d}"
 
     return candidate
+
+def reload_user_dict():
+    """ユーザー辞書を再読み込みし、MMD_KANJI_DICT に最新設定をマージします"""
+    try:
+        from .user_dict_manager import load_user_settings
+        custom_trans = load_user_settings().get("custom_name_translations", {})
+        MMD_KANJI_DICT.update(custom_trans)
+        return True
+    except Exception:
+        try:
+            from asset.user_dict_manager import load_user_settings
+            custom_trans = load_user_settings().get("custom_name_translations", {})
+            MMD_KANJI_DICT.update(custom_trans)
+            return True
+        except Exception:
+            return False

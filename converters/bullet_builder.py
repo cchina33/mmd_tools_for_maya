@@ -9,8 +9,13 @@ Mayaのタイムライン再生（インタラクティブ）による物理シ�
 import math
 import maya.cmds as mc
 import maya.mel as mel
-import maya.api.OpenMaya as om
-from .mmd_core import pmx
+try:
+    from ..mmd_core import pmx
+except Exception:
+    try:
+        from .mmd_core import pmx
+    except Exception:
+        import mmd_core.pmx as pmx
 
 BULLET_ROOT_GROUP = "MMD_Bullet_Physics_Rig"
 

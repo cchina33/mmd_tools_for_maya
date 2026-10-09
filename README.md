@@ -1,9 +1,9 @@
-# MMD Tools for Maya (v1.0.0 Beta)
+# MMD Tools for Maya (v1.0.1)
 
-Autodesk Maya 上で MMD（PMX / PMD / DirectX .x）形式のモデルやアクセサリのインポート・エクスポート、VMDモーション・カメラ・音声のインポート、HumanIKリグ定義、および物理演算ベイクを行うための Maya 統合拡張プラグインです。
+Autodesk Maya 上で MMD（PMX / PMD / DirectX .x）形式のモデルやアクセサリのインポート・エクスポート、VMDモーション・カメラ・音声のインポート、HumanIKリグ定義、モデル構造の一括解析・辞書登録、および物理演算ベイクを行うための Maya 統合拡張プラグインです。
 
 > [!NOTE]
-> 本バージョン（**v1.0.0 Beta**）は、機能実装を完了し実運用検証を行っているベータ版です。モデルのインポート、モーション適用、物理演算ベイク等の一連のワークフローが動作確認されています。フィードバックや不具合報告は大歓迎ですが全てを対応することは難しいです。
+> 本バージョン（**v1.0.1**）は、PMX詳細解析・一括保存・辞書登録機能、HumanIK脚部姿勢安定化、二重IK競合解除、物理演算パス最適化等の最新機能を統合した安定版です。モデルのインポート、モーション適用、物理演算ベイク等の一連のワークフローが動作確認されています。フィードバックや不具合報告は大歓迎ですが全てを対応することは難しいです。
 
 ---
 
@@ -14,6 +14,10 @@ Autodesk Maya 上で MMD（PMX / PMD / DirectX .x）形式のモデルやアク�
   - **PMX 2.0 / 2.1**: 頂点、BDEF/SDEF/QDEFウェイト、面、材質、テクスチャ、ボーン、モーフ、剛体、ジョイントの入出力に対応。
   - **PMD (MMD旧形式)**: ボーン、IK（インバースキネマティクス）、モーフ、面巻き順の反転補正に対応。
   - **DirectX .x**: フリーフォーマット字句解析（トークナイザー）により、改行・コメント・多様な区切り文字を含むメッシュやアクセサリを安定パース。
+- **PMX モデル詳細解析・一括保存 & 未登録ボーン辞書登録機能 (`pmx_analyzer`)**:
+  - 読み込んだモデルの **材質、ボーン、モーフ、剛体、Joint** の全パラメータを JSON 形式にワンクリックで一括エクスポート。
+  - `jaka.py` に未記載の漢字・ボーン名が存在する場合に自動検出し、「登録のないボーン名があります。ユーザー辞書に記録しますか？」と確認。
+  - GUI 上で漢字の隣にローマ字を入力して即時登録・自動再チェック（サイドチェック）を実行。
 - **デュアル物理演算エンジン（本家 Bullet ＆ 自作 XPBD）**:
   - **Bullet 物理ベイク (MMD本家仕様)**: Bullet Physics 2.83.7 コアを直接 C++ 単一 DLL（`mmd_bullet.dll`）に組み込み、本家 MikuMikuDance 特有の「柔らかく綺麗なしなやかさ」を Maya 上で完全再現。
   - **XPBD 物理ベイク (自作C++エンジン)**: 拡張位置ベース物理（XPBD）による高剛性・低ジッターな高速シミュレーション。
@@ -23,6 +27,7 @@ Autodesk Maya 上で MMD（PMX / PMD / DirectX .x）形式のモデルやアク�
   - IK / ボーン追従の動的フレーム同期。カメラ・照明・WAV音声の一括インポート対応。
 - **HumanIK キャラクタ定義 & コントロールリグ自動生成**:
   - PMXボーン構造を自動解析し、Maya 標準の HumanIK キャラクタ定義とリグをワンクリックで構築。
+  - 数学的最短回転ベクトルによる両腕の完全水平 T ポーズ展開、膝の優先屈曲角度（`preferredAngle`）＆プレベンド設定、つま先ボーン連動、および二重IK競合の自動安全解除を搭載。
 - **大容量・中国語モデル対応 & 安全なノード名変換**:
   - 簡体字・未知文字・特殊記号を含むモデルでも、名前の衝突や Maya の命名制限エラーを自動回避するセーフノードネーミング機構を搭載。
 - **Maya 2025 最適化モダン UI**:
@@ -34,21 +39,44 @@ Autodesk Maya 上で MMD（PMX / PMD / DirectX .x）形式のモデルやアク�
 
 - **Autodesk Maya**: 2022 / 2023 / 2024 / 2025 以降 (Python 3 環境)
   - **Maya 2025 動作確認済み**
-- **OS**: Windows (x64)
+- **OS**: Windows (x64)のみ動作確認済み
 
 ---
 
 ## インストール手順
 
-### プラグインマネージャーから直接ロード（推奨）
+Maya の標準プラグインディレクトリ（`plug-ins`）に配置してロードします。
 
-1. 本リポジトリの `mmd_tools_for_maya` フォルダを、Maya のプラグインフォルダに配置します：
-   - 例: `C:\Users\<ユーザー名>\Documents\maya\2025\plug-ins\mmd_tools_for_maya`
-2. 同フォルダ直下の `mmd_tools_for_maya_plugin.py` を以下の位置に配置します：
-   - 例: `C:\Users\<ユーザー名>\Documents\maya\2025\plug-ins\mmd_tools_for_maya_plugin.py`
-3. Maya を起動し、**ウィンドウ (Windows) > 設定/プリファレンス (Settings/Preferences) > プラグイン マネージャ (Plug-in Manager)** を開きます。
-4. プラグイン一覧に表示された **`mmd_tools_for_maya_plugin.py`** の **ロード (Loaded)** および **自動ロード (Auto load)** にチェックを入れます。
-5. Maya メインメニューバーに **[MMD]** が追加され、**MMD to Maya (GUI)** から起動できます。
+### 1. ファイルの配置構造
+
+Maya のプラグインフォルダに、以下の構造で配置してください：
+
+```text
+C:\Users\<ユーザー名>\Documents\maya\<バージョン>\plug-ins\
+├── mmd_tools_for_maya_plugin.py      # 【必須】プラグインローダー (Mayaが直接ロードするファイル)
+└── mmd_tools_for_maya/               # 【必須】プラグイン本体パッケージフォルダ
+    ├── __init__.py
+    ├── ui/
+    ├── converters/
+    ├── pmx_analyzer/
+    ├── mmd_core/
+    ├── bullet_engine/
+    ├── cpp_engine/
+    ├── asset/
+    └── toon/
+```
+
+> [!TIP]
+> `plug-ins/` 直下に置かれた **`mmd_tools_for_maya_plugin.py`** が Maya に認識されるローダー本体です。  
+> `mmd_tools_for_maya/` フォルダの「中」にある同名ファイルはバックアップコピーですので、削除しても動作に問題ありません。
+
+### 2. Maya でのロード手順
+
+1. Maya を起動します。
+2. 上部メニューから **ウィンドウ (Windows) > 設定/プリファレンス (Settings/Preferences) > プラグイン マネージャ (Plug-in Manager)** を開きます。
+3. プラグイン一覧の中から **`mmd_tools_for_maya_plugin.py`** を探します。
+4. **ロード (Loaded)** および **自動ロード (Auto load)** のチェックボックスをオンにします。
+5. Maya メインメニューバーの右端に **[MMD]** メニューが追加され、**MMD to Maya (GUI)** をクリックするとツールウィンドウが起動します。
 
 ---
 
@@ -58,12 +86,13 @@ Autodesk Maya 上で MMD（PMX / PMD / DirectX .x）形式のモデルやアク�
 
 | ドキュメント名                                                                                            | 概要・対象機能                                                                                                                                                         |
 | :-------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [codebase_architecture_specification.md](technical_specifications/codebase_architecture_specification.md) | **コードベース全体アーキテクチャ**: モジュール構造、GUI・エンジン・パーサー分離原則、例外安全設計                                                                      |
+| [pmx_analyzer_specification.md](technical_specifications/pmx_analyzer_specification.md)                   | **PMXモデル詳細解析 & ユーザー辞書仕様**: 材質・ボーン・モーフ・剛体・Joint一括保存、未登録漢字抽出、対話型登録GUI・再チェック                                         |
 | [bullet_engine_specification.md](technical_specifications/bullet_engine_specification.md)                 | **Bullet Physics 2.83.7 エンジン仕様**: MMD本家物理再現、単一DLL組み込み、剛体・ジョイントパラメータ定義、衝突グループ(1〜16)・16bitマスク仕様、OpenMayaマトリクス逆算 |
 | [physics_system_specification.md](technical_specifications/physics_system_specification.md)               | **Maya物理システム統合仕様**: ビューポート可視化コライダーメッシュ生成、Kinematic/Dynamic追従階層、自動再吸着・置き去り解消機構                                        |
 | [xpbd_engine_specification.md](technical_specifications/xpbd_engine_specification.md)                     | **自作XPBD物理エンジン仕様**: 拡張位置ベース物理（XPBD）による剛体・6DOFばね拘束ソルバー、サブステップ積分、衝突判定                                                   |
 | [model_import_specification.md](technical_specifications/model_import_specification.md)                   | **モデルインポート・エクスポート仕様**: PMX 2.0/2.1、PMD、DirectX .x、SDEFスキニング、マテリアル・テクスチャ変換                                                       |
 | [vmd_import_specification.md](technical_specifications/vmd_import_specification.md)                       | **VMDモーションインポート仕様**: ベジェ補間曲線計算、IKベイク、カメラ・照明・音声インポート、オイラー角最短補正                                                        |
-| [codebase_architecture_specification.md](technical_specifications/codebase_architecture_specification.md) | **コードベース全体アーキテクチャ**: モジュール構造、GUI・エンジン・パーサー分離原則、例外安全設計                                                                      |
 
 ---
 
@@ -72,7 +101,7 @@ Autodesk Maya 上で MMD（PMX / PMD / DirectX .x）形式のモデルやアク�
 本プロジェクトは、オープンソースの透明性と利用者の自由度を最大限に高めるため、**フォルダ単位での完全なライセンス分離設計（カプセル化）** を採用しています。
 
 - **プラグイン本体**: **MIT License**
-  - 入出力コア（`mmd_core/`）、自作XPBD物理エンジン（`cpp_engine/`）、GUI（`gui.py`）、各種ユーティリティ等はすべて MIT ライセンスです。
+  - 入出力コア（`mmd_core/`）、自作XPBD物理エンジン（`cpp_engine/`）、解析ツール（`pmx_analyzer/`）、GUI（`ui/`）、各種ユーティリティ等はすべて MIT ライセンスです。
 - **Bullet エンジンモジュール (`bullet_engine/`)**: **zlib License**
   - Bullet Physics Library（Erwin Coumans / Bullet 公式）のソースコードを含みます。
 

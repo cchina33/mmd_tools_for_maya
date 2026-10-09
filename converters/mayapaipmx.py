@@ -9,9 +9,10 @@ Mayaのポリゴンメッシュ、ボーン（ジョイント）、スキニン�
 import os
 import math
 import time
-import shutil
-import re
-from . import mmd_core
+try:
+    from .. import mmd_core
+except Exception:
+    import mmd_core
 import maya.cmds as mc
 import maya.api.OpenMaya as om
 import maya.api.OpenMayaAnim as oma

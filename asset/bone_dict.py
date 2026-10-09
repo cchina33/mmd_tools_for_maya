@@ -131,6 +131,15 @@ def get_english_bone_name(japanese_name):
         
     jp = unicodedata.normalize('NFKC', str(japanese_name).strip())
     
+    # ユーザーカスタム辞書の確認
+    try:
+        from .user_dict_manager import load_user_settings
+        custom_dict = load_user_settings().get("custom_bone_dict", {})
+        if jp in custom_dict:
+            return custom_dict[jp]
+    except Exception:
+        pass
+
     # 1. 完全一致
     if jp in BASE_BONE_MAP_JA_TO_EN:
         return BASE_BONE_MAP_JA_TO_EN[jp]
@@ -165,6 +174,16 @@ def get_japanese_bone_name(english_name):
         
     en = str(english_name).strip()
     
+    # ユーザーカスタム辞書の逆引き確認
+    try:
+        from .user_dict_manager import load_user_settings
+        custom_dict = load_user_settings().get("custom_bone_dict", {})
+        reverse_custom = {v: k for k, v in custom_dict.items()}
+        if en in reverse_custom:
+            return reverse_custom[en]
+    except Exception:
+        pass
+
     # 1. 完全一致
     if en in BASE_BONE_MAP_EN_TO_JA:
         return BASE_BONE_MAP_EN_TO_JA[en]

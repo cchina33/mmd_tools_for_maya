@@ -3,11 +3,13 @@ import sys
 import unicodedata
 from collections import defaultdict
 
-# 相対インポートとスタンドアロン実行の両方に対応
 try:
-    from .mmd_core import vmd
-except ImportError:
-    import mmd_core.vmd as vmd
+    from ..mmd_core import vmd
+except Exception:
+    try:
+        from .mmd_core import vmd
+    except Exception:
+        import mmd_core.vmd as vmd
 
 # MMDの標準ボーン定義
 STANDARD_BONES = {
