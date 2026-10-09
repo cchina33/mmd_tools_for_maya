@@ -131,3 +131,15 @@ XPBD_API int xpbd_get_rigidbody_count(xpbd::XpbdEngine* engine) {
 XPBD_API int xpbd_get_joint_count(xpbd::XpbdEngine* engine) {
     return engine ? engine->getJointCount() : 0;
 }
+
+XPBD_API void xpbd_reset_velocities(xpbd::XpbdEngine* engine) {
+    if (engine) engine->resetVelocities();
+}
+
+XPBD_API void xpbd_reset_constraints(xpbd::XpbdEngine* engine) {
+    if (engine) engine->resetConstraints();
+}
+
+XPBD_API void xpbd_relax_penetration(xpbd::XpbdEngine* engine, int steps, float relaxationDamping) {
+    if (engine) engine->relaxPenetration(steps, relaxationDamping);
+}

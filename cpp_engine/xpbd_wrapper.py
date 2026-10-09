@@ -114,6 +114,18 @@ class XpbdEngineWrapper:
         self._dll.xpbd_get_joint_count.restype = c_int
         self._dll.xpbd_get_joint_count.argtypes = [c_void_p]
 
+        # xpbd_reset_velocities
+        self._dll.xpbd_reset_velocities.restype = None
+        self._dll.xpbd_reset_velocities.argtypes = [c_void_p]
+
+        # xpbd_reset_constraints
+        self._dll.xpbd_reset_constraints.restype = None
+        self._dll.xpbd_reset_constraints.argtypes = [c_void_p]
+
+        # xpbd_relax_penetration
+        self._dll.xpbd_relax_penetration.restype = None
+        self._dll.xpbd_relax_penetration.argtypes = [c_void_p, c_int, c_float]
+
     def close(self):
         """
         エンジンリソースの解放
@@ -257,3 +269,26 @@ class XpbdEngineWrapper:
         登録されたジョイント数を取得
         """
         return self._dll.xpbd_get_joint_count(self._engine)
+
+    def reset_velocities(self):
+        """
+        全剛体の線形速度・角速度をゼロクリアし、現在姿勢に同期
+        """
+        if self._engine:
+            self._dll.xpbd_reset_velocities(self._engine)
+
+    def reset_constraints(self):
+        """
+        全ジョイントの累積ラグランジュ乗数をリセット
+        """
+        if self._engine:
+            self._dll.xpbd_reset_constraints(self._engine)
+
+    def relax_penetration(self, steps=25, damping=0.99):
+        """
+        初期姿勢でのめり込み解消ウォームアップ (Pre-roll Relaxation)
+        重力なし・高減衰下で接触反発のみを解き、初速0のまま太もも外側へ自然に押し出す
+        """
+        if self._engine:
+            self._dll.xpbd_relax_penetration(self._engine, int(steps), float(damping))
+

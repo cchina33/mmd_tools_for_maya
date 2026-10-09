@@ -53,11 +53,6 @@ void XpbdEngine::setRigidBodyTransform(int index, const Vec3& pos, const Quat& r
 
     rb->targetPosition = pos;
     rb->targetRotation = rot;
-
-    if (rb->physicsMode == PhysicsMode::Kinematic) {
-        rb->position = pos;
-        rb->rotation = rot;
-    }
 }
 
 int XpbdEngine::addJoint(const Joint6DOF& joint) {
@@ -338,21 +333,48 @@ void XpbdEngine::solveJoint(Joint6DOF& joint, float h) {
             dLambda = std::clamp(dLambda, -10.0f, 10.0f);
 
             Vec3 rotImpulse = axisWorld * dLambda;
+            constexpr float MAX_ROT_STEP = 0.15f;
             if (rbA->invMass > 0.0f) {
                 Vec3 dRot = rbA->getInvInertiaWorld() * (-rotImpulse);
                 float lenRot = dRot.length();
-                if (lenRot > 0.5f) dRot = dRot * (0.5f / lenRot);
+                if (lenRot > MAX_ROT_STEP) dRot = dRot * (MAX_ROT_STEP / lenRot);
                 Quat dq(dRot.x, dRot.y, dRot.z, 0.0f);
                 rbA->rotation = (rbA->rotation + dq * rbA->rotation * 0.5f).normalized();
             }
             if (rbB->invMass > 0.0f) {
                 Vec3 dRot = rbB->getInvInertiaWorld() * rotImpulse;
                 float lenRot = dRot.length();
-                if (lenRot > 0.5f) dRot = dRot * (0.5f / lenRot);
+                if (lenRot > MAX_ROT_STEP) dRot = dRot * (MAX_ROT_STEP / lenRot);
                 Quat dq(dRot.x, dRot.y, dRot.z, 0.0f);
                 rbB->rotation = (rbB->rotation + dq * rbB->rotation * 0.5f).normalized();
             }
         }
+    }
+
+    // ジョイント間の相対速度・相対角速度に対するダンピング（高周波ジッター・あらぶりを抑制）
+    Vec3 velA = rbA->linearVelocity + rbA->angularVelocity.cross(rA);
+    Vec3 velB = rbB->linearVelocity + rbB->angularVelocity.cross(rB);
+    Vec3 relVel = velB - velA;
+    float dampFactor = std::min(0.8f, 15.0f * h);
+    Vec3 dampImpulse = relVel * dampFactor;
+    float totalInvM = rbA->invMass + rbB->invMass;
+    if (totalInvM > EPSILON) {
+        if (rbA->physicsMode == PhysicsMode::Dynamic) {
+            rbA->linearVelocity += dampImpulse * (rbA->invMass / totalInvM);
+        }
+        if (rbB->physicsMode == PhysicsMode::Dynamic) {
+            rbB->linearVelocity -= dampImpulse * (rbB->invMass / totalInvM);
+        }
+    }
+
+    Vec3 relAngVel = rbB->angularVelocity - rbA->angularVelocity;
+    float angDampFactor = std::min(0.8f, 20.0f * h);
+    Vec3 dampAngImpulse = relAngVel * angDampFactor;
+    if (rbA->invMass > 0.0f && rbA->physicsMode == PhysicsMode::Dynamic) {
+        rbA->angularVelocity += dampAngImpulse * 0.5f;
+    }
+    if (rbB->invMass > 0.0f && rbB->physicsMode == PhysicsMode::Dynamic) {
+        rbB->angularVelocity -= dampAngImpulse * 0.5f;
     }
 }
 
@@ -364,17 +386,17 @@ void XpbdEngine::solveCollisions(float h) {
             RigidBody& a = rigidBodies_[i];
             RigidBody& b = rigidBodies_[j];
 
-            // 1. 非衝突グループ・マスクチェック (PMX仕様: ビットが立っているグループとは衝突しない)
-            if ((a.collisionMask & (1 << b.group)) != 0 || (b.collisionMask & (1 << a.group)) != 0) {
+            // 衝突グループ・マスクチェック (PMX/Bullet仕様: 相手のグループビットが双方向で立っている場合のみ衝突)
+            if ((a.collisionMask & (1 << b.group)) == 0 || (b.collisionMask & (1 << a.group)) == 0) {
                 continue;
             }
 
-            // 2. 両方が Kinematic の場合は衝突処理不要
+            // 両方が Kinematic の場合は衝突処理不要
             if (a.invMass == 0.0f && b.invMass == 0.0f) {
                 continue;
             }
 
-            // 3. Joint で直接接続された剛体ペアは衝突判定から除外 (反発と引張のケンカを完全遮断)
+            // Joint で直接接続された剛体ペアは衝突判定から除外 (反発と引張のケンカを遮断)
             bool isJointLinked = false;
             for (const auto& joint : joints_) {
                 if ((joint.bodyA == a.id && joint.bodyB == b.id) || (joint.bodyA == b.id && joint.bodyB == a.id)) {
@@ -645,8 +667,8 @@ void XpbdEngine::checkCollisionCapsuleBox(RigidBody& capsule, RigidBody& box, fl
     float r = capsule.size.x * (1.0f + MARGIN_FACTOR);
     Vec3 e = box.size;
 
-    // カプセル軸線分上の代表サンプル点 (精度を高めるため8分割)
-    constexpr int NUM_SAMPLES = 8;
+    // カプセル軸線分上の代表サンプル点 (分解能を高めるため12分割)
+    constexpr int NUM_SAMPLES = 12;
     float maxPen = 0.0f;
     Vec3 bestNormal;
     Vec3 bestContactPt;
@@ -702,6 +724,38 @@ void XpbdEngine::checkCollisionCapsuleBox(RigidBody& capsule, RigidBody& box, fl
         }
     }
 
+    // 箱の8頂点からカプセル軸線分への近接・食い込み判定 (薄い板状スカートの角・エッジのすり抜けを防止)
+    Vec3 p0 = capsule.position - axis * halfH;
+    Vec3 p1 = capsule.position + axis * halfH;
+    Vec3 capSeg = p1 - p0;
+    float segLenSq = capSeg.lengthSq();
+
+    for (int ix = -1; ix <= 1; ix += 2) {
+        for (int iy = -1; iy <= 1; iy += 2) {
+            for (int iz = -1; iz <= 1; iz += 2) {
+                Vec3 cornerLoc(e.x * ix, e.y * iy, e.z * iz);
+                Vec3 cornerWorld = box.position + box.rotation.rotate(cornerLoc);
+
+                float t = 0.0f;
+                if (segLenSq > EPSILON) {
+                    t = std::clamp((cornerWorld - p0).dot(capSeg) / segLenSq, 0.0f, 1.0f);
+                }
+                Vec3 ptOnCapAxis = p0 + capSeg * t;
+                Vec3 cornerDiff = ptOnCapAxis - cornerWorld;
+                float distSq = cornerDiff.lengthSq();
+                if (distSq < r * r && distSq > EPSILON) {
+                    float dist = std::sqrt(distSq);
+                    float pen = r - dist;
+                    if (pen > maxPen) {
+                        maxPen = pen;
+                        bestNormal = cornerDiff / dist; // boxからcapsuleに向かう法線
+                        bestContactPt = cornerWorld;
+                    }
+                }
+            }
+        }
+    }
+
     if (maxPen > 0.0f) {
         resolveContact(box, capsule, bestContactPt, bestNormal, maxPen, h);
 
@@ -735,6 +789,91 @@ void XpbdEngine::checkCollisionBoxBox(RigidBody& a, RigidBody& b, float h) {
         Vec3 contactPt = (a.position + b.position) * 0.5f;
         resolveContact(a, b, contactPt, normal, penetration * 0.5f, h);
     }
+}
+
+// 全剛体の線形速度・角速度をゼロクリアし、現在姿勢に同期
+void XpbdEngine::resetVelocities() {
+    for (auto& rb : rigidBodies_) {
+        rb.linearVelocity = Vec3(0.0f, 0.0f, 0.0f);
+        rb.angularVelocity = Vec3(0.0f, 0.0f, 0.0f);
+        rb.prevPosition = rb.position;
+        rb.prevRotation = rb.rotation;
+    }
+}
+
+// 全ジョイントの累積ラグランジュ乗数をリセット
+void XpbdEngine::resetConstraints() {
+    for (auto& joint : joints_) {
+        joint.totalPosLambda = Vec3(0.0f, 0.0f, 0.0f);
+        joint.totalRotLambda = Vec3(0.0f, 0.0f, 0.0f);
+    }
+}
+
+// 初期めり込み解消ウォームアップ (Pre-roll Relaxation)
+void XpbdEngine::relaxPenetration(int steps, float relaxationDamping) {
+    if (steps <= 0) return;
+
+    // 重力を一時退避してゼロに設定
+    Vec3 origGravity = gravity_;
+    gravity_ = Vec3(0.0f, 0.0f, 0.0f);
+
+    // 各剛体の元のダンピングを保存し、極大減衰を一時設定
+    std::vector<std::pair<float, float>> origDamping;
+    origDamping.reserve(rigidBodies_.size());
+
+    for (auto& rb : rigidBodies_) {
+        origDamping.push_back({rb.linearDamping, rb.angularDamping});
+        if (rb.physicsMode != PhysicsMode::Kinematic) {
+            rb.linearDamping = relaxationDamping;
+            rb.angularDamping = relaxationDamping;
+            rb.linearVelocity = Vec3(0.0f, 0.0f, 0.0f);
+            rb.angularVelocity = Vec3(0.0f, 0.0f, 0.0f);
+        }
+    }
+
+    const float h = 1.0f / 60.0f;
+    for (int step = 0; step < steps; ++step) {
+        // Kinematic剛体（太もも等）の姿勢を目標位置に完全固定
+        for (auto& rb : rigidBodies_) {
+            if (rb.physicsMode == PhysicsMode::Kinematic) {
+                rb.position = rb.targetPosition;
+                rb.rotation = rb.targetRotation;
+                rb.prevPosition = rb.position;
+                rb.prevRotation = rb.rotation;
+                rb.linearVelocity = Vec3(0.0f, 0.0f, 0.0f);
+                rb.angularVelocity = Vec3(0.0f, 0.0f, 0.0f);
+            } else if (rb.physicsMode == PhysicsMode::Aligned) {
+                rb.position = rb.targetPosition;
+                rb.prevPosition = rb.position;
+                rb.linearVelocity = Vec3(0.0f, 0.0f, 0.0f);
+            }
+        }
+
+        // 拘束解決（ジョイント拘束と衝突解決）
+        solveJointConstraints(h);
+        solveCollisions(h);
+
+        // 緩和中は慣性速度の蓄積を遮断
+        for (auto& rb : rigidBodies_) {
+            rb.linearVelocity = Vec3(0.0f, 0.0f, 0.0f);
+            rb.angularVelocity = Vec3(0.0f, 0.0f, 0.0f);
+            rb.prevPosition = rb.position;
+            rb.prevRotation = rb.rotation;
+        }
+    }
+
+    // 元のダンピングと重力を復元
+    for (size_t i = 0; i < rigidBodies_.size(); ++i) {
+        rigidBodies_[i].linearDamping = origDamping[i].first;
+        rigidBodies_[i].angularDamping = origDamping[i].second;
+        rigidBodies_[i].linearVelocity = Vec3(0.0f, 0.0f, 0.0f);
+        rigidBodies_[i].angularVelocity = Vec3(0.0f, 0.0f, 0.0f);
+        rigidBodies_[i].prevPosition = rigidBodies_[i].position;
+        rigidBodies_[i].prevRotation = rigidBodies_[i].rotation;
+    }
+    gravity_ = origGravity;
+
+    resetConstraints();
 }
 
 } // namespace xpbd

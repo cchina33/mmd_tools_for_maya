@@ -11,7 +11,7 @@ mmd_tools_for_maya/
 ├── mmd_tools_for_maya_plugin.py      # Mayaプラグイン公式エントリポイント
 ├── gui.py                            # モダン統合タブ型UI (PySide6 / PySide2)
 ├── gui_style.py                      # UIダークテーマスタイルシート (QSS)
-├── pmxpaimaya.py                     # MMDモデル (PMX/PMD/X) Mayaインポートエンジン
+├── pmxpaimaya.py                     # MMDモデル (PMX/PMD/X) Mayaインポートエンジン (Toon/セルフ影3段階/IK)
 ├── vmdpaimaya.py                     # MMDモーション (VMD) アニメーション適用エンジン
 ├── vmd_analyzer.py                   # VMDモーション構造解析・診断モジュール
 ├── mayapaipmx.py                     # MayaシーンからPMXへのエクスポートエンジン
@@ -21,7 +21,7 @@ mmd_tools_for_maya/
 ├── plugin_technical_guide.md         # 総合技術解説ガイド
 ├── LICENSE                           # MITライセンス条項
 │
-├── mmd_core/                         # 自作MMDバイナリ/テキスト構文解析パッケージ
+├── mmd_core/                         # 自作MMDバイナリ/テキスト構文解析パッケージ (MIT)
 │   ├── __init__.py                   # パッケージエクスポート定義
 │   ├── pmx.py                        # PMX 2.0 / 2.1 パーサー & ライター
 │   ├── pmd.py                        # PMD (MMD旧形式) パーサー & PMX自動変換
@@ -29,7 +29,18 @@ mmd_tools_for_maya/
 │   ├── vmd.py                        # VMD モーションパーサー
 │   └── vpd.py                        # VPD ポーズパーサー
 │
-├── cpp_engine/                       # C++ XPBD 物理演算エンジン
+├── bullet_engine/                    # MMD本家 Bullet 2.83.7 物理演算エンジン (zlib license)
+│   ├── bin/
+│   │   └── mmd_bullet.dll            # コンパイル済み Bullet 物理エンジンDLL
+│   ├── include/                      # Bullet C++ ヘッダー群 (LinearMath, BulletCollision, BulletDynamics)
+│   ├── src/                          # Bullet C++ ソース群 & C-API エクスポートラッパー
+│   ├── build_bullet_dll.py           # MSVC / MinGW 自動検出 DLL ビルドスクリプト
+│   ├── bullet_wrapper.py             # ctypes による Bullet DLL Python バインディング (ウォームアップ・リセット機能)
+│   ├── bullet_maya_bridge.py         # Bullet 物理シミュレーション・Maya ベイク制御エンジン
+│   ├── LICENSE                       # Bullet 公式 zlib ライセンス条項
+│   └── README.md                     # Bullet エンジン概要・ビルド手順
+│
+├── cpp_engine/                       # C++ XPBD 物理演算エンジン (MIT)
 │   ├── bin/
 │   │   └── mmd_xpbd.dll              # コンパイル済みXPBD物理エンジンDLL
 │   ├── include/
@@ -47,18 +58,20 @@ mmd_tools_for_maya/
 │   ├── jaka.py                       # 日本語/中国語ノード名のローマ字変換 & 安全化
 │   ├── hik.py                        # HumanIK (HIK) ボーン定義マッピング
 │   ├── last_imported_structure.json  # 前回インポート時の日英ボーン構造キャッシュ
-│   └── khatangton.txt                # UI設定永続化ファイル
+│   └── khatangton.txt                # UI設定永続化ファイル (シャドウモード・各種フラグ)
 │
 ├── toon/                             # MMD標準共有トゥーンテクスチャ
 │   └── toon01.bmp 〜 toon10.bmp      # 階調陰影用標準BMPテクスチャ群
 │
-└── docs/                             # プロジェクト技術ドキュメント
-    ├── technical_specifications/     # 分離独立した専門技術仕様書群 (本フォルダ)
-    │   ├── model_import_specification.md      # モデルインポート仕様
-    │   ├── vmd_import_specification.md        # VMDインポート仕様
-    │   ├── physics_system_specification.md    # Maya物理システム仕様
-    │   ├── xpbd_engine_specification.md       # C++ XPBDエンジン仕様
-    │   └── codebase_architecture_specification.md # 本ファイル
+├── technical_specifications/         # 分離独立した専門技術仕様書群
+│   ├── codebase_architecture_specification.md # 本ファイル (全体構成・各モジュール仕様)
+│   ├── bullet_engine_specification.md         # MMD本家 Bullet 物理演算エンジン仕様
+│   ├── model_import_specification.md          # モデルインポート・Toon＆セルフ影再現仕様
+│   ├── physics_system_specification.md        # Maya物理システム仕様
+│   ├── vmd_import_specification.md            # VMDインポート仕様
+│   └── xpbd_engine_specification.md           # C++ XPBD物理エンジン仕様
+│
+└── docs/                             # プロジェクト機能アップデート・開発作業記録録
     └── ... (各機能アップデートごとの実装計画・タスクリスト・確認録)
 ```
 
@@ -72,7 +85,7 @@ mmd_tools_for_maya/
 - **役割**: Maya のプラグインマネージャから直接ロードされ、トップメニューバーに「MMD」メニューを登録。
 - **主要関数**:
   - `initializePlugin(plugin_obj)`: プラグイン登録、検索パス（`sys.path`）の設定、メニュー生成。
-  - `uninitializePlugin(plugin_obj)`: プラグイン登録解除、メニュー消去。
+  - `uninitializePlugin(plugin_obj)`: プラグイン解除、メニュー消去。
   - `on_open_gui()`: モジュール強制リロード対応の GUI 起動ハンドラ。
   - `on_show_about()`: バージョン・開発者・機能サマリー表示ダイアログ。
 
@@ -80,11 +93,14 @@ mmd_tools_for_maya/
 
 - **種別**: Python (UIモジュール)
 - **役割**: PySide6 (Maya 2025+) および PySide2 (Maya 2022-2024) 両対応のタブ型統合インターフェース。
-- **主要クラス**:
+- **主要機能 & クラス**:
   - `MmdMayaMainWindow`: メインウィンドウ。
-  - `ImportTabWidget`: PMX/PMD/X インポート設定（スケール、メッシュ結合、トゥーン等）。
+  - `ImportTabWidget`: PMX/PMD/X インポート設定。
+    - **Toonシェーディング & セルフ影ラジオボタン**: 「セルフ影なし」「モード1」「モード2」のリアルタイム選択。
+    - **既存シーン設定変更**: 「既存シーンのToonシェーディング設定変更」ボタンにより、インポート済みシーンの影モードやワールド空間Toonを即座に再設定。
+    - **設定永続化**: シャドウモードやメッシュ結合設定を `khatangton.txt` へ自動保存・復元。
   - `VmdImportTabWidget`: VMD モーション・カメラ・音源インポート設定。
-  - `PhysicsTabWidget`: XPBD 物理演算設定、剛体・Joint可視化生成、再吸着、ベイク実行。
+  - `PhysicsTabWidget`: Bullet / XPBD 物理演算設定、剛体・Joint可視化生成、再吸着、物理ベイク実行（DLL自動検出による安全なフォールバック）。
   - `ExportTabWidget`: Maya シーンから PMX へのエクスポート設定。
   - `HikTabWidget`: HumanIK スケルトン定義マッピング設定。
   - `CleanupTabWidget`: シーン内アニメーション初期化・MMD要素全削除。
@@ -94,7 +110,14 @@ mmd_tools_for_maya/
 
 - **種別**: Python (モデルインポートエンジン)
 - **役割**: パース済み PMX 構造体から Maya API 2.0（`MFnMesh`）を用いた高速メッシュ生成、マテリアル構築、スケルトン階層構築、足IK構築、スキニング（SkinCluster）、モーフ（BlendShape）設定を統括。
-- **主要関数**: `import_pmx`, `create_mesh`, `setup_mmd_ik`, `create_mmd_lighting`。
+- **Toonシェーディング & MMD照明再現機能**:
+  - `create_mmd_lighting(shadow_mode=1)`: MMDデフォルト照明（RGB 154、照射角: RotateX -54.74°, RotateY 45.0°, RotateZ 0.0°）の自動生成とセルフ影制御。
+    - `shadow_mode=0`: セルフ影なし（Depth Map Shadows OFF、Toon明暗は維持）。
+    - `shadow_mode=1`: モード1（解像度2048、フィルタ3、バイアス0.015）。
+    - `shadow_mode=2`: モード2（解像度4096、フィルタ1、バイアス0.010）。
+  - **ワールド空間Toonシェーディング**: `samplerInfo.normalCamera` を `matrixEyeToWorld` によりワールド空間法線へと変換し、固定光線ベクトルとの内積を算出。カメラ回転による影のズレを完全解消。
+  - **StandardSurface質感制御**: 顔・肌マテリアルにおける不要なスペキュラ反射を抑制し、MMD特有のマットなセル調質感を確保。
+  - `fix_toon_shading_in_scene(shadow_mode)`: 既存シーンのToonシェーダーおよび照明をインプレースで修復・更新。
 
 ### 2-4. `vmdpaimaya.py`
 
@@ -109,7 +132,24 @@ mmd_tools_for_maya/
 
 ---
 
-## 3. `mmd_core/` パッケージ仕様 (バイナリパーサー群)
+## 3. `bullet_engine/` パッケージ仕様 (MMD本家 Bullet 物理演算エンジン)
+
+MMD 本家（MikuMikuDance）と 100% 互換の挙動を実現する Bullet 2.83.7 ベースの物理演算モジュールです。ライセンスは zlib license で完全分離されています。
+
+- **`bullet_wrapper.py`**:
+  - `ctypes` による `mmd_bullet.dll` の Python ラッパー。
+  - **剛体のボーンポーズへの強制同期リセット**: インポート時や現在フレームのボーン姿勢から剛体のワールド姿勢を逆算し、強制同期配置。
+  - **めり込み解消ウォームアップ処理 (`relax_penetration`)**: 外力ゼロ・高ダンピング（0.99）下で接触反発インパルスのみを25ステップ解き、太ももとスカート等の初期めり込みを初速ゼロのまま外側へ押し出す。
+  - **初速ゼロ化・拘束リセット (`reset_velocities`, `reset_constraints`)**: ベイク開始時のゴム跳ね・振動・破綻を防止し、滑らかな揺れ出しを保証。
+- **`bullet_maya_bridge.py`**:
+  - PMX 剛体・ジョイントパラメータを Bullet 構造体へ変換し、Maya タイムライン進行に連動してシミュレーションを実行。
+  - DAG 階層深度ソート（親から子へ）および OpenMaya マトリクス逆算（`jointOrient`, `rotateAxis` の相殺）により、正確なローカル回転角をキーフレーム記録。
+- **`build_bullet_dll.py`**:
+  - Visual Studio (`cl.exe`) または MinGW (`g++`) を自動検出し、Bullet ソースコードから単一 DLL（`mmd_bullet.dll`）をビルド。
+
+---
+
+## 4. `mmd_core/` パッケージ仕様 (バイナリパーサー群)
 
 外部 pip パッケージに一切依存せず、Python 標準の `struct` モジュールのみで高速パースを実行。
 
@@ -126,7 +166,7 @@ mmd_tools_for_maya/
 
 ---
 
-## 4. `cpp_engine/` パッケージ仕様 (C++ 物理演算エンジン)
+## 5. `cpp_engine/` パッケージ仕様 (C++ XPBD 物理演算エンジン)
 
 - **`src/xpbd_engine.cpp` & `include/xpbd_engine.h`**:
   - Extended Position Based Dynamics アルゴリズムによる剛体シミュレーションコア。
@@ -145,7 +185,7 @@ mmd_tools_for_maya/
 
 ---
 
-## 5. `asset/` モジュール仕様 (辞書・ユーティリティ)
+## 6. `asset/` モジュール仕様 (辞書・ユーティリティ)
 
 - **`bone_dict.py`**:
   - mikudan, blender2pmxem, usausakokoko の標準ボーン対応表を網羅した日英双方向変換辞書。左右接頭辞/接尾辞（`_L`/`_R` $\leftrightarrow$ `左`/`右`）の自動解決を提供。
@@ -155,3 +195,6 @@ mmd_tools_for_maya/
   - MMD ボーン構造を Maya の HumanIK キャラクター定義へマッピングする定義テーブル。
 - **`last_imported_structure.json`**:
   - 最新のモデルインポート時に出力された和名・英名両対応のボーン階層・DAG パスキャッシュ。
+- **`khatangton.txt`**:
+  - UIの各種設定状態（セルフ影モード、Toon使用フラグ、スケール等）を永続化保存するテキスト設定ファイル。
+

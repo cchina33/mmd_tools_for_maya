@@ -212,9 +212,9 @@ def create_rigidbody_visualizers(pmx_path, scale=8.0):
     created_nodes = {}
     rb_world_trans = {}
 
-    # 1. 剛体メッシュの生成とバインド
+    # 剛体メッシュの生成とバインド
     for idx, rb in enumerate(model.rigid_bodies):
-        # バインド空間での剛体座標
+        # PMXバインドポーズにおける絶対座標・回転 (MMDからMayaへの座標系変換: Z反転)
         rb_bind_p = (
             rb.position[0] * scale,
             rb.position[1] * scale,
@@ -225,39 +225,13 @@ def create_rigidbody_visualizers(pmx_path, scale=8.0):
         deg_z = -math.degrees(rb.rotation[2])
         rb_bind_q = quat_from_euler_xyz(deg_x, deg_y, deg_z)
 
-        # PMXバインドデータからボーンに対するローカルオフセットを算出
         b_idx = rb.bone_index
         target_j = bone_idx_to_joint.get(b_idx)
-        if 0 <= b_idx < len(model.bones):
-            bone = model.bones[b_idx]
-            bone_loc = getattr(bone, 'location', getattr(bone, 'position', [0.0, 0.0, 0.0]))
-            b_bind_p = (
-                bone_loc[0] * scale,
-                bone_loc[1] * scale,
-                -bone_loc[2] * scale
-            )
-            local_p = (rb_bind_p[0] - b_bind_p[0], rb_bind_p[1] - b_bind_p[1], rb_bind_p[2] - b_bind_p[2])
-            local_q = rb_bind_q
-        else:
-            local_p = (0.0, 0.0, 0.0)
-            local_q = rb_bind_q
 
-        # 現在のMayaシーンにおけるボーンのワールド姿勢から剛体の現在姿勢を算出
-        if target_j and mc.objExists(target_j):
-            b_pos = mc.xform(target_j, query=True, worldSpace=True, translation=True)
-            b_rot = mc.xform(target_j, query=True, worldSpace=True, rotation=True)
-            b_quat = quat_from_euler_xyz(b_rot[0], b_rot[1], b_rot[2])
-
-            world_p = quat_rotate_vector(b_quat, local_p)
-            pos = (b_pos[0] + world_p[0], b_pos[1] + world_p[1], b_pos[2] + world_p[2])
-            final_q = quat_multiply(b_quat, local_q)
-            rot = quat_to_euler_xyz(final_q)
-        else:
-            pos = rb_bind_p
-            final_q = rb_bind_q
-            rot = (deg_x, deg_y, deg_z)
-
-        rb_world_trans[idx] = (pos, final_q)
+        # PMX設計通りの整然とした初期バインド姿勢を採用
+        pos = rb_bind_p
+        rot = (deg_x, deg_y, deg_z)
+        rb_world_trans[idx] = (pos, rb_bind_q)
 
         safe_name = rb.name.replace(" ", "_").replace("|", "_").replace(":", "_")
         node_name = f"rb_vis_{idx:03d}_{safe_name}"
@@ -270,7 +244,7 @@ def create_rigidbody_visualizers(pmx_path, scale=8.0):
                 pass
 
         mesh_node = None
-        # 形状別のワイヤーフレームジオメトリ生成 (constructionHistory=False で余分なヒストリと重複警告を防止)
+        # 形状別のワイヤーフレームジオメトリ生成 (余分なヒストリと重複警告を防止)
         if rb.shape_type == 0:
             # 球 (Sphere)
             r = rb.size[0] * scale
@@ -293,7 +267,10 @@ def create_rigidbody_visualizers(pmx_path, scale=8.0):
         if not mesh_node:
             continue
 
-        # 初期姿勢の設定
+        # 親グループに先に格納 (コンストレイント後の階層変更によるオフセット破壊を防止)
+        mc.parent(mesh_node, main_grp)
+
+        # 初期姿勢の設定 (PMXエディタと寸分違わず整然と並ぶ設計姿勢)
         mc.xform(mesh_node, worldSpace=True, translation=pos)
         mc.xform(mesh_node, worldSpace=True, rotation=rot)
 
@@ -302,8 +279,7 @@ def create_rigidbody_visualizers(pmx_path, scale=8.0):
         mc.setAttr(f"{shape}.overrideEnabled", 1)
         mc.setAttr(f"{shape}.overrideShading", 0) # シェーディングOFF (ワイヤー表示)
 
-        # 剛体タイプ別のカラーコード
-        # Kinematic(0): 青(6), Dynamic(1): 緑(14), Aligned(2): 黄(17)
+        # 剛体タイプ別のカラーコード (Kinematic: 青, Dynamic: 緑, Aligned: 黄)
         if rb.physics_mode == 0:
             color_idx = 6  # 青
         elif rb.physics_mode == 1:
@@ -317,7 +293,7 @@ def create_rigidbody_visualizers(pmx_path, scale=8.0):
         mc.addAttr(mesh_node, longName="rbMode", attributeType="short", defaultValue=rb.physics_mode)
         mc.addAttr(mesh_node, longName="rbGroup", attributeType="short", defaultValue=rb.group)
 
-        # 全ての剛体（Kinematic, Dynamic, Aligned）を対応ボーンにコンストレイントしてアニメーション追従
+        # 全ての剛体を対応ボーンにコンストレイントしてアニメーション追従
         if target_j and mc.objExists(target_j):
             try:
                 c_res = mc.parentConstraint(target_j, mesh_node, maintainOffset=True)
@@ -328,11 +304,9 @@ def create_rigidbody_visualizers(pmx_path, scale=8.0):
             except Exception:
                 pass
 
-        # グループにまとめる
-        mc.parent(mesh_node, main_grp)
         created_nodes[idx] = mesh_node
 
-    # 2. MMD Joint（スプリング関節）の可視化ノード生成
+    # MMD Joint（スプリング関節）の可視化ノード生成 (PMXエディタと同仕様の四角い立方体キューブ)
     joint_grp = mc.group(empty=True, name="MMD_Joint_Visualizers", parent=main_grp)
     for j_idx, j in enumerate(model.joints):
         j_safe_name = j.name.replace(" ", "_").replace("|", "_").replace(":", "_")
@@ -344,6 +318,7 @@ def create_rigidbody_visualizers(pmx_path, scale=8.0):
             except Exception:
                 pass
 
+        # PMXバインド空間でのJoint絶対座標・回転
         j_bind_p = (
             j.position[0] * scale,
             j.position[1] * scale,
@@ -352,14 +327,27 @@ def create_rigidbody_visualizers(pmx_path, scale=8.0):
         j_deg_x = math.degrees(j.rotation[0])
         j_deg_y = math.degrees(j.rotation[1])
         j_deg_z = -math.degrees(j.rotation[2])
-        j_bind_q = quat_from_euler_xyz(j_deg_x, j_deg_y, j_deg_z)
 
-        # 親剛体Aに対するローカルオフセットから、現在のワールド姿勢を正確に算出
-        current_j_pos = j_bind_p
-        current_j_rot = (j_deg_x, j_deg_y, j_deg_z)
+        # PMXエディタと同仕様の四角い立方体 (キューブ) ワイヤーフレームを生成
+        cube_size = max(0.6, 0.22 * scale)
+        cube = mc.polyCube(width=cube_size, height=cube_size, depth=cube_size, name=j_node_name, constructionHistory=False)[0]
+
+        # 先に親グループへ格納
+        mc.parent(cube, joint_grp)
+
+        # PMXバインド姿勢のワールド座標・回転を設定 (剛体間に整然と配置)
+        mc.xform(cube, worldSpace=True, translation=j_bind_p)
+        mc.xform(cube, worldSpace=True, rotation=(j_deg_x, j_deg_y, j_deg_z))
+
+        # ワイヤーフレーム・黄色表示 (PMXエディタのJointアイコンと完全一致)
+        cube_shape = mc.listRelatives(cube, shapes=True)[0]
+        mc.setAttr(f"{cube_shape}.overrideEnabled", 1)
+        mc.setAttr(f"{cube_shape}.overrideShading", 0) # ワイヤー表示
+        mc.setAttr(f"{cube_shape}.overrideColor", 17) # 黄色 (PMXエディタ標準色)
+
+        # 親剛体Aに対するローカルオフセット (シミュレーション変位同期用)
         j_local_p = (0.0, 0.0, 0.0)
         j_local_q = (0.0, 0.0, 0.0, 1.0)
-
         if 0 <= j.rigid_body_a < len(model.rigid_bodies):
             rb_a = model.rigid_bodies[j.rigid_body_a]
             rb_a_bind_p = (rb_a.position[0] * scale, rb_a.position[1] * scale, -rb_a.position[2] * scale)
@@ -369,55 +357,34 @@ def create_rigidbody_visualizers(pmx_path, scale=8.0):
             rb_a_bind_q = quat_from_euler_xyz(deg_ax, deg_ay, deg_az)
 
             inv_ra_q = quat_inverse(rb_a_bind_q)
+            j_bind_q = quat_from_euler_xyz(j_deg_x, j_deg_y, j_deg_z)
             j_diff = (j_bind_p[0] - rb_a_bind_p[0], j_bind_p[1] - rb_a_bind_p[1], j_bind_p[2] - rb_a_bind_p[2])
             j_local_p = quat_rotate_vector(inv_ra_q, j_diff)
             j_local_q = quat_multiply(inv_ra_q, j_bind_q)
 
-            if j.rigid_body_a in rb_world_trans:
-                pos_a, quat_a = rb_world_trans[j.rigid_body_a]
-                j_world_diff = quat_rotate_vector(quat_a, j_local_p)
-                current_j_pos = (pos_a[0] + j_world_diff[0], pos_a[1] + j_world_diff[1], pos_a[2] + j_world_diff[2])
-                current_j_quat = quat_multiply(quat_a, j_local_q)
-                current_j_rot = quat_to_euler_xyz(current_j_quat)
-
-        # ロケーターで関節位置を可視化 (現在のポーズに一致したワールド位置に生成)
-        loc = mc.spaceLocator(name=j_node_name)[0]
-        mc.xform(loc, worldSpace=True, translation=current_j_pos)
-        mc.xform(loc, worldSpace=True, rotation=current_j_rot)
-
-        # ロケーターのサイズと色調整
-        loc_shape = mc.listRelatives(loc, shapes=True)[0]
-        mc.setAttr(f"{loc_shape}.localScaleX", 1.2)
-        mc.setAttr(f"{loc_shape}.localScaleY", 1.2)
-        mc.setAttr(f"{loc_shape}.localScaleZ", 1.2)
-        mc.setAttr(f"{loc_shape}.overrideEnabled", 1)
-        mc.setAttr(f"{loc_shape}.overrideColor", 9) # マゼンタ(紫ピンク)
-
         # 識別用カスタムアトリビュート
-        mc.addAttr(loc, longName="jointIndex", attributeType="short", defaultValue=j_idx)
-        mc.addAttr(loc, longName="rbAIndex", attributeType="short", defaultValue=j.rigid_body_a)
-        mc.addAttr(loc, longName="rbBIndex", attributeType="short", defaultValue=j.rigid_body_b)
-        mc.addAttr(loc, longName="localOffsetX", attributeType="double", defaultValue=j_local_p[0])
-        mc.addAttr(loc, longName="localOffsetY", attributeType="double", defaultValue=j_local_p[1])
-        mc.addAttr(loc, longName="localOffsetZ", attributeType="double", defaultValue=j_local_p[2])
-        mc.addAttr(loc, longName="localOffsetRotX", attributeType="double", defaultValue=j_local_q[0])
-        mc.addAttr(loc, longName="localOffsetRotY", attributeType="double", defaultValue=j_local_q[1])
-        mc.addAttr(loc, longName="localOffsetRotZ", attributeType="double", defaultValue=j_local_q[2])
-        mc.addAttr(loc, longName="localOffsetRotW", attributeType="double", defaultValue=j_local_q[3])
+        mc.addAttr(cube, longName="jointIndex", attributeType="short", defaultValue=j_idx)
+        mc.addAttr(cube, longName="rbAIndex", attributeType="short", defaultValue=j.rigid_body_a)
+        mc.addAttr(cube, longName="rbBIndex", attributeType="short", defaultValue=j.rigid_body_b)
+        mc.addAttr(cube, longName="localOffsetX", attributeType="double", defaultValue=j_local_p[0])
+        mc.addAttr(cube, longName="localOffsetY", attributeType="double", defaultValue=j_local_p[1])
+        mc.addAttr(cube, longName="localOffsetZ", attributeType="double", defaultValue=j_local_p[2])
+        mc.addAttr(cube, longName="localOffsetRotX", attributeType="double", defaultValue=j_local_q[0])
+        mc.addAttr(cube, longName="localOffsetRotY", attributeType="double", defaultValue=j_local_q[1])
+        mc.addAttr(cube, longName="localOffsetRotZ", attributeType="double", defaultValue=j_local_q[2])
+        mc.addAttr(cube, longName="localOffsetRotW", attributeType="double", defaultValue=j_local_q[3])
 
-        # 関連する剛体Aまたはそのボーンにコンストレイントしてアニメーション追従
+        # 関連する剛体Aのボーンにコンストレイントしてアニメーション追従
         if 0 <= j.rigid_body_a < len(model.rigid_bodies):
             rb_a = model.rigid_bodies[j.rigid_body_a]
             target_j_a = bone_idx_to_joint.get(rb_a.bone_index)
             if target_j_a and mc.objExists(target_j_a):
                 try:
-                    c_res = mc.parentConstraint(target_j_a, loc, maintainOffset=True)
+                    c_res = mc.parentConstraint(target_j_a, cube, maintainOffset=True)
                     if c_res:
                         mc.addAttr(c_res[0], longName="isMmdJointConstraint", attributeType="bool", defaultValue=True)
                 except Exception:
                     pass
-
-        mc.parent(loc, joint_grp)
 
     # 剛体の種別内訳をカウント
     k_count = sum(1 for rb in model.rigid_bodies if rb.physics_mode == 0)
@@ -441,7 +408,7 @@ def sync_visualizer_transforms(rb_transforms, frame=None):
     if not mc.objExists(VIS_GROUP_NAME):
         return
 
-    # 1. 剛体メッシュの同期
+    # 剛体メッシュの同期
     children = mc.listRelatives(VIS_GROUP_NAME, children=True, fullPath=True) or []
     idx_to_node = {}
     for node in children:
@@ -458,7 +425,7 @@ def sync_visualizer_transforms(rb_transforms, frame=None):
             if frame is not None:
                 mc.setKeyframe(node, attribute=['translateX', 'translateY', 'translateZ', 'rotateX', 'rotateY', 'rotateZ'], time=frame)
 
-    # 2. Jointロケーターの同期 (剛体Aの現在姿勢からジョイントのワールド姿勢を算出して追従)
+    # Jointキューブの同期 (剛体Aの現在姿勢からジョイントのワールド姿勢を算出して追従)
     joint_grp_name = f"{VIS_GROUP_NAME}|MMD_Joint_Visualizers"
     if mc.objExists(joint_grp_name):
         joint_nodes = mc.listRelatives(joint_grp_name, children=True, fullPath=True) or []

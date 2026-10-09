@@ -71,3 +71,16 @@ BULLET_MMD_API void bullet_step_simulation(
     int maxSubSteps,
     float fixedTimeStep
 );
+
+// 全剛体の線形速度・角速度および内部蓄積力をゼロリセット
+BULLET_MMD_API void bullet_reset_velocities(BulletEngine* engine);
+
+// 全ジョイントの平衡点・内部バッファをリセット
+BULLET_MMD_API void bullet_reset_constraints(BulletEngine* engine);
+
+// 初期めり込み解消ウォームアップ (Pre-roll Relaxation)
+BULLET_MMD_API void bullet_relax_penetration(
+    BulletEngine* engine,
+    int steps,
+    float relaxationDamping
+);

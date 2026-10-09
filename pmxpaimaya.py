@@ -204,7 +204,7 @@ def setup_mmd_ik(model_node=None, bone_map=None):
 
     return created_handles
 
-def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes=True, create_joints=True, material_type=1, create_light=True, set_untone_mapped=True, enable_toon=True):
+def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes=True, create_joints=True, material_type=1, create_light=True, set_untone_mapped=True, enable_toon=True, shadow_mode=1):
     """
     MMDモデルファイル (.pmx / .pmd / .x) をMayaにインポートします。
 
@@ -218,6 +218,7 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
         create_light (bool): MMD標準ライティング（平行光＆環境光）を作成するかどうか
         set_untone_mapped (bool): ビュー変換を 'Un-tone-mapped (sRGB)' に設定して発色を最適化するかどうか
         enable_toon (bool): Toonシェーディング（セル影）を適用するかどうか
+        shadow_mode (int): セルフ影モード (0: なし, 1: モード1, 2: モード2)
 
     戻り値:
         tuple: (モデルノード名, ルートジョイント一覧, スキンクラスタ名, ブレンドシェイプ名)
@@ -356,21 +357,29 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
     toon_range_node = None
     if enable_toon:
         toon_sampler = mc.shadingNode('samplerInfo', asUtility=True, name=f"toon_sampler_{model_node_name}")
+        # カメラ空間法線をワールド空間法線に変換 (視点回転に左右されないMMD互換の不変法線)
+        toon_world_norm = mc.shadingNode('vectorProduct', asUtility=True, name=f"toon_wnorm_{model_node_name}")
+        mc.setAttr(f"{toon_world_norm}.operation", 3) # Vector Matrix Product (V * M)
+        mc.setAttr(f"{toon_world_norm}.normalizeOutput", True)
+        mc.connectAttr(f"{toon_sampler}.normalCamera", f"{toon_world_norm}.input1", force=True)
+        mc.connectAttr(f"{toon_sampler}.matrixEyeToWorld", f"{toon_world_norm}.matrix", force=True)
+
+        # ワールド法線とワールドライトベクトルの内積計算
         toon_vec_prod = mc.shadingNode('vectorProduct', asUtility=True, name=f"toon_vecprod_{model_node_name}")
         toon_range_node = mc.shadingNode('setRange', asUtility=True, name=f"toon_range_{model_node_name}")
 
         mc.setAttr(f"{toon_vec_prod}.operation", 1) # Dot Product (内積)
         mc.setAttr(f"{toon_vec_prod}.normalizeOutput", True)
-        # カメラ空間における光の到来方向（斜め前方右上）
-        mc.setAttr(f"{toon_vec_prod}.input2", 0.35, 0.75, 0.55, typ='double3')
+        # MMD標準のワールド光線到来方向（斜め前方右上）
+        mc.setAttr(f"{toon_vec_prod}.input2", 0.408, 0.816, 0.408, typ='double3')
 
-        mc.connectAttr(f"{toon_sampler}.normalCamera", f"{toon_vec_prod}.input1", force=True)
+        mc.connectAttr(f"{toon_world_norm}.output", f"{toon_vec_prod}.input1", force=True)
 
-        # 内積結果 (-1.0 ~ 1.0) を 0.0 ~ 1.0 に正規化（MMDのセル影しきい値調整）
+        # 内積結果 (-1.0 ~ 1.0) を 0.0 ~ 1.0 に正規化 (MMD公式仕様: Toon画像本来の滑らかな階調にマッピング)
         mc.setAttr(f"{toon_range_node}.minX", 0.0)
         mc.setAttr(f"{toon_range_node}.maxX", 1.0)
-        mc.setAttr(f"{toon_range_node}.oldMinX", -0.2)
-        mc.setAttr(f"{toon_range_node}.oldMaxX", 0.8)
+        mc.setAttr(f"{toon_range_node}.oldMinX", -1.0)
+        mc.setAttr(f"{toon_range_node}.oldMaxX", 1.0)
         mc.connectAttr(f"{toon_vec_prod}.outputX", f"{toon_range_node}.valueX", force=True)
 
     # 共有トゥーンテクスチャ (toon01.bmp〜toon10.bmp) ファイルノードの生成
@@ -434,25 +443,48 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
 
         spec_factor = mat.specular[3]
 
+        # アニメモデルの顔・肌・表情保護判定
+        mat_name_lower = mat.name.lower()
+        mat_e_lower = getattr(mat, 'name_e', '').lower() if getattr(mat, 'name_e', None) else ''
+        face_skin_keywords = [
+            "顔", "head", "face", "目", "eye", "瞳", "眉", "brow", "口", "mouth",
+            "舌", "牙", "歯", "teeth", "tooth", "唇", "lip", "表情", "涙", "頬",
+            "cheek", "肌", "skin", "body", "体", "面", "nose", "鼻"
+        ]
+        is_face_material = any(k in mat_name_lower or k in mat_e_lower for k in face_skin_keywords)
+
         # シェーダーの生成
         if material_type == 1: # Blinn
             shd = mc.shadingNode('blinn', asShader=True, name=shader_node_name)
-            mc.setAttr(f"{shd}.specularColor", *specular_color, typ='double3')
-            mc.setAttr(f"{shd}.specularRollOff", min(0.75 ** (math.log(max(spec_factor, 2 ** -10), 2) + 1), 1.0))
-            mc.setAttr(f"{shd}.eccentricity", spec_factor * 0.01)
+            if is_face_material or sum(specular_color) < 0.05:
+                mc.setAttr(f"{shd}.specularColor", 0.0, 0.0, 0.0, typ='double3')
+            else:
+                mc.setAttr(f"{shd}.specularColor", *specular_color, typ='double3')
+                mc.setAttr(f"{shd}.specularRollOff", min(0.75 ** (math.log(max(spec_factor, 2 ** -10), 2) + 1), 1.0))
+                mc.setAttr(f"{shd}.eccentricity", spec_factor * 0.01)
         elif material_type == 2: # Phong
             shd = mc.shadingNode('phong', asShader=True, name=shader_node_name)
-            mc.setAttr(f"{shd}.specularColor", *specular_color, typ='double3')
-            mc.setAttr(f"{shd}.cosinePower", max((10000.0 / max(spec_factor, 15.0) ** 2 - 3.357) / 0.454, 2.0))
+            if is_face_material or sum(specular_color) < 0.05:
+                mc.setAttr(f"{shd}.specularColor", 0.0, 0.0, 0.0, typ='double3')
+            else:
+                mc.setAttr(f"{shd}.specularColor", *specular_color, typ='double3')
+                mc.setAttr(f"{shd}.cosinePower", max((10000.0 / max(spec_factor, 15.0) ** 2 - 3.357) / 0.454, 2.0))
         elif material_type == 3 or material_type == 0: # Lambert
             shd = mc.shadingNode('lambert', asShader=True, name=shader_node_name)
         elif material_type == 4: # StandardSurface (Maya 2022+)
             shd = mc.shadingNode('standardSurface', asShader=True, name=shader_node_name)
             mc.setAttr(f"{shd}.baseColor", *diffuse_color, typ='double3')
-            mc.setAttr(f"{shd}.specularColor", *specular_color, typ='double3')
             mc.setAttr(f"{shd}.opacity", *opacity, typ='double3')
-            mc.setAttr(f"{shd}.specular", 0.75 ** (math.log(max(spec_factor, 0.5), 2) + 1))
-            mc.setAttr(f"{shd}.specularRoughness", min(spec_factor * 0.01, 1.0))
+            # MMDの反射色が黒または微小、もしくは肌・顔マテリアルの場合はテカリを完全無効化
+            has_specular = sum(specular_color) > 0.05 and not is_face_material
+            if has_specular:
+                mc.setAttr(f"{shd}.specularColor", *specular_color, typ='double3')
+                mc.setAttr(f"{shd}.specular", 0.75 ** (math.log(max(spec_factor, 0.5), 2) + 1))
+                mc.setAttr(f"{shd}.specularRoughness", min(spec_factor * 0.01, 1.0))
+            else:
+                mc.setAttr(f"{shd}.specularColor", 0.0, 0.0, 0.0, typ='double3')
+                mc.setAttr(f"{shd}.specular", 0.0)
+                mc.setAttr(f"{shd}.specularRoughness", 1.0)
             mc.setAttr(f"{shd}.base", 1.0)
 
         if material_type in [1, 2, 3]:
@@ -528,8 +560,9 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
                             except Exception:
                                 pass
 
-        # 全マテリアル種別（StandardSurface含む）に対してToonをカラー乗算合成
-        if enable_toon and toon_node:
+        # 全マテリアル種別（StandardSurface含む）に対してToonをカラー乗算合成 (瞳ハイライト等のみ除外)
+        is_highlight_part = any(k in mat_name_lower for k in ["瞳-高光", "高光", "眼白", "highlight"])
+        if enable_toon and toon_node and not is_highlight_part:
             toon_mult = mc.shadingNode('multiplyDivide', asUtility=True, name=f"{safe_mat_id}_toon_mult_{model_node_name}")
             mc.setAttr(f"{toon_mult}.operation", 1) # Multiply
             if current_color_source:
@@ -915,7 +948,7 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
 
     # MMD標準ライティングの作成
     if create_light:
-        create_mmd_lighting()
+        create_mmd_lighting(shadow_mode=shadow_mode)
 
     # ビュー変換を Un-tone-mapped (sRGB) に設定して色の沈み・暗化を防止
     if set_untone_mapped:
@@ -952,49 +985,209 @@ def set_untone_mapped_view_transform():
     except Exception as e:
         print(f"[警告] ビュー変換の設定をスキップしました: {e}")
 
-def create_mmd_lighting():
+def create_mmd_lighting(shadow_mode=1):
     """
-    MMD標準のライティング（ディレクショナルライト + アンビエントライト）を構築します。
-    シーン内にすでにライトが存在する場合は作成をスキップします。
+    MMD標準のライティング設定（平行光 & 環境光）を構築します。
+    MMDデフォルト値:
+      - 光源色: 赤154, 緑154, 青154 (約 0.6039)
+      - 光源方向: X: -0.5, Y: -1.0, Z: +0.5 (Maya座標系: X: -0.5, Y: -1.0, Z: -0.5)
+      - 方向角: RotateX: -54.74, RotateY: 45.0, RotateZ: 0.0
+
+    shadow_mode:
+      - 0: セルフ影なし (シャドウOFF)
+      - 1: モード1 (標準セルフ影)
+      - 2: モード2 (高精細セルフ影)
     """
-    # 既存ライトの存在確認（二重作成の防止）
-    existing_lights = mc.ls(type=['directionalLight', 'ambientLight', 'spotLight', 'pointLight', 'areaLight'])
-    if existing_lights or mc.objExists("mmd_lighting_grp"):
-        print("[情報] シーン内に既存のライトが存在するため、MMDライトの作成をスキップしました。")
-        return None
+    if mc.objExists("mmd_lighting_grp"):
+        dir_shapes = mc.ls("mmd_directional_lightShape", type="directionalLight") or []
+        if dir_shapes:
+            _apply_shadow_mode(dir_shapes[0], shadow_mode)
+        return "mmd_lighting_grp"
 
-    print("[情報] MMD標準ライティング（Directional & Ambient）を作成中...")
+    print(f"[情報] MMD標準ライティング（シャドウモード: {shadow_mode}）を作成中...")
 
-    # 1. ディレクショナルライト (MMDデフォルトの平行光: 斜め上からのキーライト、強度1.0でクリアに照らす)
+    # 平行光源 (MMDデフォルトキーライト)
     dir_shape = mc.directionalLight(name="mmd_directional_lightShape", intensity=1.0)
     dir_transform = mc.listRelatives(dir_shape, parent=True)[0]
     mc.rename(dir_transform, "mmd_directional_light")
     dir_light = "mmd_directional_light"
-    # MMDデフォルト方向ベクトル [-0.5, -1.0, -0.5] に対応する角度
-    mc.setAttr(f"{dir_light}.rotate", -35.0, 45.0, 0.0, typ='double3')
-    mc.setAttr(f"{dir_light}.color", 0.98, 0.98, 0.98, typ='double3')
 
-    # 2. アンビエントライト (影が真っ黒になるのを防ぎ、暗部を適度に明るく保つ環境光)
+    # MMDデフォルト値: X: -0.5, Y: -1.0, Z: +0.5 -> Maya右手系角度 [-54.74, 45.0, 0.0]
+    mc.setAttr(f"{dir_light}.rotate", -54.74, 45.0, 0.0, typ='double3')
+    # 光源色: 154 / 255.0 = 0.6039
+    mc.setAttr(f"{dir_light}.color", 0.6039, 0.6039, 0.6039, typ='double3')
+
+    # シャドウモードの適用
+    _apply_shadow_mode(f"{dir_light}Shape", shadow_mode)
+
+    # アンビエントライト (MMDの自然な環境光)
     amb_shape = mc.ambientLight(name="mmd_ambient_lightShape", intensity=0.55)
     amb_transform = mc.listRelatives(amb_shape, parent=True)[0]
     mc.rename(amb_transform, "mmd_ambient_light")
     amb_light = "mmd_ambient_light"
-    mc.setAttr(f"{amb_light}.ambientShade", 0.25)
-    mc.setAttr(f"{amb_light}.color", 0.92, 0.92, 0.92, typ='double3')
+    mc.setAttr(f"{amb_light}.ambientShade", 0.0)
+    mc.setAttr(f"{amb_light}.color", 0.50, 0.50, 0.50, typ='double3')
 
-    # グループ化して整理
+    # グループ化
     light_grp = mc.group(dir_light, amb_light, name="mmd_lighting_grp")
 
-    # Mayaビューポートのライティング設定を「すべてのライトを使用」に自動適用
+    # Mayaビューポートのライティング設定
     try:
         model_panels = mc.getPanel(type='modelPanel') or []
         for panel in model_panels:
-            mc.modelEditor(panel, edit=True, displayLights='all')
+            mc.modelEditor(panel, edit=True, displayLights='all', shadows=(shadow_mode > 0))
     except Exception:
         pass
 
-    print("[情報] MMD標準ライティングを作成しました (mmd_lighting_grp)。")
+    print(f"[情報] MMD標準ライティングを作成しました (mmd_lighting_grp)。")
     return light_grp
+
+def _apply_shadow_mode(dir_shape, shadow_mode):
+    """Directional Lightノードおよびビューポートにセルフシャドウ設定を適用"""
+    if not mc.objExists(dir_shape):
+        return
+    try:
+        if shadow_mode == 0:
+            # セルフ影なし
+            mc.setAttr(f"{dir_shape}.useDepthMapShadows", 0)
+        elif shadow_mode == 1:
+            # モード1 (標準セルフ影)
+            mc.setAttr(f"{dir_shape}.useDepthMapShadows", 1)
+            mc.setAttr(f"{dir_shape}.dmapResolution", 2048)
+            mc.setAttr(f"{dir_shape}.dmapFilterSize", 3)
+            mc.setAttr(f"{dir_shape}.dmapBias", 0.015)
+        elif shadow_mode == 2:
+            # モード2 (高精細セルフ影)
+            mc.setAttr(f"{dir_shape}.useDepthMapShadows", 1)
+            mc.setAttr(f"{dir_shape}.dmapResolution", 4096)
+            mc.setAttr(f"{dir_shape}.dmapFilterSize", 1)
+            mc.setAttr(f"{dir_shape}.dmapBias", 0.010)
+
+        # ビューポート連動
+        model_panels = mc.getPanel(type='modelPanel') or []
+        for panel in model_panels:
+            mc.modelEditor(panel, edit=True, shadows=(shadow_mode > 0))
+    except Exception:
+        pass
+
+def fix_toon_shading_in_scene(shadow_mode=1):
+    """
+    シーン内の既存MMDシェーダーに対してToon設定およびスペキュラ設定を最適化
+    - Toon計算をカメラ空間からワールド空間（matrixEyeToWorld変換）に切り替え、視点移動による影の変化を解消
+    - MMD照明のセルフ影モード（0: なし, 1: モード1, 2: モード2）を適用
+    - 顔・肌パーツも含め、全材質のToon乗算を最適なしきい値で再接続
+    - 顔・肌および反射なし材質のプラスチック調スペキュラ光沢を除去
+    """
+    fixed_count = 0
+
+    # ライティングとシャドウモードの更新
+    dir_shapes = mc.ls("mmd_directional_lightShape", type="directionalLight") or []
+    if dir_shapes:
+        dir_shape = dir_shapes[0]
+        dir_transform = mc.listRelatives(dir_shape, parent=True)[0]
+        mc.setAttr(f"{dir_transform}.rotate", -54.74, 45.0, 0.0, typ='double3')
+        mc.setAttr(f"{dir_shape}.color", 0.6039, 0.6039, 0.6039, typ='double3')
+        _apply_shadow_mode(dir_shape, shadow_mode)
+    elif mc.objExists("mmd_lighting_grp"):
+        _apply_shadow_mode("mmd_directional_lightShape", shadow_mode)
+
+    # Toon計算ネットワークのワールド空間化 (視点回転に左右されないMMD互換設定)
+    vecprod_nodes = mc.ls("toon_vecprod_*", type="vectorProduct") or []
+    for vp in vecprod_nodes:
+        try:
+            conns = mc.listConnections(f"{vp}.input1", source=True, destination=False, plugs=True) or []
+            if conns:
+                src_plug = conns[0]
+                src_node = src_plug.split('.')[0]
+                if mc.nodeType(src_node) == 'samplerInfo':
+                    suffix = vp.replace("toon_vecprod_", "")
+                    wnorm_name = f"toon_wnorm_{suffix}"
+                    if not mc.objExists(wnorm_name):
+                        wnorm_node = mc.shadingNode('vectorProduct', asUtility=True, name=wnorm_name)
+                    else:
+                        wnorm_node = wnorm_name
+
+                    mc.setAttr(f"{wnorm_node}.operation", 3) # Vector Matrix Product
+                    mc.setAttr(f"{wnorm_node}.normalizeOutput", True)
+                    mc.connectAttr(f"{src_node}.normalCamera", f"{wnorm_node}.input1", force=True)
+                    mc.connectAttr(f"{src_node}.matrixEyeToWorld", f"{wnorm_node}.matrix", force=True)
+                    mc.connectAttr(f"{wnorm_node}.output", f"{vp}.input1", force=True)
+
+            # MMD標準のワールド光線方向に設定
+            mc.setAttr(f"{vp}.input2", 0.40825, 0.81650, 0.40825, typ='double3')
+            fixed_count += 1
+        except Exception:
+            pass
+
+    # toon_range ノードのしきい値更新 (正面は白、側面〜裏面が自然に陰るMMD最適化)
+    range_nodes = mc.ls("toon_range_*", type="setRange") or []
+    for r_node in range_nodes:
+        try:
+            mc.setAttr(f"{r_node}.minX", 0.0)
+            mc.setAttr(f"{r_node}.maxX", 1.0)
+            mc.setAttr(f"{r_node}.oldMinX", -1.0)
+            mc.setAttr(f"{r_node}.oldMaxX", 1.0)
+            fixed_count += 1
+        except Exception:
+            pass
+
+    # 顔・肌・表情マテリアルの保護とテカリ除去
+    face_skin_keywords = [
+        "顔", "head", "face", "目", "eye", "瞳", "眉", "brow", "口", "mouth",
+        "舌", "牙", "歯", "teeth", "tooth", "唇", "lip", "表情", "涙", "頬",
+        "cheek", "肌", "skin", "body", "体", "面", "nose", "鼻"
+    ]
+    all_shaders = mc.ls(materials=True) or []
+    for shd in all_shaders:
+        shd_name = shd.lower()
+        orig_name = mc.getAttr(f"{shd}.originalName").lower() if mc.attributeQuery("originalName", node=shd, exists=True) else ""
+        is_skin_mat = any(k in shd_name or k in orig_name for k in face_skin_keywords)
+        is_highlight = any(k in shd_name or k in orig_name for k in ["瞳-高光", "高光", "眼白", "highlight"])
+
+        # 瞳のハイライトパーツ等のみToon乗算をバイパス（顔・肌はToon適用）
+        if is_highlight:
+            target_attr = "baseColor" if mc.attributeQuery("baseColor", node=shd, exists=True) else "color"
+            conns = mc.listConnections(f"{shd}.{target_attr}", source=True, destination=False, plugs=True) or []
+            if conns:
+                source_plug = conns[0]
+                source_node = source_plug.split('.')[0]
+                if mc.nodeType(source_node) == "multiplyDivide" and "toon_mult" in source_node:
+                    input1_conns = mc.listConnections(f"{source_node}.input1", source=True, destination=False, plugs=True) or []
+                    if input1_conns:
+                        main_color_plug = input1_conns[0]
+                        mc.connectAttr(main_color_plug, f"{shd}.{target_attr}", force=True)
+                        fixed_count += 1
+
+        # スペキュラ（反射テカリ）の最適化
+        if mc.attributeQuery("specular", node=shd, exists=True):
+            try:
+                spec_color = [0.0, 0.0, 0.0]
+                if mc.attributeQuery("specularColor", node=shd, exists=True):
+                    spec_conns = mc.listConnections(f"{shd}.specularColor", source=True, destination=False)
+                    if not spec_conns:
+                        spec_color = mc.getAttr(f"{shd}.specularColor")[0]
+
+                if is_skin_mat or sum(spec_color) < 0.05:
+                    mc.setAttr(f"{shd}.specular", 0.0)
+                    mc.setAttr(f"{shd}.specularRoughness", 1.0)
+                    if mc.attributeQuery("specularColor", node=shd, exists=True) and not mc.listConnections(f"{shd}.specularColor"):
+                        mc.setAttr(f"{shd}.specularColor", 0.0, 0.0, 0.0, typ='double3')
+                    fixed_count += 1
+                else:
+                    cur_spec = mc.getAttr(f"{shd}.specular")
+                    if cur_spec > 0.5:
+                        mc.setAttr(f"{shd}.specular", 0.3)
+                    mc.setAttr(f"{shd}.specularRoughness", 0.6)
+            except Exception:
+                pass
+        elif mc.attributeQuery("specularColor", node=shd, exists=True) and is_skin_mat:
+            try:
+                mc.setAttr(f"{shd}.specularColor", 0.0, 0.0, 0.0, typ='double3')
+            except Exception:
+                pass
+
+    print(f"[MMD Tools for Maya] Toonシェーディング＆テカリ除去を最適化しました (更新要素: {fixed_count}, シャドウモード: {shadow_mode})。")
+    return fixed_count
 
 # 後方互換性用エイリアス
 sang = import_pmx

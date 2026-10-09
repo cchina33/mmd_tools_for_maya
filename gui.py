@@ -297,6 +297,40 @@ class ImportTabWidget(QWidget):
         self.cb_enable_toon.setToolTip("光の当たり具合に応じたセルアニメ調の影（Toon）を適用します。OFFにするとメッシュ本来の綺麗なテクスチャを維持します。")
         light_layout.addWidget(self.cb_enable_toon)
 
+        # セルフ影モードラジオボタン
+        self.shadow_btn_group = QButtonGroup(self)
+        h_shadow = QHBoxLayout()
+        h_shadow.setContentsMargins(20, 0, 0, 0)
+        h_shadow.setSpacing(14)
+
+        self.rb_shadow_none = QRadioButton("セルフ影なし")
+        self.rb_shadow_none.setToolTip("前髪などの落とし影を生成せず、Toonの階調表現のみを適用します。")
+        self.rb_shadow_mode1 = QRadioButton("モード1 (標準セルフ影)")
+        self.rb_shadow_mode1.setToolTip("MMDのモード1相当。適度に柔らかな標準セルフシャドウを生成します。")
+        self.rb_shadow_mode2 = QRadioButton("モード2 (高精細セルフ影)")
+        self.rb_shadow_mode2.setToolTip("MMDのモード2相当。高解像度かつシャープな落とし影を生成します。")
+
+        self.shadow_btn_group.addButton(self.rb_shadow_none, 0)
+        self.shadow_btn_group.addButton(self.rb_shadow_mode1, 1)
+        self.shadow_btn_group.addButton(self.rb_shadow_mode2, 2)
+        self.rb_shadow_mode1.setChecked(True)
+
+        h_shadow.addWidget(self.rb_shadow_none)
+        h_shadow.addWidget(self.rb_shadow_mode1)
+        h_shadow.addWidget(self.rb_shadow_mode2)
+        h_shadow.addStretch()
+        light_layout.addLayout(h_shadow)
+
+        self.cb_enable_toon.toggled.connect(self._on_toon_toggled)
+
+        # 既存シーンのToonシェーディング修復ボタン
+        h_toon_fix = QHBoxLayout()
+        self.btn_fix_toon = QPushButton("Toonシェーディング設定を変更")
+        self.btn_fix_toon.setToolTip("現在開いているシーンのToonシェーダーのしきい値を調整し、現在選択中の影モードを適用します。")
+        self.btn_fix_toon.clicked.connect(self._fix_toon_shading)
+        h_toon_fix.addWidget(self.btn_fix_toon)
+        light_layout.addLayout(h_toon_fix)
+
         layout.addWidget(light_box)
 
         layout.addStretch()
@@ -334,6 +368,8 @@ class ImportTabWidget(QWidget):
                     untone = int(untone_line.split('=')[-1].strip()) if untone_line else 1
                     physics_line = f.readline()
                     physics = int(physics_line.split('=')[-1].strip()) if physics_line else 1
+                    shadow_line = f.readline()
+                    shadow_mode = int(shadow_line.split('=')[-1].strip()) if shadow_line else 1
 
                 self.le_file_path.setText(file_path)
                 self.le_scale.setText(scale)
@@ -347,6 +383,13 @@ class ImportTabWidget(QWidget):
                 self.cb_create_light.setChecked(bool(light))
                 self.cb_untone_mapped.setChecked(bool(untone))
                 self.cb_enable_toon.setChecked(bool(toon))
+                if shadow_mode == 0:
+                    self.rb_shadow_none.setChecked(True)
+                elif shadow_mode == 2:
+                    self.rb_shadow_mode2.setChecked(True)
+                else:
+                    self.rb_shadow_mode1.setChecked(True)
+                self._on_toon_toggled(bool(toon))
                 return
         except Exception:
             pass
@@ -361,6 +404,8 @@ class ImportTabWidget(QWidget):
         self.cb_create_light.setChecked(True)
         self.cb_untone_mapped.setChecked(True)
         self.cb_enable_toon.setChecked(True)
+        self.rb_shadow_mode1.setChecked(True)
+        self._on_toon_toggled(True)
 
     def _save_settings(self):
         """現在の設定を保存"""
@@ -377,6 +422,7 @@ class ImportTabWidget(QWidget):
                 f.write(f"アントーンマップ = {int(self.cb_untone_mapped.isChecked())}\n")
                 f.write(f"トゥーン = {int(self.cb_enable_toon.isChecked())}\n")
                 f.write(f"剛体物理 = {int(self.cb_create_physics.isChecked())}\n")
+                f.write(f"シャドウモード = {self.get_shadow_mode()}\n")
         except Exception:
             pass
 
@@ -426,6 +472,33 @@ class ImportTabWidget(QWidget):
             path = urls[0].toLocalFile()
             self.le_file_path.setText(path)
 
+    def _on_toon_toggled(self, checked):
+        """ToonチェックボックスのON/OFFに応じて影モードのラジオボタンを有効/無効化"""
+        self.rb_shadow_none.setEnabled(checked)
+        self.rb_shadow_mode1.setEnabled(checked)
+        self.rb_shadow_mode2.setEnabled(checked)
+
+    def get_shadow_mode(self):
+        """選択されているセルフ影モード (0: なし, 1: モード1, 2: モード2)"""
+        return max(self.shadow_btn_group.checkedId(), 0)
+
+    def _fix_toon_shading(self):
+        """現在のMayaシーン内のToonシェーダーおよびセルフ影モードを修復・最適化"""
+        try:
+            shadow_mode = self.get_shadow_mode() if self.cb_enable_toon.isChecked() else 0
+            fixed_count = pmxpaimaya.fix_toon_shading_in_scene(shadow_mode=shadow_mode)
+            mode_names = ["セルフ影なし", "モード1 (標準セルフ影)", "モード2 (高精細セルフ影)"]
+            mc.inViewMessage(amg=f'<span style="color:#2ecc71;">MMD Tools for Maya:</span> Toon最適化完了（{mode_names[shadow_mode]}）。', pos='topCenter', fade=True)
+            QMessageBox.information(
+                self,
+                "Toon修復完了",
+                f"{fixed_count} 個の要素を最適化しました。\n"
+                f"影設定: {mode_names[shadow_mode]}\n"
+                "視点移動によるブレが解消され、MMD互換のToon描画が適用されました。"
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "エラー", f"Toonシェーディング修復中にエラーが発生しました:\n{e}")
+
     def _execute_import(self):
         file_path = self.le_file_path.text().strip()
         if not os.path.exists(file_path):
@@ -444,13 +517,14 @@ class ImportTabWidget(QWidget):
         create_light = self.cb_create_light.isChecked()
         set_untone_mapped = self.cb_untone_mapped.isChecked()
         enable_toon = self.cb_enable_toon.isChecked()
+        shadow_mode = self.get_shadow_mode() if enable_toon else 0
 
         create_physics = self.cb_create_physics.isChecked()
 
         def full_import_task():
             import_func = getattr(pmxpaimaya, 'import_pmx', pmxpaimaya.sang)
             res = import_func(
-                file_path, scale, split_poly, create_bs, create_bones, material_type, create_light, set_untone_mapped, enable_toon
+                file_path, scale, split_poly, create_bs, create_bones, material_type, create_light, set_untone_mapped, enable_toon, shadow_mode=shadow_mode
             )
             # ボーン作成時、Aポーズの状態で剛体・Jointコライダーを同時生成 (ログダイアログ内で実行)
             if create_bones and create_physics and file_path.lower().endswith('.pmx'):
@@ -510,7 +584,7 @@ class ExportTabWidget(QWidget):
         file_layout.addWidget(self.le_file_path)
 
         self.btn_browse = QPushButton("保存先...")
-        self.btn_browse.setFixedWidth(75)
+        self.btn_browse.setFixedWidth(95)
         self.btn_browse.clicked.connect(self._browse_save_file)
         file_layout.addWidget(self.btn_browse)
 
@@ -1305,6 +1379,15 @@ class PhysicsTabWidget(QWidget):
         h_custom_frame.addStretch()
         param_layout.addLayout(h_custom_frame)
 
+        # ベイク完了後の補助ノード非表示設定
+        self.cb_hide_helpers = QCheckBox("物理ベイク完了後に補助ノード (Apose_view_cnt / Apose_subetenoya / 剛体) を非表示にする")
+        hide_default = True
+        if mc.optionVar(exists="MMDToolsForMaya_HideHelpersAfterBake"):
+            hide_default = bool(mc.optionVar(q="MMDToolsForMaya_HideHelpersAfterBake"))
+        self.cb_hide_helpers.setChecked(hide_default)
+        self.cb_hide_helpers.toggled.connect(self._on_hide_helpers_toggled)
+        param_layout.addWidget(self.cb_hide_helpers)
+
         layout.addWidget(param_box)
         layout.addStretch()
 
@@ -1328,8 +1411,13 @@ class PhysicsTabWidget(QWidget):
 
         v_action.addLayout(h_bake_action)
 
-        # 下段: ユーティリティ操作 (再吸着とキーフレームクリアを横並び)
+        # 下段: ユーティリティ操作 (可視化生成、再吸着、キーフレームクリアを横並び)
         h_sub_action = QHBoxLayout()
+
+        self.btn_create_vis = QPushButton("剛体・Joint可視化を生成")
+        self.btn_create_vis.setFixedHeight(40)
+        self.btn_create_vis.clicked.connect(self._execute_create_visualizers)
+        h_sub_action.addWidget(self.btn_create_vis)
 
         self.btn_reconnect = QPushButton("剛体・Jointをモデルに再吸着")
         self.btn_reconnect.setFixedHeight(40)
@@ -1411,6 +1499,31 @@ class PhysicsTabWidget(QWidget):
                 self.le_pmx_path.setText(path)
                 mc.optionVar(sv=("MMDToolsForMaya_LastPmxPath", path))
 
+    def _on_hide_helpers_toggled(self, checked):
+        mc.optionVar(iv=("MMDToolsForMaya_HideHelpersAfterBake", int(checked)))
+
+    def _hide_helper_nodes_if_needed(self):
+        """物理ベイク完了後に補助ノード（カメラビューコントローラ、全ての親、剛体可視化等）を非表示化"""
+        if not self.cb_hide_helpers.isChecked():
+            return
+
+        target_names = ["Apose_view_cnt", "Apose_subetenoya", "MMD_RigidBody_Visualizers"]
+        for name in target_names:
+            if mc.objExists(name):
+                try:
+                    mc.setAttr(f"{name}.visibility", False)
+                except Exception:
+                    pass
+
+        # ワイルドカード検索でマッチする補助ノードも非表示化
+        for pattern in ["*view_cnt*", "*subetenoya*"]:
+            matched = mc.ls(pattern, type="transform") or []
+            for m in matched:
+                try:
+                    mc.setAttr(f"{m}.visibility", False)
+                except Exception:
+                    pass
+
     def _execute_bullet_bake(self):
         """Bullet Physics (MMD本家仕様) による物理ベイク実行"""
         if not self._is_bullet_available():
@@ -1440,6 +1553,8 @@ class PhysicsTabWidget(QWidget):
             try:
                 start_frame = int(self.le_start_frame.text())
                 end_frame = int(self.le_end_frame.text())
+                # 開始・最終フレームが入力されている場合はタイムライン範囲を指定値に更新
+                mc.playbackOptions(minTime=start_frame, maxTime=end_frame, animationStartTime=start_frame, animationEndTime=end_frame)
             except ValueError:
                 QMessageBox.warning(self, "エラー", "開始・終了フレーム番号を正しく入力してください。")
                 return
@@ -1456,6 +1571,7 @@ class PhysicsTabWidget(QWidget):
         log_dialog = ExecutionLogDialog(self.parent_window or self, title="Bullet 物理演算ベイク実行ログ (MMD本家仕様)")
         success = log_dialog.run_task(run_bullet_task)
         if success:
+            self._hide_helper_nodes_if_needed()
             mc.inViewMessage(
                 amg='<span style="color:#2ecc71;">MMD Tools for Maya:</span> Bullet物理シミュレーションのベイクが完了しました。',
                 pos='topCenter',
@@ -1483,6 +1599,8 @@ class PhysicsTabWidget(QWidget):
             try:
                 start_frame = int(self.le_start_frame.text())
                 end_frame = int(self.le_end_frame.text())
+                # 開始・最終フレームが入力されている場合はタイムライン範囲を指定値に更新
+                mc.playbackOptions(minTime=start_frame, maxTime=end_frame, animationStartTime=start_frame, animationEndTime=end_frame)
             except ValueError:
                 QMessageBox.warning(self, "エラー", "開始・終了フレーム番号を正しく入力してください。")
                 return
@@ -1503,6 +1621,7 @@ class PhysicsTabWidget(QWidget):
         log_dialog = ExecutionLogDialog(self.parent_window or self, title="XPBD 物理演算ベイク実行ログ")
         success = log_dialog.run_task(run_physics_task)
         if success:
+            self._hide_helper_nodes_if_needed()
             mc.inViewMessage(
                 amg='<span style="color:#2ecc71;">MMD Tools for Maya:</span> XPBD物理シミュレーションのベイクが完了しました。',
                 pos='topCenter',
@@ -1542,6 +1661,28 @@ class PhysicsTabWidget(QWidget):
                 QMessageBox.information(self, "情報", "シーン内に剛体・Joint可視化ノードが存在しません。")
         except Exception as e:
             QMessageBox.critical(self, "エラー", f"再吸着処理中にエラーが発生しました:\n{e}")
+
+    def _execute_create_visualizers(self):
+        pmx_path = self.le_pmx_path.text().strip()
+        if not pmx_path or not os.path.exists(pmx_path):
+            QMessageBox.warning(self, "エラー", "有効なPMXモデルファイルを指定してください。")
+            return
+
+        try:
+            scale = float(self.le_scale.text())
+        except ValueError:
+            scale = 8.0
+
+        try:
+            from .cpp_engine import xpbd_visualizer
+            xpbd_visualizer.create_rigidbody_visualizers(pmx_path, scale=scale)
+            mc.inViewMessage(
+                amg='<span style="color:#2ecc71;">MMD Tools for Maya:</span> 剛体とJointの可視化を生成しました。',
+                pos='topCenter',
+                fade=True
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "エラー", f"可視化生成中にエラーが発生しました:\n{e}")
 
 # ==============================================================================
 # MMD削除・クリーンアップタブ
@@ -1776,7 +1917,7 @@ class MmdMayaMainWindow(QWidget):
 
         self.tabs.addTab(self.tab_import, "MMD → Maya (インポート)")
         self.tabs.addTab(self.tab_vmd, "モーション (VMD)")
-        self.tabs.addTab(self.tab_physics, "物理演算 (XPBD)")
+        self.tabs.addTab(self.tab_physics, "物理演算")
         self.tabs.addTab(self.tab_export, "Maya → MMD (エクスポート)")
         self.tabs.addTab(self.tab_hik, "HumanIK 管理")
         self.tabs.addTab(self.tab_cleanup, "MMD削除 (クリーンアップ)")

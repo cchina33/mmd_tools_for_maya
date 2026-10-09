@@ -372,6 +372,13 @@ class XpbdMayaBridge:
         self._sync_animated_bodies_from_cache(start_frame)
         self.engine.reset()
 
+        # 初期めり込み解消ウォームアップ (Pre-roll Relaxation)
+        print("[XPBD] 初期めり込み解消ウォームアップ (Pre-roll Relaxation) を実行中...")
+        self.engine.relax_penetration(steps=25, damping=0.99)
+        self.engine.reset_velocities()
+        self.engine.reset_constraints()
+        print("[XPBD] 初期めり込み解消完了。初速ゼロの安定姿勢からベイクを開始します。")
+
         # 各ボーンの前回オイラー角キャッシュ (ジンバルロック・180度フリップ防止用)
         prev_eulers = {}
 

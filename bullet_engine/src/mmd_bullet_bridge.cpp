@@ -61,6 +61,12 @@ struct BulletEngine {
         solver = new btSequentialImpulseConstraintSolver();
         world = new btDiscreteDynamicsWorld(dispatcher, broadphase, solver, collisionConfig);
         world->setGravity(gravity);
+
+        // ERP (Error Reduction Parameter) の設定
+        // 関節拘束の補正率をマイルド (0.2) に設定し、めり込み復帰時の過度なゴム跳ね・振動を抑制
+        world->getSolverInfo().m_erp = 0.2f;
+        world->getSolverInfo().m_erp2 = 0.2f;
+        world->getSolverInfo().m_numIterations = 10;
     }
 
     void cleanup() {
@@ -403,5 +409,99 @@ BULLET_MMD_API void bullet_step_simulation(
             }
             re.body->setLinearVelocity(btVector3(0, 0, 0));
         }
+    }
+}
+
+BULLET_MMD_API void bullet_reset_velocities(BulletEngine* engine) {
+    if (!engine || !engine->world) return;
+    for (auto& re : engine->rigidBodies) {
+        if (!re.body) continue;
+        re.body->setLinearVelocity(btVector3(0.0f, 0.0f, 0.0f));
+        re.body->setAngularVelocity(btVector3(0.0f, 0.0f, 0.0f));
+        re.body->clearForces();
+    }
+}
+
+BULLET_MMD_API void bullet_reset_constraints(BulletEngine* engine) {
+    if (!engine || !engine->world) return;
+    for (auto& je : engine->joints) {
+        if (!je.spring) continue;
+        je.spring->setEquilibriumPoint();
+    }
+}
+
+BULLET_MMD_API void bullet_relax_penetration(
+    BulletEngine* engine,
+    int steps,
+    float relaxationDamping
+) {
+    if (!engine || !engine->world || steps <= 0) return;
+
+    // 重力を一時退避してゼロに設定
+    btVector3 originalGravity = engine->world->getGravity();
+    engine->world->setGravity(btVector3(0.0f, 0.0f, 0.0f));
+
+    // 動的剛体の元のダンピングを保存し、高ダンピングを一時適用
+    std::vector<std::pair<float, float>> originalDamping;
+    originalDamping.reserve(engine->rigidBodies.size());
+
+    for (auto& re : engine->rigidBodies) {
+        if (!re.body) {
+            originalDamping.push_back({0.0f, 0.0f});
+            continue;
+        }
+        originalDamping.push_back({re.body->getLinearDamping(), re.body->getAngularDamping()});
+
+        if (re.physicsMode != 0) {
+            re.body->setDamping(relaxationDamping, relaxationDamping);
+            re.body->setLinearVelocity(btVector3(0.0f, 0.0f, 0.0f));
+            re.body->setAngularVelocity(btVector3(0.0f, 0.0f, 0.0f));
+            re.body->clearForces();
+        }
+    }
+
+    // 衝突接触のみを緩やかに解く事前シミュレーション
+    const float dt = 1.0f / 60.0f;
+    for (int step = 0; step < steps; ++step) {
+        // Kinematic剛体（太もも等）の姿勢を目標位置に固定維持
+        for (auto& re : engine->rigidBodies) {
+            if (re.physicsMode == 0 && re.body) {
+                btTransform tr;
+                tr.setOrigin(re.targetPos);
+                tr.setRotation(re.targetRot);
+                if (re.motionState) {
+                    re.motionState->setWorldTransform(tr);
+                }
+                re.body->setWorldTransform(tr);
+                engine->world->updateSingleAabb(re.body);
+            } else if (re.physicsMode == 2 && re.body) {
+                btTransform tr = re.body->getWorldTransform();
+                tr.setOrigin(re.targetPos);
+                re.body->setWorldTransform(tr);
+                if (re.motionState) {
+                    re.motionState->setWorldTransform(tr);
+                }
+                re.body->setLinearVelocity(btVector3(0.0f, 0.0f, 0.0f));
+            }
+        }
+
+        engine->world->stepSimulation(dt, 1, dt);
+    }
+
+    // 元のダンピングと重力を復元
+    for (size_t i = 0; i < engine->rigidBodies.size(); ++i) {
+        auto& re = engine->rigidBodies[i];
+        if (!re.body) continue;
+        re.body->setDamping(originalDamping[i].first, originalDamping[i].second);
+        re.body->setLinearVelocity(btVector3(0.0f, 0.0f, 0.0f));
+        re.body->setAngularVelocity(btVector3(0.0f, 0.0f, 0.0f));
+        re.body->clearForces();
+    }
+    engine->world->setGravity(originalGravity);
+
+    // 押し出し後の安定姿勢でジョイントの平衡点を再初期化
+    for (auto& je : engine->joints) {
+        if (!je.spring) continue;
+        je.spring->setEquilibriumPoint();
     }
 }

@@ -100,6 +100,15 @@ class BulletEngineWrapper:
             c_void_p, c_float, c_int, c_float
         ]
 
+        self._dll.bullet_reset_velocities.restype = None
+        self._dll.bullet_reset_velocities.argtypes = [c_void_p]
+
+        self._dll.bullet_reset_constraints.restype = None
+        self._dll.bullet_reset_constraints.argtypes = [c_void_p]
+
+        self._dll.bullet_relax_penetration.restype = None
+        self._dll.bullet_relax_penetration.argtypes = [c_void_p, c_int, c_float]
+
     def __del__(self):
         if hasattr(self, '_engine') and self._engine and hasattr(self, '_dll'):
             try:
@@ -183,3 +192,19 @@ class BulletEngineWrapper:
         self._dll.bullet_step_simulation(
             self._engine, float(dt), int(max_sub_steps), float(fixed_time_step)
         )
+
+    def reset_velocities(self):
+        """全剛体の線形速度・角速度および蓄積された力をゼロクリア"""
+        self._dll.bullet_reset_velocities(self._engine)
+
+    def reset_constraints(self):
+        """全ジョイントの平衡点・内部バッファをリセット"""
+        self._dll.bullet_reset_constraints(self._engine)
+
+    def relax_penetration(self, steps=25, damping=0.99):
+        """
+        初期姿勢でのめり込み解消ウォームアップ (Pre-roll Relaxation)
+        外力なし・高ダンピング下で接触反発のみを解き、初速0のまま太もも外側へ自然に押し出す
+        """
+        self._dll.bullet_relax_penetration(self._engine, int(steps), float(damping))
+

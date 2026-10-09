@@ -83,6 +83,18 @@ Autodesk Maya 上で MMD（PMX / PMD / DirectX .x）形式のモデルやアク�
 
 ---
 
+## スペシャルサンクス
+
+- [mmdpaimaya](https://github.com/phyblas/mmdpaimaya) を参考にさせていただきました。
+
+---
+
+## AIネイティブ開発 (AI-Powered Development)
+
+本プロジェクトは、**最先端AIアシスタント（Google Antigravity / Gemini）とのペアプログラミング**により開発されています。
+
+---
+
 ## クレジット
 
 - **Author**: Hina33

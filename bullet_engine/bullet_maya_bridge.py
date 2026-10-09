@@ -247,6 +247,34 @@ class BulletMayaBridge:
         # 追従コンストレイントを一時ミュート
         mute_dynamic_constraints(mute=True)
 
+        # 初期めり込み解消ウォームアップ (Pre-roll Relaxation)
+        # 太もも等とスカートの初期貫通を接触インパルスのみで初速ゼロのまま外側へ押し出す
+        print(f"[Bullet] 初期めり込み解消ウォームアップ (Pre-roll Relaxation) を実行中...")
+        for rb_idx in self.kinematic_and_aligned_rb_indices:
+            rb = self.pmx_model.rigid_bodies[rb_idx]
+            joint_name = self.pmx_to_maya_joints.get(rb.bone_index, None)
+            if not joint_name or not mc.objExists(joint_name):
+                continue
+            dp = get_dag_path(joint_name)
+            fn_trans = om.MFnTransform(dp)
+            pos = fn_trans.translation(om.MSpace.kWorld)
+            rot = fn_trans.rotation(om.MSpace.kWorld, asQuaternion=True)
+            b_pos = (pos.x, pos.y, pos.z)
+            b_quat = (rot.x, rot.y, rot.z, rot.w)
+
+            local_p, local_q = self.rb_local_offsets.get(rb_idx, ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0)))
+            world_offset = quat_rotate_vector(b_quat, local_p)
+            target_pos = (b_pos[0] + world_offset[0], b_pos[1] + world_offset[1], b_pos[2] + world_offset[2])
+            target_quat = quat_multiply(b_quat, local_q)
+            target_euler = quat_to_euler_xyz(target_quat)
+            target_euler_rad = (math.radians(target_euler[0]), math.radians(target_euler[1]), math.radians(target_euler[2]))
+            self.engine.set_target_transform(rb_idx, target_pos, target_euler_rad)
+
+        self.engine.relax_penetration(steps=25, damping=0.99)
+        self.engine.reset_velocities()
+        self.engine.reset_constraints()
+        print(f"[Bullet] 初期めり込み解消完了。初速ゼロの安定姿勢からベイクを開始します。")
+
         cached_parent_paths = {}
         for rb_idx in self.dynamic_rb_indices:
             rb = self.pmx_model.rigid_bodies[rb_idx]

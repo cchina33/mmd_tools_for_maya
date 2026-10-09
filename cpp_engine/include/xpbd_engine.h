@@ -34,6 +34,11 @@ public:
     void setGravity(const Vec3& g) { gravity_ = g; }
     Vec3 getGravity() const { return gravity_; }
 
+    // 速度・内部拘束リセットおよびめり込み緩和
+    void resetVelocities();
+    void resetConstraints();
+    void relaxPenetration(int steps, float relaxationDamping);
+
 private:
     // 内部サブステップ実行
     void subStep(float h, float alpha);
