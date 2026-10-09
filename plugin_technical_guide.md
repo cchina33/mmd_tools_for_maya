@@ -19,7 +19,7 @@ mmd_tools_for_maya/
 ├── vmd_analyzer.py           # VMDモーション構造解析・診断モジュール
 ├── mayapaipmx.py             # MayaシーンからPMXへのエクスポートエンジン
 ├── toon/                     # MMD標準共有トゥーンテクスチャ (toon01.bmp〜toon10.bmp)
-├── mmd_core/                 # 完全自作MMDバイナリパーサーエンジン
+├── mmd_core/                 # 自作MMDバイナリパーサーエンジン
 │   ├── __init__.py           # パッケージ初期化
 │   ├── pmx.py                # PMX 2.0 / 2.1 パーサー
 │   ├── pmd.py                # PMD (MMD旧形式) パーサー & PMX変換
@@ -139,7 +139,7 @@ MMD（MikuMikuDance）のセル調アニメ陰影（Toon）は、通常のテク
 
 ## 3. Mayaにおけるシェーダー再現アーキテクチャ
 
-MMD Tools for Maya では、Mayaのリアルタイムビューポート（Viewport 2.0）で確実に動作する標準ユーティリティノードを組み合わせて、このシェーディングネットワークを完全に再現しています。
+MMD Tools for Maya では、Mayaのリアルタイムビューポート（Viewport 2.0）で確実に動作する標準ユーティリティノードを組み合わせて、このシェーディングネットワークを再現しています。
 
 ### ノード接続構成図
 
@@ -177,7 +177,7 @@ MMD Tools for Maya では、Mayaのリアルタイムビューポート（Viewpo
    - 内積の出力範囲（`-0.2 〜 0.8`）を、Toon画像のV座標（`0.0 〜 1.0`）へとマッピングします。
    - これにより、MMD特有の「一定以上の角度になると急激に影が落ちる」アニメ調のセル境界が形成されます。
 4. **Toon `file` ノード**:
-   - メッシュのポリゴンUV（`place2dTexture`）から完全に切り離し、`uCoord` を `0.5` 固定、`vCoord` に `setRange.outValueX` を接続します。
+   - メッシュのポリゴンUV（`place2dTexture`）から切り離し、`uCoord` を `0.5` 固定、`vCoord` に `setRange.outValueX` を接続します。
    - これにより、**ポリゴンのUV展開形状に起因する汚れや帯の焼き付きが100%防止**されます。
 5. **`multiplyDivide` (カラー乗算ノード)**:
    - メインカラー（基本テクスチャ × スフィアマップ）に Toon ファイルノードの `outColor` を乗算（Multiply）します。
@@ -346,7 +346,7 @@ MMD Tools for Maya は、モデルインポート時およびモーション適�
 
 ---
 
-### MMDカメラ完全再現アーキテクチャ (2階層オービットリグ)
+### MMDカメラ再現アーキテクチャ (2階層オービットリグ)
 
 MMDのカメラは、固定位置に配置された通常のカメラとは異なり、**「注視点（Target: XYZ）」を中心として「公転回転（RX, RY, RZ）」し、そこから「距離（Distance: 通常負値）」離れた位置から被写体を捉える**というオービット構造を採用しています。
 
@@ -368,7 +368,7 @@ MMD_Camera_Aim (注視点ロケータ: Transform)
 MMDのカメラキーフレームには視野角 $\text{FOV}$（度数法）が記録されています。Mayaのカメラシェイプではミリ単位の焦点距離 `focalLength` で制御されるため、以下の光学計算式を用いて毎フレームの焦点距離をキーフレーム設定します：
 - $\text{fov\_rad} = \text{radians}(\text{FOV})$
 - $\text{focalLength} = \frac{\text{verticalFilmAperture} \times 25.4}{2.0 \times \tan\left(\frac{\text{fov\_rad}}{2.0}\right)}$
-- これにより、注視点を中心としたカメラワークの回転・ドリーイン/アウト・ズームが完全に同期します。
+- これにより、注視点を中心としたカメラワークの回転・ドリーイン/アウト・ズームが同期します。
 
 ---
 
@@ -392,7 +392,7 @@ MMD Tools for Maya では、インポートしたアニメーションを破棄�
 
 MMDの文化・配布形態として、キャラクターのダンスモーション（`.vmd`）とカメラワークモーション（`.vmd`）は別々のファイルとして配布されることが一般的です。
 
-MMD Tools for Maya のモーションタブ（`VmdImportTabWidget`）では、この運用に完全対応しています：
+MMD Tools for Maya のモーションタブ（`VmdImportTabWidget`）では、この運用に対応しています：
 
 - **キャラクタモーション (`.vmd`)**: ボーン・表情用のモーションファイルを指定。
 - **カメラモーション (`.vmd`)**: カメラワーク専用のファイルを指定（省略可能）。
@@ -457,9 +457,9 @@ def delete_mmd_scene_elements(
 - **モデル & スケルトン階層の一括削除**:
   - 対象モデル（個別またはシーン全体）のメッシュノードおよび階層下の全ジョイント、IKハンドル、コンストレイント、BlendShapeノードを特定して安全に削除。
 - **MMDカメラの削除オプション (`delete_cameras`)**:
-  - `MMD_Camera_Aim` / `MMD_Camera` および派生オービットカメラノードを完全消去。
+  - `MMD_Camera_Aim` / `MMD_Camera` および派生オービットカメラノードを消去。
 - **MMDライトの安全な削除・保持オプション (`delete_lights`)**:
-  - `pmxpaimaya.py` で作成された照明グループ **`mmd_lighting_grp`** および配下の `MMD_DirectionalLight`、`MMD_AmbientLight` を一括で完全消去。
+  - `pmxpaimaya.py` で作成された照明グループ **`mmd_lighting_grp`** および配下の `MMD_DirectionalLight`、`MMD_AmbientLight` を一括で消去。
   - チェックボックス「MMDライトも削除する (mmd_lighting_grp)」により、ライト環境を残したままモデル・リグ・マテリアルのみを削除するか、ライトも含めて全て更地にするかを柔軟に選択可能（設定は `optionVar` に自動記憶）。
 - **Maya標準「未使用ノードの削除」の自動実行 (`delete_unused_nodes`)**:
   - `mel.eval('MLdeleteUnused;')`（Mayaの Delete Unused Nodes）を内部実行。

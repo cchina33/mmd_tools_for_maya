@@ -2,7 +2,7 @@
 
 MMD（MikuMikuDance）本家で採用されている **Bullet Physics 2.7x〜2.8x系（2.83.7）** の物理演算コア（LinearMath, BulletCollision, BulletDynamics）を直接組み込んだ専用物理エンジンモジュールです。
 
-MMDモデルの剛体反発・摩擦係数およびジョイントの6自由度ばね拘束（`btGeneric6DofSpringConstraint`）に完全準拠し、MMD特有の「柔らかくしなやかな髪やスカートの揺れ」を忠実に再現します。
+MMDモデルの剛体反発・摩擦係数およびジョイントの6自由度ばね拘束（`btGeneric6DofSpringConstraint`）に準拠し、MMD特有の「柔らかくしなやかな髪やスカートの揺れ」を忠実に再現します。
 
 ---
 
@@ -10,7 +10,7 @@ MMDモデルの剛体反発・摩擦係数およびジョイントの6自由度�
 
 - **Bullet Physics ライセンス**: [zlib license](LICENSE) (Erwin Coumans)
 - **分離独立の保証**:
-  - 本 `bullet_engine` ディレクトリは、プロジェクトの他モジュール（MIT License）から完全にカプセル化・分離されています。
+  - 本 `bullet_engine` ディレクトリは、プロジェクトの他モジュール（MIT License）からカプセル化・分離されています。
   - **この `bullet_engine` フォルダを丸ごと削除するだけで、プロジェクト全体は自動的に 100% 純粋な MIT License（自作XPBDエンジンのみ）として動作・運用可能です。**
   - Bullet が存在しない場合、GUI側は自動的にそれを検出し、「Bullet 物理ベイク」ボタンを安全に非活性化（無効化）します。エラーやクラッシュは一切発生せず、自作XPBDエンジンで全ての機能が動作し続けます。
 

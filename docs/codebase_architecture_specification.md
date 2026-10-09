@@ -105,7 +105,7 @@ mmd_tools_for_maya/
 ### 2-2. `__init__.py`
 
 - **種別**: Python (パッケージ初期化モジュール)
-- **役割**: `mmd_tools_for_maya` を単一の完全な Python パッケージとして成立させるエントリポイント。
+- **役割**: `mmd_tools_for_maya` を単一の Python パッケージとして成立させるエントリポイント。
 - **機能**:
   - サブパッケージ群（`ui`, `converters`, `mmd_core`, `pmx_analyzer`, `bullet_engine`, `cpp_engine`, `asset`）の安全なインポートと `sys.path` 解決。
   - 外部スクリプトからの `from mmd_tools_for_maya import pmxpaimaya, vmdpaimaya` 等の後方互換アクセスを保証。
@@ -125,7 +125,7 @@ mmd_tools_for_maya/
   - `ExportTabWidget`: Maya シーンから PMX 形式へのエクスポート。
   - `HumanIKTabWidget`: HIK キャラクター定義・Tポーズ（腕水平化＆膝プレベンド）自動展開、コントロールリグ生成、二重IK競合解除。
   - `PhysicsTabWidget`: Bullet / XPBD 物理演算設定、剛体・Joint可視化生成、再吸着、物理ベイク実行（DLL自動検出による安全なフォールバック）。
-  - `CleanupTabWidget`: シーン内 MMD 要素の一括完全削除。
+  - `CleanupTabWidget`: シーン内 MMD 要素の一括削除・初期化。
 - **補助ダイアログ**: `ExecutionLogDialog` (リアルタイム進捗ログダイアログ・コピー機能付き)。
 
 ### 3-2. `ui/advanced_dict_dialog.py`
