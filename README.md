@@ -66,10 +66,6 @@ C:\Users\<ユーザー名>\Documents\maya\<バージョン>\plug-ins\
     └── toon/
 ```
 
-> [!TIP]
-> `plug-ins/` 直下に置かれた **`mmd_tools_for_maya_plugin.py`** が Maya に認識されるローダー本体です。  
-> `mmd_tools_for_maya/` フォルダの「中」にある同名ファイルはバックアップコピーですので、削除しても動作に問題ありません。
-
 ### 2. Maya でのロード手順
 
 1. Maya を起動します。
