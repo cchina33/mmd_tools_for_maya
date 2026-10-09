@@ -2,11 +2,8 @@
 
 Autodesk Maya 上で MMD（PMX / PMD / DirectX .x）形式のモデルやアクセサリのインポート・エクスポート、VMDモーション・カメラ・音声のインポート、HumanIKリグ定義、および物理演算ベイクを行うための Maya 統合拡張プラグインです。
 
-> **[NOTE] ベータ版について**  
+> [!NOTE]
 > 本バージョン（**v1.0.0 Beta**）は、機能実装を完了し実運用検証を行っているベータ版です。モデルのインポート、モーション適用、物理演算ベイク等の一連のワークフローが動作確認されています。フィードバックや不具合報告は大歓迎です。
-
-- **制作者 (Author)**: Hina33
-- **ライセンス**: MIT License（※一部モジュールに個別ライセンスあり。詳細は後述の「ライセンスについて」を参照）
 
 ---
 
@@ -57,16 +54,16 @@ Autodesk Maya 上で MMD（PMX / PMD / DirectX .x）形式のモデルやアク�
 
 ## 技術仕様書 (Technical Specifications)
 
-本プラグインの内部アーキテクチャや計算モデルについては、[technical_specifications/](file:///c:/Users/Naruse/Documents/maya/2025/plug-ins/mmd_tools_for_maya/technical_specifications/) フォルダ内に詳細な技術ドキュメントを用意しています。
+本プラグインの内部アーキテクチャや計算モデルについては、[technical_specifications/](technical_specifications/) フォルダ内に詳細な技術ドキュメントを用意しています。
 
-| ドキュメント名 | 概要・対象機能 |
-| :--- | :--- |
-| [bullet_engine_specification.md](file:///c:/Users/Naruse/Documents/maya/2025/plug-ins/mmd_tools_for_maya/technical_specifications/bullet_engine_specification.md) | **Bullet Physics 2.83.7 エンジン仕様**: MMD本家物理再現、単一DLL組み込み、剛体・ジョイントパラメータ定義、衝突グループ(1〜16)・16bitマスク仕様、OpenMayaマトリクス逆算 |
-| [physics_system_specification.md](file:///c:/Users/Naruse/Documents/maya/2025/plug-ins/mmd_tools_for_maya/technical_specifications/physics_system_specification.md) | **Maya物理システム統合仕様**: ビューポート可視化コライダーメッシュ生成、Kinematic/Dynamic追従階層、自動再吸着・置き去り解消機構 |
-| [xpbd_engine_specification.md](file:///c:/Users/Naruse/Documents/maya/2025/plug-ins/mmd_tools_for_maya/technical_specifications/xpbd_engine_specification.md) | **自作XPBD物理エンジン仕様**: 拡張位置ベース物理（XPBD）による剛体・6DOFばね拘束ソルバー、サブステップ積分、衝突判定 |
-| [model_import_specification.md](file:///c:/Users/Naruse/Documents/maya/2025/plug-ins/mmd_tools_for_maya/technical_specifications/model_import_specification.md) | **モデルインポート・エクスポート仕様**: PMX 2.0/2.1、PMD、DirectX .x、SDEFスキニング、マテリアル・テクスチャ変換 |
-| [vmd_import_specification.md](file:///c:/Users/Naruse/Documents/maya/2025/plug-ins/mmd_tools_for_maya/technical_specifications/vmd_import_specification.md) | **VMDモーションインポート仕様**: ベジェ補間曲線計算、IKベイク、カメラ・照明・音声インポート、オイラー角最短補正 |
-| [codebase_architecture_specification.md](file:///c:/Users/Naruse/Documents/maya/2025/plug-ins/mmd_tools_for_maya/technical_specifications/codebase_architecture_specification.md) | **コードベース全体アーキテクチャ**: モジュール構造、GUI・エンジン・パーサー分離原則、例外安全設計 |
+| ドキュメント名                                                                                            | 概要・対象機能                                                                                                                                                         |
+| :-------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [bullet_engine_specification.md](technical_specifications/bullet_engine_specification.md)                 | **Bullet Physics 2.83.7 エンジン仕様**: MMD本家物理再現、単一DLL組み込み、剛体・ジョイントパラメータ定義、衝突グループ(1〜16)・16bitマスク仕様、OpenMayaマトリクス逆算 |
+| [physics_system_specification.md](technical_specifications/physics_system_specification.md)               | **Maya物理システム統合仕様**: ビューポート可視化コライダーメッシュ生成、Kinematic/Dynamic追従階層、自動再吸着・置き去り解消機構                                        |
+| [xpbd_engine_specification.md](technical_specifications/xpbd_engine_specification.md)                     | **自作XPBD物理エンジン仕様**: 拡張位置ベース物理（XPBD）による剛体・6DOFばね拘束ソルバー、サブステップ積分、衝突判定                                                   |
+| [model_import_specification.md](technical_specifications/model_import_specification.md)                   | **モデルインポート・エクスポート仕様**: PMX 2.0/2.1、PMD、DirectX .x、SDEFスキニング、マテリアル・テクスチャ変換                                                       |
+| [vmd_import_specification.md](technical_specifications/vmd_import_specification.md)                       | **VMDモーションインポート仕様**: ベジェ補間曲線計算、IKベイク、カメラ・照明・音声インポート、オイラー角最短補正                                                        |
+| [codebase_architecture_specification.md](technical_specifications/codebase_architecture_specification.md) | **コードベース全体アーキテクチャ**: モジュール構造、GUI・エンジン・パーサー分離原則、例外安全設計                                                                      |
 
 ---
 
@@ -80,6 +77,7 @@ Autodesk Maya 上で MMD（PMX / PMD / DirectX .x）形式のモデルやアク�
   - Bullet Physics Library（Erwin Coumans / Bullet 公式）のソースコードを含みます。
 
 ### 削除耐性と 100% MIT ライセンスへの復元
+
 - 商用利用やライセンスポリシー等の理由で Bullet Physics を除外したい場合、**`bullet_engine/` フォルダを丸ごと削除するだけ** で、プロジェクト全体が自動的かつ完全に **100% 純粋な MIT License 単一構成** に戻ります。
 - GUI は Bullet モジュールの存在を動的に検出し、フォルダが削除されていても一切エラーを出さず、自作 XPBD 物理エンジン側で全機能が通常通り動作し続けます。
 
