@@ -1,5 +1,9 @@
 # MMD Tools for Maya (v1.0.1)
 
+<p align="center">
+  <img src="image/overview.png" alt="MMD Tools for Maya Overview" width="100%">
+</p>
+
 Autodesk Maya 上で MMD（PMX / PMD / DirectX .x）形式のモデルやアクセサリのインポート・エクスポート、VMDモーション・カメラ・音声のインポート、HumanIKリグ定義、モデル構造の一括解析・辞書登録、および物理演算ベイクを行うための Maya 統合拡張プラグインです。
 
 > [!NOTE]
@@ -124,3 +128,4 @@ C:\Users\<ユーザー名>\Documents\maya\<バージョン>\plug-ins\
 
 - **Author**: Hina33
 - **Bullet Physics Library**: Copyright (c) 2003-2015 Erwin Coumans (zlib License)
+- **スクリーンショット使用モデル**: 『レミリア・スカーレット』 モデリング・セットアップ：すけ 様（[ニコニ立体: td27083](https://3d.nicovideo.jp/works/td27083)）
