@@ -82,17 +82,17 @@ C:\Users\<ユーザー名>\Documents\maya\<バージョン>\plug-ins\
 
 ## 技術仕様書 (Technical Specifications)
 
-本プラグインの内部アーキテクチャや計算モデルについては、[technical_specifications/](technical_specifications/) フォルダ内に詳細な技術ドキュメントを用意しています。
+本プラグインの内部アーキテクチャや計算モデルについては、[docs/](docs/) フォルダ内に詳細な技術ドキュメントを用意しています。
 
 | ドキュメント名                                                                                            | 概要・対象機能                                                                                                                                                         |
 | :-------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [codebase_architecture_specification.md](technical_specifications/codebase_architecture_specification.md) | **コードベース全体アーキテクチャ**: モジュール構造、GUI・エンジン・パーサー分離原則、例外安全設計                                                                      |
-| [pmx_analyzer_specification.md](technical_specifications/pmx_analyzer_specification.md)                   | **PMXモデル詳細解析 & ユーザー辞書仕様**: 材質・ボーン・モーフ・剛体・Joint一括保存、未登録漢字抽出、対話型登録GUI・再チェック                                         |
-| [bullet_engine_specification.md](technical_specifications/bullet_engine_specification.md)                 | **Bullet Physics 2.83.7 エンジン仕様**: MMD本家物理再現、単一DLL組み込み、剛体・ジョイントパラメータ定義、衝突グループ(1〜16)・16bitマスク仕様、OpenMayaマトリクス逆算 |
-| [physics_system_specification.md](technical_specifications/physics_system_specification.md)               | **Maya物理システム統合仕様**: ビューポート可視化コライダーメッシュ生成、Kinematic/Dynamic追従階層、自動再吸着・置き去り解消機構                                        |
-| [xpbd_engine_specification.md](technical_specifications/xpbd_engine_specification.md)                     | **自作XPBD物理エンジン仕様**: 拡張位置ベース物理（XPBD）による剛体・6DOFばね拘束ソルバー、サブステップ積分、衝突判定                                                   |
-| [model_import_specification.md](technical_specifications/model_import_specification.md)                   | **モデルインポート・エクスポート仕様**: PMX 2.0/2.1、PMD、DirectX .x、SDEFスキニング、マテリアル・テクスチャ変換                                                       |
-| [vmd_import_specification.md](technical_specifications/vmd_import_specification.md)                       | **VMDモーションインポート仕様**: ベジェ補間曲線計算、IKベイク、カメラ・照明・音声インポート、オイラー角最短補正                                                        |
+| [codebase_architecture_specification.md](docs/codebase_architecture_specification.md) | **コードベース全体アーキテクチャ**: モジュール構造、GUI・エンジン・パーサー分離原則、例外安全設計                                                                      |
+| [pmx_analyzer_specification.md](docs/pmx_analyzer_specification.md)                   | **PMXモデル詳細解析 & ユーザー辞書仕様**: 材質・ボーン・モーフ・剛体・Joint一括保存、未登録漢字抽出、対話型登録GUI・再チェック                                         |
+| [bullet_engine_specification.md](docs/bullet_engine_specification.md)                 | **Bullet Physics 2.83.7 エンジン仕様**: MMD本家物理再現、単一DLL組み込み、剛体・ジョイントパラメータ定義、衝突グループ(1〜16)・16bitマスク仕様、OpenMayaマトリクス逆算 |
+| [physics_system_specification.md](docs/physics_system_specification.md)               | **Maya物理システム統合仕様**: ビューポート可視化コライダーメッシュ生成、Kinematic/Dynamic追従階層、自動再吸着・置き去り解消機構                                        |
+| [xpbd_engine_specification.md](docs/xpbd_engine_specification.md)                     | **自作XPBD物理エンジン仕様**: 拡張位置ベース物理（XPBD）による剛体・6DOFばね拘束ソルバー、サブステップ積分、衝突判定                                                   |
+| [model_import_specification.md](docs/model_import_specification.md)                   | **モデルインポート・エクスポート仕様**: PMX 2.0/2.1、PMD、DirectX .x、SDEFスキニング、マテリアル・テクスチャ変換                                                       |
+| [vmd_import_specification.md](docs/vmd_import_specification.md)                       | **VMDモーションインポート仕様**: ベジェ補間曲線計算、IKベイク、カメラ・照明・音声インポート、オイラー角最短補正                                                        |
 
 ---
 

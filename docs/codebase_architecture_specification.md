@@ -74,7 +74,7 @@ mmd_tools_for_maya/
 ├── toon/                             # MMD標準トゥーンテクスチャ
 │   └── toon01.bmp ～ toon10.bmp      # 各階調用標準BMPテクスチャ群
 │
-├── technical_specifications/         # 独立技術仕様書群
+├── docs/                               # 独立技術仕様書群
 │   ├── codebase_architecture_specification.md # 本ファイル (全体の構造・各モジュール仕様)
 │   ├── pmx_analyzer_specification.md          # PMXモデル詳細解析・一括保存 & ユーザー辞書対話登録仕様
 │   ├── bullet_engine_specification.md         # MMD本家 Bullet 物理演算エンジン仕様
@@ -243,9 +243,9 @@ MMD 標準のトゥーン階調テクスチャ（`toon01.bmp` 〜 `toon10.bmp`�
 
 ---
 
-## 11. `technical_specifications/` & `docs/`
+## 11. `docs/` & `ai-task-docs/`
 
-- **`technical_specifications/`**: 各サブシステムの詳細設計仕様書群。
+- **`docs/`**: 各サブシステムの公式設計仕様書群。
   - `codebase_architecture_specification.md` (全体構造仕様書 - 本ドキュメント)
   - `pmx_analyzer_specification.md` (PMXモデル詳細解析 & ユーザー辞書仕様書)
   - `bullet_engine_specification.md` (Bullet物理仕様書)
@@ -253,4 +253,4 @@ MMD 標準のトゥーン階調テクスチャ（`toon01.bmp` 〜 `toon10.bmp`�
   - `physics_system_specification.md` (Maya物理システム仕様書)
   - `vmd_import_specification.md` (VMDインポート仕様書)
   - `xpbd_engine_specification.md` (XPBD物理仕様書)
-- **`docs/`**: 機能アップデートごとの計画・タスクリスト・確認書を格納。\n
+- **`ai-task-docs/`**: AIペアプログラミングによる機能アップデートごとの計画・タスクリスト・確認書を格納（Git除外）。
