@@ -58,7 +58,7 @@ mmd_tools_for_maya/
 - **役割**: パースされたモデルデータから、Mayaのポリゴンメッシュ、マテリアル、スケルトン（ジョイント階層）、足IKハンドル（`ikHandle`）、スキニング（SkinCluster）、モーフ（BlendShape）、ライティングを自動構築するコアエンジンです。
 - **主要処理**:
   - `create_mesh()`: `MFnMesh.create`（Maya API 2.0）を用いて数十万頂点のポリゴンメッシュを一括高速生成。
-  - `setup_mmd_ik()`: 左右の足（足 $\rightarrow$ ひざ $\rightarrow$ 足首）およびつま先に Maya の IKハンドル（`ikRPsolver` / `ikSCsolver`）を自動構築し、足IKボーンに連動させる処理。
+  - `setup_mmd_ik()`: 左右の足（足 → ひざ → 足首）およびつま先に Maya の IKハンドル（`ikRPsolver` / `ikSCsolver`）を自動構築し、足IKボーンに連動させる処理。
   - `create_mmd_lighting()`: MMD標準の平行光源および環境光を自動生成。
   - `import_pmx()`: 全体フローの統括、ボーン構造・モーフ構造メタデータの永続化保存（`mmdBoneStructure`）。
 
@@ -196,7 +196,7 @@ MMDモデルのマテリアルには、金属光沢やハイライトを表現�
 
 ### MatCap UV 変換ネットワーク
 
-スフィアマップは、カメラから見た法線方向（$-1.0 \sim 1.0$）をUV座標（$0.0 \sim 1.0$）に変換してテクスチャを参照します：
+スフィアマップは、カメラから見た法線方向（-1.0 〜 1.0）をUV座標（0.0 〜 1.0）に変換してテクスチャを参照します：
 
 ```python
 # カメラ空間法線 (-1.0 〜 1.0) を UV (0.0 〜 1.0) に変換
@@ -298,9 +298,9 @@ MMD Tools for Maya では以下のアーキテクチャにより、**モデル�
   - モデルインポート時に、日本語ボーン名と対応するMayaノードのフルDAGパスの辞書テーブルを作成。
   - モデルのルートメッシュノードに `mmdBoneStructure`（JSON文字列属性）として埋め込み、さらに `asset/last_imported_structure.json` にキャッシュ保存。
   - 対応関係の例:
-    - `"右腕"` $\rightarrow$ `"|ModelRoot|...|shoulderP_R|migi_kata|migi_ude"`
-    - `"左足ＩＫ"` $\rightarrow$ `"|ModelRoot|...|leg_IKP_L|hidari_ashi_ik"`
-    - `"下半身"` $\rightarrow$ `"|ModelRoot|...|waist|kahanshin"`
+    - `"右腕"` → `"|ModelRoot|...|shoulderP_R|migi_kata|migi_ude"`
+    - `"左足ＩＫ"` → `"|ModelRoot|...|leg_IKP_L|hidari_ashi_ik"`
+    - `"下半身"` → `"|ModelRoot|...|waist|kahanshin"`
 - **名前の自動逆引き解決 (`vmdpaimaya.py`)**:
   - Maya内部でノード名がローマ字化（`migi_ude`）されていても、日本語名（「右腕」）をキーとして一意のノードパスを直接取得。
   - モデル選択コンボボックスで指定されたターゲットモデル、またはシーン内で検出されたMMDモデルに対して無条件にキーフレームを適用。
@@ -332,11 +332,11 @@ MMDのダンスや歩行アニメーションでは、太ももやひざのFKボ
 
 MMD Tools for Maya は、モデルインポート時およびモーション適用時に、以下のIKシステムを全自動で構築します：
 
-- **脚部IK (足 $\rightarrow$ ひざ $\rightarrow$ 足首)**:
+- **脚部IK (足 → ひざ → 足首)**:
   - `startJoint` を「足」、`endEffector` を「足首」として、回転面ソルバー（`ikRPsolver`）による `ikHandle` を生成。
   - 生成した `ikHandle` を「足ＩＫ」ジョイントに追従（`pointConstraint`）。
   - 足首の向きを「足ＩＫ」ジョイントの回転に連動（`orientConstraint`）。
-- **つま先IK (足首 $\rightarrow$ つま先)**:
+- **つま先IK (足首 → つま先)**:
   - `startJoint` を「足首」、`endEffector` を「つま先」として、単一チェーンソルバー（`ikSCsolver`）による `ikHandle` を生成。
   - 生成した `ikHandle` を「つま先ＩＫ」ジョイントに追従（`pointConstraint`）。
 - **非表示管理**:
@@ -366,8 +366,8 @@ MMD_Camera_Aim (注視点ロケータ: Transform)
 
 #### 視野角（FOV）から焦点距離（focalLength）への換算理論
 MMDのカメラキーフレームには視野角 $\text{FOV}$（度数法）が記録されています。Mayaのカメラシェイプではミリ単位の焦点距離 `focalLength` で制御されるため、以下の光学計算式を用いて毎フレームの焦点距離をキーフレーム設定します：
-- $\text{fov\_rad} = \text{radians}(\text{FOV})$
-- $\text{focalLength} = \frac{\text{verticalFilmAperture} \times 25.4}{2.0 \times \tan\left(\frac{\text{fov\_rad}}{2.0}\right)}$
+- $\text{fovRad} = \text{radians}(\text{FOV})$
+- $\text{focalLength} = \frac{\text{verticalFilmAperture} \times 25.4}{2.0 \times \tan\left(\frac{\text{fovRad}}{2.0}\right)}$
 - これにより、注視点を中心としたカメラワークの回転・ドリーイン/アウト・ズームが同期します。
 
 ---
@@ -430,13 +430,13 @@ MMDモデルとモーションの間で生じる「足や腰が動かない」�
 VMDモーション内で全角（`左足ＩＫ`）と半角（`左足IK`）が混在していても、`unicodedata.normalize('NFKC')` を通して統一し、空白文字（スペース）を除去して照合します。
 
 #### ボーンエイリアス（同義語）辞書
-MMD特有の表記揺れ（`左足IK` $\leftrightarrow$ `左足ＩＫ` $\leftrightarrow$ `左足IK親`、`全ての親` $\leftrightarrow$ `すべての親` $\leftrightarrow$ `操作中心` 等）をテーブル化し、双方向から検索・解決します。
+MMD特有の表記揺れ（`左足IK` ↔ `左足ＩＫ` ↔ `左足IK親`、`全ての親` ↔ `すべての親` ↔ `操作中心` 等）をテーブル化し、双方向から検索・解決します。
 
 #### 準標準ボーンのフォールバック合成
-- **グルーブ $\rightarrow$ センター**: モーションに「グルーブ」があるのにモデルに存在しない場合、自動的に「センター」ジョイントへ移動・回転を合成。
-- **腰 $\rightarrow$ 下半身**: モーションに「腰」があるのにモデルに存在しない場合、自動的に「下半身」ジョイントへ回転を適用。
-- **足IK親 $\rightarrow$ 足IK**: モーションに「足IK親」があるのにモデルに存在しない場合、足IKジョイントへ位置オフセットを合算。
-- **足D $\rightarrow$ 足FK**: 準標準FKボーン（足D）のキーを通常FKボーンへ転送。
+- **グルーブ → センター**: モーションに「グルーブ」があるのにモデルに存在しない場合、自動的に「センター」ジョイントへ移動・回転を合成。
+- **腰 → 下半身**: モーションに「腰」があるのにモデルに存在しない場合、自動的に「下半身」ジョイントへ回転を適用。
+- **足IK親 → 足IK**: モーションに「足IK親」があるのにモデルに存在しない場合、足IKジョイントへ位置オフセットを合算。
+- **足D → 足FK**: 準標準FKボーン（足D）のキーを通常FKボーンへ転送。
 
 ---
 

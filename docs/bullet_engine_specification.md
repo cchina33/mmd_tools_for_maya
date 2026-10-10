@@ -63,8 +63,8 @@ PMXモデルでは、最大16個の衝突グループを定義可能です。
 - **衝突マスク (`collision_mask`) の仕様**:
   - 16bit符号なし整数（`uint16_t` / `ushort`、`0x0000` 〜 `0xFFFF`）。
   - **各ビット（ビット0〜15）は「衝突を許可する相手グループ」を表すフラグそのもの**です。
-    - 例: ビット $k$ が `1` $\rightarrow$ グループ $k+1$（内部値 $k$）と衝突する。
-    - 例: ビット $k$ が `0` $\rightarrow$ グループ $k+1$ とは衝突しない（すり抜ける）。
+    - 例: ビット $k$ が `1` → グループ $k+1$（内部値 $k$）と衝突する。
+    - 例: ビット $k$ が `0` → グループ $k+1$ とは衝突しない（すり抜ける）。
   - **重要**: PMXの内部バイナリデータはすでに「衝突許可ビット」となっているため、**ビット反転（`~`）を行わずにそのまま Bullet のブロードフェーズマスクへ渡します**。
 - **Bullet への登録**:
   ```cpp
@@ -107,7 +107,7 @@ PMXモデルのジョイントは、すべて 6自由度スプリング拘束（
 
 ## 5. Maya 座標系変換・アニメーション連携仕様
 
-### 5-1. 座標系変換規則 (MMD $\leftrightarrow$ Maya)
+### 5-1. 座標系変換規則 (MMD ↔ Maya)
 MMDとMayaはいずれも右手系（Y-up）ですが、Z軸の向き規則に対応するため以下の変換を適用します。
 - 位置: $(X \times \text{scale}, Y \times \text{scale}, -Z \times \text{scale})$
 - 回転オイラー角: $(\text{degX}, \text{degY}, -\text{degZ})$
@@ -135,9 +135,9 @@ MMDとMayaはいずれも右手系（Y-up）ですが、Z軸の向き規則に�
 ### 5-4. OpenMaya マトリクス逆算によるキーフレーム書き込み
 剛体の物理演算結果をボーンへ書き込む際、Maya特有のジョイント属性を考慮した厳密な逆算を行います。
 1. **目標ワールド回転の逆算**:
-   $$Q_{\text{target}} = Q_{\text{rb\_current}} \cdot Q_{\text{offset}}^{-1}$$
+   $$Q_{\text{target}} = Q_{\text{rbCurrent}} \cdot Q_{\text{offset}}^{-1}$$
 2. **親空間ローカル回転の算出**:
-   $$M_{\text{local}} = M_{\text{target}} \cdot M_{\text{parent\_inclusive}}^{-1}$$
+   $$M_{\text{local}} = M_{\text{target}} \cdot M_{\text{parentInclusive}}^{-1}$$
 3. **jointOrient / rotateAxis の相殺**:
    $$Q_{\text{bone}} = Q_{\text{jointOrient}}^{-1} \cdot Q_{\text{local}} \cdot Q_{\text{rotateAxis}}^{-1}$$
 4. **階層深度ソート (親から子へ)**:
