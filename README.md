@@ -20,9 +20,10 @@ Autodesk Maya 上で MMD（PMX / PMD / DirectX .x）形式のモデルやアク�
 - **MMDモデル（PMX / PMD / アクセサリ .x）をワンクリックでMayaに綺麗に読み込み**:
   - 面倒な設定なしで、キャラクターのメッシュ、ボーン（骨組み）、ウェイト、テクスチャ、表情モーフまで自動でMaya内に正しく展開します。
   - **PMX (2.0 / 2.1)**: 最新のMMDモデルをフルサポート。
-  - **PMD (旧形式)**: 初期のMMDモデルも読み込めます。
-    > [!NOTE]
-    > **【PMDモデルの注意点】**: PMDは初期の古い規格のため、髪やスカートなどを揺らす**物理演算（剛体・ジョイント）には対応していません**。物理演算を利用したい場合は、事前に「PMXエディタ」等でPMX形式に保存し直してから読み込んでください（ボーンの動きや表情モーフはそのまま読み込めます）。
+- **PMD (旧形式)**: 初期のMMDモデルも読み込めます。
+
+  > [!NOTE]
+  > **【PMDモデルの注意点】**: PMDは髪やスカートなどを揺らす**物理演算（剛体・ジョイント）には対応していません**。物理演算を利用したい場合は、事前に「PMXエディタ」等でPMX形式に保存し直してから読み込んでください（ボーンの動きや表情モーフはそのまま読み込めます）。
   - **DirectX (.x)**: 武器やステージなどのアクセサリ小物も手軽に取り込めます。
 
 - **本家MMDの見た目・色合いをそのまま再現する「MMD専用シェーダー」**:
@@ -125,7 +126,7 @@ C:\Users\<ユーザー名>\Documents\maya\<バージョン>\plug-ins\
 | [model_import_specification.md](docs/model_import_specification.md)                   | **モデルインポート・エクスポート仕様**: PMX 2.0/2.1、PMD、DirectX .x、SDEFスキニング、マテリアル・テクスチャ変換                                                         |
 | [vmd_import_specification.md](docs/vmd_import_specification.md)                       | **VMDモーションインポート仕様**: ベジェ補間曲線計算、IKベイク、カメラ・照明・音声インポート、オイラー角最短補正                                                          |
 | [mmd_material_plugin_specification.md](docs/mmd_material_plugin_specification.md)     | **MMDオリジナルシェーダープラグイン仕様**: Viewport 2.0 対応 C++ プラグイン (`.mll`)、`mmdMaterial` ノードアトリビュート定義、スフィアUV動的算出、Maya `file` ノード連携 |
-| [plugin_technical_guide.md](docs/plugin_technical_guide.md)                           | **プラグイン技術解説・シェーディング再現仕様**: 各Pythonスクリプト役割解説、Toon・スフィアマップ高精度再現、内部構造ガイド |
+| [plugin_technical_guide.md](docs/plugin_technical_guide.md)                           | **プラグイン技術解説・シェーディング再現仕様**: 各Pythonスクリプト役割解説、Toon・スフィアマップ高精度再現、内部構造ガイド                                               |
 
 ---
 
