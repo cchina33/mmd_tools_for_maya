@@ -11,7 +11,7 @@
 Autodesk Maya 上で MMD（PMX / PMD / DirectX .x）形式のモデルやアクセサリのインポート・エクスポート、VMDモーション・カメラ・音声のインポート、HumanIKリグ定義、モデル構造の一括解析・辞書登録、および物理演算ベイクを行うための Maya 統合拡張プラグインです。
 
 > [!NOTE]
-> 本バージョン（**v1.0.2**）は、PMX二重構造透過材質（首影・頬線など）の完全透過描画、MMDシェーダーアサイン時の受光色・環境光・明度適正化、PMX詳細解析・一括保存・辞書登録機能、HumanIK脚部姿勢安定化、二重IK競合解除、物理演算パス最適化等の最新機能を統合した安定版です。モデルのインポート、モーション適用、物理演算ベイク等の一連のワークフローが動作確認されています。モデルのエクスポートの動作確認は未検証です。
+> 本バージョン（**v1.0.2**）は、PMX二重構造透過材質（首影・頬線など）の完全透過描画、MMDシェーダーアサイン時の受光色・環境光・明度適正化、PMX詳細解析・一括保存・辞書登録機能、HumanIK脚部姿勢安定化、二重IK競合解除、物理演算パス最適化等の最新機能を統合した安定版です。モデルのインポート、モーション適用、物理演算ベイク等の一連のワークフローが動作確認されています。モデルのエクスポートの動作確認は未検証です。表情操作（モーフ）時のライティングが不安定です。
 
 ---
 
@@ -125,6 +125,7 @@ C:\Users\<ユーザー名>\Documents\maya\<バージョン>\plug-ins\
 | [model_import_specification.md](docs/model_import_specification.md)                   | **モデルインポート・エクスポート仕様**: PMX 2.0/2.1、PMD、DirectX .x、SDEFスキニング、マテリアル・テクスチャ変換                                                         |
 | [vmd_import_specification.md](docs/vmd_import_specification.md)                       | **VMDモーションインポート仕様**: ベジェ補間曲線計算、IKベイク、カメラ・照明・音声インポート、オイラー角最短補正                                                          |
 | [mmd_material_plugin_specification.md](docs/mmd_material_plugin_specification.md)     | **MMDオリジナルシェーダープラグイン仕様**: Viewport 2.0 対応 C++ プラグイン (`.mll`)、`mmdMaterial` ノードアトリビュート定義、スフィアUV動的算出、Maya `file` ノード連携 |
+| [plugin_technical_guide.md](docs/plugin_technical_guide.md)                           | **プラグイン技術解説・シェーディング再現仕様**: 各Pythonスクリプト役割解説、Toon・スフィアマップ高精度再現、内部構造ガイド |
 
 ---
 
