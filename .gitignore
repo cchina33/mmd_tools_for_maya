@@ -17,9 +17,10 @@ tes_model/
 _old/
 scratch/
 
-# キャッシュ・自動生成構造データ
+# キャッシュ・自動生成構造データ・ユーザー解析データ
 asset/last_imported_structure.json
 last_imported_structure.json
+asset/User_pmx_data/
 
 # ローカル設定ファイル
 asset/khatangton.txt
@@ -41,7 +42,18 @@ __pycache__/
 Thumbs.db
 desktop.ini
 
-# C++ ビルド中間生成物・旧バックアップ (※同梱DLL bin/mmd_xpbd.dll は除外しない)
+# Visual Studio / IDE 一時ファイル
+.vs/
+*.VC.db
+*.sln.docstates
+
+# C++ ビルド中間生成物・旧バックアップ (※同梱DLL bin/mmd_xpbd.dll, mmd_material.mll は除外しない)
+build/
+**/build/
+mmd_material_plugin/build/
+x64/
+Debug/
+Release/
 *_old_*.dll
 *.obj
 *.lib

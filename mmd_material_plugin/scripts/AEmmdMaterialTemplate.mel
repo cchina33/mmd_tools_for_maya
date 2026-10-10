@@ -1,0 +1,44 @@
+// ==============================================================================
+// AEmmdMaterialTemplate.mel
+// MMDマテリアル (mmdMaterial) 用 Attribute Editor / Property Editor テンプレート
+// ==============================================================================
+
+global proc AEmmdMaterialTemplate( string $nodeName )
+{
+    editorTemplate -beginScrollLayout;
+
+    editorTemplate -beginLayout "MMD 基本カラー (Color / Diffuse)" -collapse 0;
+        editorTemplate -addControl "color";
+        editorTemplate -addControl "transparency";
+        editorTemplate -addControl "diffuse";
+        editorTemplate -addControl "ambientColor";
+        editorTemplate -addSeparator;
+        editorTemplate -addControl "diffuseColor";
+        editorTemplate -addControl "diffuseAlpha";
+    editorTemplate -endLayout;
+
+    editorTemplate -beginLayout "MMD 反射・光沢 (Specular)" -collapse 0;
+        editorTemplate -addControl "specularColor";
+        editorTemplate -addControl "specularPower";
+        editorTemplate -addControl "cosinePower";
+        editorTemplate -addControl "incandescence";
+    editorTemplate -endLayout;
+
+    editorTemplate -beginLayout "MMD スフィア・Toon設定" -collapse 0;
+        editorTemplate -addControl "sphereMode";
+        editorTemplate -addControl "toonMode";
+    editorTemplate -endLayout;
+
+    editorTemplate -beginLayout "MMD 輪郭線 (Edge)" -collapse 0;
+        editorTemplate -addControl "edgeEnable";
+        editorTemplate -addControl "edgeColor";
+        editorTemplate -addControl "edgeSize";
+    editorTemplate -endLayout;
+
+    // Maya標準アトリビュート（ノード管理・接続等）の自動レイアウト
+    AEdependNodeTemplate $nodeName;
+
+    editorTemplate -addExtraControls;
+
+    editorTemplate -endScrollLayout;
+}

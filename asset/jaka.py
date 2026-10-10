@@ -405,7 +405,7 @@ def safe_node_name(name, name_e=None, prefix="node", index=None):
     戻り値:
         str: Mayaノード名として有効な英数字・アンダースコア文字列
     """
-    # 1. 英名（name_e）が有効に定義されている場合は最優先で検討
+    # 英名（name_e）が有効に定義されている場合は最優先で検討
     if name_e:
         clean_e = str(name_e).strip()
         # 英数字とアンダースコアに正規化
@@ -413,10 +413,15 @@ def safe_node_name(name, name_e=None, prefix="node", index=None):
         clean_e = re.sub(r'_+', '_', clean_e).strip('_')
         # 有効な文字列が得られた場合
         if clean_e and not set(clean_e).issubset({'_'}):
+            # 数字のみや極端に短い場合は衝突を避けるためインデックスまたはプレフィックスを確実に付加
+            if clean_e.isdigit() or len(clean_e) <= 2:
+                if index is not None:
+                    return f"{prefix}_{index:03d}_{clean_e}"
+                return f"{prefix}_{clean_e}"
             if clean_e[0] in '0123456789':
                 clean_e = f"{prefix}_{clean_e}"
-            if index is not None:
-                return f"{clean_e}_{index:03d}" if len(clean_e) <= 3 else clean_e
+            if index is not None and len(clean_e) <= 4:
+                return f"{clean_e}_{index:03d}"
             return clean_e
 
     # 日本語辞書および仮名によるローマ字変換

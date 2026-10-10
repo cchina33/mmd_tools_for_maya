@@ -4,10 +4,11 @@ MMD Tools for Maya - モダン統合 GUI モジュール (PySide6 / PySide2 対�
 
 タブ型GUI
 - タブ1: MMD → Maya (インポート)
-- タブ2: モーション(VMD)
-- タブ3: Maya → MMD (エクスポート)
-- タブ4: HumanIK 管理
-- タブ5: クリーンアップ
+- タブ2: MMDシェーダー
+- タブ3: モーション(VMD)
+- タブ4: Maya → MMD (エクスポート)
+- タブ5: HumanIK 管理
+- タブ6: クリーンアップ
 - 実行時ログウィンドウ (リアルタイム進捗表示)
 """
 
@@ -66,6 +67,18 @@ except Exception:
         except Exception:
             export_pmx_structure = None
             check_and_prompt_user_dict = None
+
+# MMシェーダープラグイン用セットアップモジュールのインポート
+try:
+    from ..mmd_material_plugin.scripts import mmd_material_setup
+except Exception:
+    try:
+        from mmd_material_plugin.scripts import mmd_material_setup
+    except Exception:
+        try:
+            import mmd_material_setup
+        except Exception:
+            mmd_material_setup = None
 
 # グローバルウィンドウ参照保持用（ガベージコレクション防止）
 _main_window_instance = None
@@ -258,12 +271,18 @@ class ImportTabWidget(QWidget):
         h_file_input.addWidget(self.btn_clear_file)
         file_layout.addLayout(h_file_input)
 
-        # モデル解析・データ一括保存および未登録ボーン辞書登録ボタン
+        # モデルチェック・データ一括保存および未登録ボーン辞書登録ボタン
         h_tool_row = QHBoxLayout()
-        self.btn_analyze_model = QPushButton("PMXモデル解析・データ一括保存 (材質/ボーン/モーフ/剛体/Joint)")
+        self.btn_analyze_model = QPushButton("PMXモデルチェック・データ一括保存 (材質/ボーン/モーフ/剛体/Joint)")
         self.btn_analyze_model.setToolTip("選択中PMXの全要素（材質・ボーン・モーフ・剛体・Joint）をJSONに一括保存し、未登録漢字のユーザー辞書登録を行います。")
         self.btn_analyze_model.clicked.connect(self._analyze_and_save_structure)
         h_tool_row.addWidget(self.btn_analyze_model)
+
+        self.btn_morph_ui = QPushButton("表情操作 (モーフ,ベータ版)")
+        self.btn_morph_ui.setToolTip("MMD本家風の表情操作パネルを開き、目・リップ・まゆ・その他のモーフを操作・登録します。")
+        self.btn_morph_ui.clicked.connect(self._open_morph_window)
+        h_tool_row.addWidget(self.btn_morph_ui)
+
         file_layout.addLayout(h_tool_row)
 
         layout.addWidget(file_box)
@@ -300,7 +319,7 @@ class ImportTabWidget(QWidget):
         h_mat = QHBoxLayout()
         h_mat.addWidget(QLabel("マテリアル種別:"))
         self.cbb_material = QComboBox()
-        self.cbb_material.addItems(["マテリアルなし", "Blinn", "Phong", "Lambert", "StandardSurface (Maya 2022+)"])
+        self.cbb_material.addItems(["マテリアルなし", "Blinn", "Phong", "Lambert", "StandardSurface (Maya 2022+)", "MMD Shader (オリジナル,ベータ版)"])
         h_mat.addWidget(self.cbb_material)
         h_mat.addStretch()
         scale_layout.addLayout(h_mat)
@@ -423,7 +442,7 @@ class ImportTabWidget(QWidget):
             pass
 
         # デフォルト値
-        self.le_scale.setText("8")
+        self.le_scale.setText("8.0") # インポート時 スケールサイズ
         self.cb_create_bones.setChecked(True)
         self.cb_create_physics.setChecked(True)
         self.cb_create_bs.setChecked(True)
@@ -516,16 +535,15 @@ class ImportTabWidget(QWidget):
             shadow_mode = self.get_shadow_mode() if self.cb_enable_toon.isChecked() else 0
             fixed_count = pmxpaimaya.fix_toon_shading_in_scene(shadow_mode=shadow_mode)
             mode_names = ["セルフ影なし", "モード1 (標準セルフ影)", "モード2 (高精細セルフ影)"]
-            mc.inViewMessage(amg=f'<span style="color:#2ecc71;">MMD Tools for Maya:</span> Toon最適化完了（{mode_names[shadow_mode]}）。', pos='topCenter', fade=True)
+            mc.inViewMessage(amg=f'<span style="color:#2ecc71;">MMD Tools for Maya:</span> Toon設定完了（{mode_names[shadow_mode]}）。', pos='topCenter', fade=True)
             QMessageBox.information(
                 self,
-                "Toon修復完了",
-                f"{fixed_count} 個の要素を最適化しました。\n"
+                "Toon設定完了",
+                f"{fixed_count} 個の要素を設定しました。\n"
                 f"影設定: {mode_names[shadow_mode]}\n"
-                "視点移動によるブレが解消され、MMD互換のToon描画が適用されました。"
             )
         except Exception as e:
-            QMessageBox.warning(self, "エラー", f"Toonシェーディング修復中にエラーが発生しました:\n{e}")
+            QMessageBox.warning(self, "エラー", f"Toonシェーディング設定中にエラーが発生しました:\n{e}")
 
     def _analyze_and_save_structure(self):
         """選択中モデルの材質、ボーン、モーフ、剛体、Jointを一括保存し、未登録ボーン辞書チェックを実行"""
@@ -560,6 +578,19 @@ class ImportTabWidget(QWidget):
         except Exception as e:
             QMessageBox.warning(self, "解析エラー", f"PMXモデルの解析中にエラーが発生しました:\n{e}")
 
+    def _open_morph_window(self):
+        """MMD本家風の表情操作ウィンドウを開く"""
+        try:
+            from .morph_window import show_morph_window
+        except Exception:
+            try:
+                from morph_window import show_morph_window
+            except Exception as e:
+                QMessageBox.warning(self, "エラー", f"表情操作モジュールの読み込みに失敗しました:\n{e}")
+                return
+
+        show_morph_window(parent=get_maya_main_window())
+
     def _execute_import(self):
         file_path = self.le_file_path.text().strip()
         if not os.path.exists(file_path):
@@ -568,17 +599,20 @@ class ImportTabWidget(QWidget):
 
         # PMX事前チェック & 未登録ボーン辞書確認
         if file_path.lower().endswith('.pmx') and check_and_prompt_user_dict:
+            model_filename = os.path.basename(file_path)
+            print(f"[PMXチェック] モデルファイル（{model_filename}）の未登録漢字およびユーザー辞書チェックを実行中...")
             try:
                 check_and_prompt_user_dict(self.parent_window or self, file_path)
             except Exception as e:
-                print(f"[PMX解析] 辞書チェック中に軽微な警告: {e}")
+                print(f"[PMXチェック] 辞書チェック中に軽微な警告: {e}")
 
         # 材質・ボーン・モーフ・剛体・Joint の一括保存
         if file_path.lower().endswith('.pmx') and export_pmx_structure:
+            print(f"[PMXチェック] モデル構成要素（材質/ボーン/モーフ/剛体/Joint）の一括保存を実行中...")
             try:
                 export_pmx_structure(file_path)
             except Exception as e:
-                print(f"[PMX解析] 一括保存中に軽微な警告: {e}")
+                print(f"[PMXチェック] 一括保存中に軽微な警告: {e}")
 
         try:
             scale = float(self.le_scale.text())
@@ -597,6 +631,14 @@ class ImportTabWidget(QWidget):
         create_physics = self.cb_create_physics.isChecked()
 
         def full_import_task():
+            if file_path.lower().endswith('.pmx'):
+                print("==================================================")
+                print(f"[PMXチェック] モデルファイル: {os.path.basename(file_path)}")
+                print("  - 未登録漢字およびユーザー辞書の照合: 完了")
+                print("  - モデル構成要素（材質/ボーン/モーフ/剛体/Joint）データ保存: 完了")
+                print("==================================================")
+            import importlib
+            importlib.reload(pmxpaimaya)
             import_func = getattr(pmxpaimaya, 'import_pmx', pmxpaimaya.sang)
             res = import_func(
                 file_path, scale, split_poly, create_bs, create_bones, material_type, create_light, set_untone_mapped, enable_toon, shadow_mode=shadow_mode
@@ -1459,6 +1501,13 @@ class VmdImportTabWidget(QWidget):
         h_action.addWidget(self.cb_close_on_finish)
         h_action.addStretch()
 
+        # 表情操作 (モーフ) ボタン
+        self.btn_morph_ui = QPushButton("表情操作 (モーフ)")
+        self.btn_morph_ui.setFixedHeight(46)
+        self.btn_morph_ui.setToolTip("MMD本家風の表情操作パネルを開き、目・リップ・まゆ・その他のモーフを操作・登録します。")
+        self.btn_morph_ui.clicked.connect(self._open_morph_window)
+        h_action.addWidget(self.btn_morph_ui)
+
         # モーションインポート実行ボタン
         self.btn_execute = QPushButton("モーションをインポート")
         self.btn_execute.setProperty("class", "primary")
@@ -1485,6 +1534,19 @@ class VmdImportTabWidget(QWidget):
             last_audio = mc.optionVar(q="MMDToolsForMaya_LastAudioPath")
             if last_audio and os.path.exists(last_audio):
                 self.le_audio_path.setText(last_audio)
+
+    def _open_morph_window(self):
+        """MMD本家風の表情操作ウィンドウを開く"""
+        try:
+            from .morph_window import show_morph_window
+        except Exception:
+            try:
+                from morph_window import show_morph_window
+            except Exception as e:
+                QMessageBox.warning(self, "エラー", f"表情操作モジュールの読み込みに失敗しました:\n{e}")
+                return
+
+        show_morph_window(parent=get_maya_main_window())
 
     def _refresh_models(self):
         self.cbb_target_model.clear()
@@ -2143,7 +2205,7 @@ class CleanupTabWidget(QWidget):
         opt_layout = QVBoxLayout(opt_box)
         opt_layout.setSpacing(10)
 
-        self.cb_delete_lights = QCheckBox("MMDライトも削除する (mmd_lighting_grp)")
+        self.cb_delete_lights = QCheckBox("MMDライトも削除する (Mmd_Lighting_Grp)")
         del_lights_default = True
         if mc.optionVar(exists="MMDToolsForMaya_DeleteLightsOnClear"):
             del_lights_default = bool(mc.optionVar(q="MMDToolsForMaya_DeleteLightsOnClear"))
@@ -2261,7 +2323,7 @@ class CleanupTabWidget(QWidget):
         if delete_audio:
             items.append("MMDオーディオ (BGM)")
         if delete_lights:
-            items.append("MMDライト (mmd_lighting_grp)")
+            items.append("MMDライト (Mmd_Lighting_Grp)")
         if delete_unused:
             items.append("未使用マテリアル (Delete Unused Nodes)")
 
@@ -2305,6 +2367,241 @@ class CleanupTabWidget(QWidget):
             QMessageBox.critical(self, "エラー", f"MMD全削除中にエラーが発生しました:\n{e}")
 
 # ==============================================================================
+# シェーダー設定タブ (mmdMaterial 管理)
+# ==============================================================================
+class MaterialTabWidget(QWidget):
+    """MMDシェーダー (mmdMaterial) のアサイン・管理タブ"""
+    def __init__(self, parent=None):
+        super(MaterialTabWidget, self).__init__(parent)
+        self.parent_window = parent
+        self._init_ui()
+
+    def _init_ui(self):
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+
+        # スクロールエリア（小画面でも見切れを完全に防止）
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+
+        content_widget = QWidget()
+        layout = QVBoxLayout(content_widget)
+        layout.setSpacing(12)
+        layout.setContentsMargins(14, 14, 14, 14)
+
+        # 1. プラグイン状態グループ
+        plugin_box = QGroupBox("MMDシェーダープラグイン状態")
+        plugin_layout = QHBoxLayout(plugin_box)
+        self.lbl_plugin_status = QLabel()
+        self.btn_reload_plugin = QPushButton("プラグイン再読み込み")
+        self.btn_reload_plugin.setFixedWidth(160)
+        self.btn_reload_plugin.clicked.connect(self._reload_plugin)
+        plugin_layout.addWidget(self.lbl_plugin_status)
+        plugin_layout.addStretch()
+        plugin_layout.addWidget(self.btn_reload_plugin)
+        layout.addWidget(plugin_box)
+
+        # 2. 対象モデル・メッシュ指定グループ
+        target_box = QGroupBox("アサイン対象モデル / メッシュの選択")
+        target_layout = QVBoxLayout(target_box)
+        target_layout.setSpacing(8)
+
+        h_model = QHBoxLayout()
+        h_model.addWidget(QLabel("対象:"))
+        self.cbb_target = QComboBox()
+        self.btn_refresh = QPushButton("更新")
+        self.btn_refresh.setFixedWidth(80)
+        self.btn_refresh.clicked.connect(self._refresh_targets)
+        h_model.addWidget(self.cbb_target)
+        h_model.addWidget(self.btn_refresh)
+        target_layout.addLayout(h_model)
+
+        lbl_target_info = QLabel("※「現在選択中のオブジェクト」を選ぶと、ビューポートで選択中の全メッシュが対象になります。")
+        lbl_target_info.setStyleSheet("color: #999; font-size: 12px;")
+        target_layout.addWidget(lbl_target_info)
+        layout.addWidget(target_box)
+
+        # 3. ツール連携 ＆ MMDライティング（横並び統合グループ）
+        tool_box = QGroupBox("ツール連携 & MMDライティング")
+        tool_layout = QVBoxLayout(tool_box)
+        tool_layout.setSpacing(8)
+
+        h_tools = QHBoxLayout()
+        h_tools.setSpacing(10)
+
+        self.btn_open_hypershade = QPushButton("Hypershade を開く")
+        self.btn_open_hypershade.setFixedHeight(34)
+        self.btn_open_hypershade.setToolTip("Hypershade のノード作成ツリー [MmdMat] > [Material] から直接ノードを作成できます。")
+        self.btn_open_hypershade.setStyleSheet(
+            "QPushButton { background-color: #383838; color: #e0e0e0; border: 1px solid #555; border-radius: 4px; font-size: 13px; }"
+            "QPushButton:hover { background-color: #484848; color: #ffffff; border-color: #777; }"
+        )
+        self.btn_open_hypershade.clicked.connect(self._open_hypershade)
+        h_tools.addWidget(self.btn_open_hypershade)
+
+        self.btn_create_light = QPushButton("MMD標準ライトを作成 / 最適化")
+        self.btn_create_light.setFixedHeight(34)
+        self.btn_create_light.setToolTip("MMD公式準拠の平行光源と環境光を作成し、白飛びを防止してビューポート描画を最適化します。")
+        self.btn_create_light.setStyleSheet(
+            "QPushButton { background-color: #383838; color: #e0e0e0; border: 1px solid #555; border-radius: 4px; font-size: 13px; }"
+            "QPushButton:hover { background-color: #484848; color: #ffffff; border-color: #777; }"
+        )
+        self.btn_create_light.clicked.connect(self._create_mmd_lighting)
+        h_tools.addWidget(self.btn_create_light)
+
+        tool_layout.addLayout(h_tools)
+
+        lbl_tool_info = QLabel("※Hypershadeでのノード作成や、MMD標準ライトによるビューポート発色・陰影の最適化を行えます。")
+        lbl_tool_info.setStyleSheet("color: #999; font-size: 12px;")
+        tool_layout.addWidget(lbl_tool_info)
+        layout.addWidget(tool_box)
+
+        # 4. 実行ボタングループ
+        act_box = QGroupBox("アサイン実行")
+        act_layout = QVBoxLayout(act_box)
+        act_layout.setSpacing(8)
+
+        lbl_act_info = QLabel("※既存テクスチャ（fileノード）は自動で引き継がれ、スフィア・Toon未設定時も安全に処理されます。")
+        lbl_act_info.setStyleSheet("color: #aaa; font-size: 12px;")
+        act_layout.addWidget(lbl_act_info)
+
+        self.btn_assign = QPushButton("MMDシェーダーを選択モデルにアサイン")
+        self.btn_assign.setFixedHeight(46)
+        self.btn_assign.setStyleSheet(
+            "QPushButton { background-color: #1e4d75; color: #e6f3ff; border: 1px solid #2d6ca3; border-radius: 4px; font-weight: bold; font-size: 15px; }"
+            "QPushButton:hover { background-color: #276396; color: #ffffff; border-color: #438fcf; }"
+            "QPushButton:pressed { background-color: #153856; }"
+        )
+        self.btn_assign.clicked.connect(self._execute_assign)
+        act_layout.addWidget(self.btn_assign)
+
+        self.lbl_result = QLabel("")
+        self.lbl_result.setStyleSheet("color: #52b7ff; font-size: 13px; padding: 2px;")
+        act_layout.addWidget(self.lbl_result)
+
+        layout.addWidget(act_box)
+        layout.addStretch()
+
+        scroll.setWidget(content_widget)
+        main_layout.addWidget(scroll)
+
+        self._check_plugin_status()
+        self._refresh_targets()
+
+    def _check_plugin_status(self):
+        """プラグインのロード状況を確認しラベルを更新"""
+        loaded = False
+        try:
+            if mc.pluginInfo("mmd_material.mll", query=True, loaded=True):
+                loaded = True
+        except Exception:
+            pass
+
+        if loaded:
+            self.lbl_plugin_status.setText("<span style='color:#55ff77; font-weight:bold;'>● プラグイン読み込み済み (mmd_material.mll)</span>")
+        else:
+            self.lbl_plugin_status.setText("<span style='color:#ff7777; font-weight:bold;'>○ プラグイン未読み込み</span>")
+
+    def _reload_plugin(self):
+        """プラグインを強制リロード"""
+        if mmd_material_setup:
+            success = mmd_material_setup.ensure_plugin_loaded()
+            self._check_plugin_status()
+            if success:
+                QMessageBox.information(self, "プラグイン", "MMDシェーダープラグインが正常にロードされました。")
+            else:
+                QMessageBox.warning(self, "プラグイン", "MMDシェーダープラグインのロードに失敗しました。")
+        else:
+            QMessageBox.warning(self, "エラー", "mmd_material_setup モジュールが見つかりません。")
+
+    def _refresh_targets(self):
+        """対象モデル一覧コンボボックスを更新"""
+        self.cbb_target.clear()
+        self.cbb_target.addItem("現在選択中のオブジェクト (メッシュ / モデル)", None)
+        try:
+            models = vmdpaimaya.get_available_mmd_models()
+            for m in models:
+                self.cbb_target.addItem(f"モデル: {m}", m)
+        except Exception:
+            pass
+
+    def _open_hypershade(self):
+        """MayaのHypershadeウィンドウを開く（コールバックを適用した上で表示）"""
+        if mmd_material_setup:
+            try:
+                mmd_material_setup.ensure_plugin_loaded()
+                mmd_material_setup.setup_hypershade_callbacks()
+            except Exception:
+                pass
+
+        try:
+            mel.eval("HypershadeWindow;")
+        except Exception as e:
+            QMessageBox.warning(self, "Hypershade", f"Hypershadeを開けませんでした:\n{e}")
+
+    def _create_mmd_lighting(self):
+        """MMD標準ライティングを作成または最適化"""
+        if mmd_material_setup:
+            try:
+                grp = mmd_material_setup.ensure_mmd_lighting()
+                if grp:
+                    QMessageBox.information(
+                        self,
+                        "ライティング",
+                        "MMD標準ライティングを作成・適用しました。\nビューポートのライティングが最適化されました。"
+                    )
+                else:
+                    QMessageBox.warning(self, "ライティング", "ライティングの作成に失敗しました。")
+            except Exception as e:
+                QMessageBox.warning(self, "エラー", f"ライト作成中にエラーが発生しました:\n{e}")
+        else:
+            QMessageBox.warning(self, "エラー", "mmd_material_setup モジュールが見つかりません。")
+
+    def _execute_assign(self):
+        """選択モデルまたはメッシュに mmdMaterial をアサイン"""
+        if not mmd_material_setup:
+            QMessageBox.critical(self, "エラー", "mmd_material_setup モジュールが利用できません。")
+            return
+
+        selected_model = self.cbb_target.currentData()
+        inherit_tex = True
+
+        targets = None
+        if selected_model:
+            targets = [selected_model]
+        else:
+            targets = mc.ls(selection=True, long=True) or []
+            if not targets:
+                QMessageBox.warning(self, "警告", "アサイン対象のオブジェクトまたはメッシュをビューポートで選択してください。")
+                return
+
+        try:
+            results = mmd_material_setup.assign_mmd_material_to_model(
+                targets=targets,
+                inherit_textures=inherit_tex
+            )
+
+            if results:
+                count = len(results)
+                msg = f"MMDシェーダーをアサインしました ({count} 個のシェーダー設定完了)。"
+                self.lbl_result.setText(f"<span style='color:#55ff77;'>✓ {msg}</span>")
+                mc.inViewMessage(
+                    amg=f'<span style="color:#52b7ff;">MMD Tools for Maya:</span> {msg}',
+                    pos='topCenter',
+                    fade=True
+                )
+            else:
+                msg = "アサイン対象のメッシュまたはシェーダーが見つかりませんでした。"
+                self.lbl_result.setText(f"<span style='color:#ffaa55;'>! {msg}</span>")
+                QMessageBox.information(self, "情報", msg)
+
+        except Exception as e:
+            err_msg = f"シェーダーアサイン中にエラーが発生しました:\n{e}"
+            self.lbl_result.setText(f"<span style='color:#ff7777;'>✕ エラー</span>")
+            QMessageBox.critical(self, "エラー", err_msg)
+
+# ==============================================================================
 # メインウィンドウ (タブ統合)
 # ==============================================================================
 class MmdMayaMainWindow(QWidget):
@@ -2314,14 +2611,14 @@ class MmdMayaMainWindow(QWidget):
             parent = get_maya_main_window()
         super(MmdMayaMainWindow, self).__init__(parent)
         
-        self.setWindowTitle("MMD Tools for Maya v1.0.1")
+        self.setWindowTitle("MMD Tools for Maya v1.0.2")
         self.setObjectName("MmdToolsForMayaMainWindow")
 
         # メインウィンドウサイズ設定 (視認性向上・ボタン文字見切れ防止のワイドレイアウト)
         self.resize(880, 820)
         self.setMinimumSize(820, 640)
-        # Mayaの子ウィンドウとして独立させつつ前面表示
-        self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
+        # Mayaの子ウィンドウとして独立表示（他アプリより前面固定にはしない）
+        self.setWindowFlags(Qt.Window)
         self.setStyleSheet(MODERN_STYLE)
 
         main_layout = QVBoxLayout(self)
@@ -2330,6 +2627,7 @@ class MmdMayaMainWindow(QWidget):
         # タブコンテナ
         self.tabs = QTabWidget()
         self.tab_import = ImportTabWidget(self)
+        self.tab_material = MaterialTabWidget(self)
         self.tab_vmd = VmdImportTabWidget(self)
         self.tab_physics = PhysicsTabWidget(self)
         self.tab_export = ExportTabWidget(self)
@@ -2337,6 +2635,7 @@ class MmdMayaMainWindow(QWidget):
         self.tab_cleanup = CleanupTabWidget(self)
 
         self.tabs.addTab(self.tab_import, "MMD → Maya (インポート)")
+        self.tabs.addTab(self.tab_material, "MMDシェーダー")
         self.tabs.addTab(self.tab_vmd, "モーション (VMD)")
         self.tabs.addTab(self.tab_physics, "物理演算")
         self.tabs.addTab(self.tab_export, "Maya → MMD (エクスポート)")
@@ -2346,7 +2645,7 @@ class MmdMayaMainWindow(QWidget):
         main_layout.addWidget(self.tabs)
 
         # フッタークレジット
-        footer = QLabel("MMD Tools for Maya v1.0.1 | Developer: Hina33")
+        footer = QLabel("MMD Tools for Maya v1.0.2 | Developer: Hina33")
         footer.setAlignment(Qt.AlignCenter)
         footer.setStyleSheet("color: #777; font-size: 13px; padding: 4px;")
         main_layout.addWidget(footer)

@@ -1,0 +1,120 @@
+// ==============================================================================
+// MMD Material Hypershade Integration Script
+// Hypershade のノード作成ツリーに独自カテゴリ MmdMat > Material を登録し、
+// Maya 標準の Surface カテゴリから mmdMaterial を除外するためのコールバック群
+// ==============================================================================
+
+// Maya標準のSurfaceツリーから独自分類のノードを除外するための分類識別子を返却
+global proc string mmdMaterial_RenderNodeClassificationCallback()
+{
+    return "rendernode/MmdMat";
+}
+
+// Hypershade の Create メニューに独自サブメニューを追加
+global proc string mmdMaterial_HyperShadePanelBuildCreateSubMenuCallback()
+{
+    return "rendernode/MmdMat";
+}
+
+// プラグイン変更時の判定コールバック
+global proc int mmdMaterial_HyperShadePanelPluginChangeCallback(string $classification, string $changeType)
+{
+    if (startsWith($classification, "rendernode/MmdMat"))
+    {
+        return 1;
+    }
+    return 0;
+}
+
+global proc int mmdMaterial_CreateRenderNodePluginChangeCallback(string $classification)
+{
+    if (startsWith($classification, "rendernode/MmdMat"))
+    {
+        return 1;
+    }
+    return 0;
+}
+
+// Hypershade のノード作成ツリー (TreeLister) に MmdMat > Material を追加構築
+global proc mmdMaterial_BuildRenderNodeTreeListerContentCallback(
+    string $renderNodeTreeLister,
+    string $postCommand,
+    string $filterString)
+{
+    string $filterClassArray[];
+    $filterClassArray = stringToStringArray($filterString, " ");
+
+    if (size($filterClassArray) == 0)
+    {
+        addToRenderNodeTreeLister(
+            $renderNodeTreeLister,
+            $postCommand,
+            "MmdMat/Material",
+            "rendernode/MmdMat/Material",
+            "-asShader",
+            "surfaceShader"
+        );
+    }
+    else
+    {
+        for ($filterClass in $filterClassArray)
+        {
+            if (startsWith($filterClass, "rendernode/MmdMat") ||
+                startsWith("rendernode/MmdMat", $filterClass) ||
+                $filterClass == "shader/surface")
+            {
+                addToRenderNodeTreeLister(
+                    $renderNodeTreeLister,
+                    $postCommand,
+                    "MmdMat/Material",
+                    "rendernode/MmdMat/Material",
+                    "-asShader",
+                    "surfaceShader"
+                );
+                break;
+            }
+        }
+    }
+}
+
+// コールバックの一括登録
+global proc mmdMaterial_RegisterCallbacks()
+{
+    // 二重登録を避けるため事前に解除を実行
+    mmdMaterial_UnregisterCallbacks();
+
+    callbacks
+        -hook "renderNodeClassification"
+        -addCallback "mmdMaterial_RenderNodeClassificationCallback"
+        -owner "MmdMaterial";
+
+    callbacks
+        -hook "buildRenderNodeTreeListerContent"
+        -addCallback "mmdMaterial_BuildRenderNodeTreeListerContentCallback"
+        -owner "MmdMaterial";
+
+    callbacks
+        -hook "hyperShadePanelBuildCreateSubMenu"
+        -addCallback "mmdMaterial_HyperShadePanelBuildCreateSubMenuCallback"
+        -owner "MmdMaterial";
+
+    callbacks
+        -hook "hyperShadePanelPluginChange"
+        -addCallback "mmdMaterial_HyperShadePanelPluginChangeCallback"
+        -owner "MmdMaterial";
+
+    callbacks
+        -hook "createRenderNodePluginChange"
+        -addCallback "mmdMaterial_CreateRenderNodePluginChangeCallback"
+        -owner "MmdMaterial";
+}
+
+// コールバックの一括解除
+global proc mmdMaterial_UnregisterCallbacks()
+{
+    catchQuiet(`callbacks -hook "renderNodeClassification" -removeCallback "mmdMaterial_RenderNodeClassificationCallback" -owner "MmdMaterial"`);
+    catchQuiet(`callbacks -hook "buildRenderNodeTreeListerContent" -removeCallback "mmdMaterial_BuildRenderNodeTreeListerContentCallback" -owner "MmdMaterial"`);
+    catchQuiet(`callbacks -hook "hyperShadePanelBuildCreateSubMenu" -removeCallback "mmdMaterial_HyperShadePanelBuildCreateSubMenuCallback" -owner "MmdMaterial"`);
+    catchQuiet(`callbacks -hook "hyperShadePanelPluginChange" -removeCallback "mmdMaterial_HyperShadePanelPluginChangeCallback" -owner "MmdMaterial"`);
+    catchQuiet(`callbacks -hook "createRenderNodePluginChange" -removeCallback "mmdMaterial_CreateRenderNodePluginChangeCallback" -owner "MmdMaterial"`);
+}

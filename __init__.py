@@ -4,7 +4,7 @@ MMD Tools for Maya - Maya用 MMD (PMX/PMD/X) 統合ツールセット
 Author: Hina33
 """
 
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 __author__ = "Hina33"
 
 import os

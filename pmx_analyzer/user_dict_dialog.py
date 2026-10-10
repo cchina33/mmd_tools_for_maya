@@ -261,10 +261,13 @@ def check_and_prompt_user_dict(parent=None, pmx_path=None):
     if not pmx_path or not os.path.exists(pmx_path):
         return True
 
+    print("[PMXチェック] ボーン名および未登録漢字の辞書照合を開始します...")
     unregistered = find_unregistered_kanji_in_bones(pmx_path)
     if not unregistered:
-        print("[PMX解析] 全ボーン名の辞書照合が完了しました (未登録なし)")
+        print("[PMXチェック] 全ボーン名の辞書照合が完了しました (未登録なし)")
         return True
+
+    print(f"[PMXチェック] 辞書未登録の漢字・ボーン名が {len(unregistered)} 件検出されました。確認ダイアログを表示します。")
 
     # ユーザーへの確認
     kanji_sample = "、".join([item["kanji"] for item in unregistered[:5]])
@@ -286,5 +289,5 @@ def check_and_prompt_user_dict(parent=None, pmx_path=None):
         dlg.exec_()
         return True
     else:
-        print("[PMX解析] ユーザー辞書への登録をスキップしました。")
+        print("[PMXチェック] ユーザー辞書への登録をスキップしました。")
         return False

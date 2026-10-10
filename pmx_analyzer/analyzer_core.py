@@ -41,7 +41,13 @@ def export_pmx_structure(pmx_path, output_json_path=None):
             "vertex_count": len(model.vertices),
             "face_count": len(model.faces),
             "texture_count": len(model.textures),
-            "file_path": os.path.abspath(pmx_path)
+            "file_path": (
+                os.path.abspath(pmx_path).replace(
+                    f"Users\\{os.path.basename(os.environ.get('USERPROFILE', ''))}", "Users\\<ユーザー名>"
+                ).replace(
+                    f"Users/{os.path.basename(os.environ.get('USERPROFILE', ''))}", "Users/<ユーザー名>"
+                ) if os.environ.get('USERPROFILE') else os.path.abspath(pmx_path)
+            )
         },
         "textures": [getattr(t, 'path', str(t)) for t in model.textures],
         "materials": [],
@@ -159,11 +165,12 @@ def export_pmx_structure(pmx_path, output_json_path=None):
         }
         analysis_data["joints"].append(jt_info)
 
-    # 保存先ファイルの決定
+    # 保存先ファイルの決定 (asset/User_pmx_data フォルダ配下に保存)
     if not output_json_path:
-        base_dir = os.path.dirname(pmx_path)
+        plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        user_pmx_dir = os.path.join(plugin_root, "asset", "User_pmx_data")
         base_name = os.path.splitext(os.path.basename(pmx_path))[0]
-        output_json_path = os.path.join(base_dir, f"{base_name}_pmx_analysis.json")
+        output_json_path = os.path.join(user_pmx_dir, f"{base_name}_pmx_analysis.json")
 
     os.makedirs(os.path.dirname(os.path.abspath(output_json_path)), exist_ok=True)
     with open(output_json_path, 'w', encoding='utf-8') as f:
