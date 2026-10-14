@@ -1,0 +1,116 @@
+<Window x:Class="MmdPhysicsBridge.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="MMD Physics Bridge - 3D物理ビューア" Height="720" Width="1060"
+        Background="#1e1e1e">
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="330"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- 左側コントロールパネル -->
+        <Border Grid.Column="0" Background="#252526" BorderBrush="#3f3f46" BorderThickness="0,0,1,0" Padding="14">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <TextBlock Text="MMD Physics Bridge" FontSize="18" FontWeight="Bold" Foreground="#52b7ff" Margin="0,0,0,12"/>
+
+                    <!-- PMXモデル指定 -->
+                    <GroupBox Header="PMX モデル" Foreground="#cccccc" Margin="0,0,0,10" Padding="8">
+                        <StackPanel>
+                            <TextBox x:Name="TxtPmxPath" Background="#1e1e1e" Foreground="#ffffff" BorderBrush="#3f3f46" Padding="4" Margin="0,0,0,6"/>
+                            <Button x:Name="BtnBrowsePmx" Content="モデル参照..." Background="#333337" Foreground="#ffffff" BorderBrush="#3f3f46" Padding="4" Click="BtnBrowsePmx_Click"/>
+                        </StackPanel>
+                    </GroupBox>
+
+                    <!-- 表示切り替え設定 (MMD/MMM風) -->
+                    <GroupBox Header="3D表示設定" Foreground="#cccccc" Margin="0,0,0,10" Padding="8">
+                        <StackPanel>
+                            <CheckBox x:Name="ChkShowMesh" Content="メッシュ表示 (モデル外観)" IsChecked="True" Foreground="#ffffff" Margin="0,2,0,4" Checked="OnVisibilityChanged" Unchecked="OnVisibilityChanged"/>
+                            <CheckBox x:Name="ChkShowBones" Content="ボーン表示 (骨格構造)" IsChecked="True" Foreground="#ffffff" Margin="0,2,0,4" Checked="OnVisibilityChanged" Unchecked="OnVisibilityChanged"/>
+                            <CheckBox x:Name="ChkShowRigidbodies" Content="剛体表示 (物理コライダー)" IsChecked="True" Foreground="#ffffff" Margin="0,2,0,4" Checked="OnVisibilityChanged" Unchecked="OnVisibilityChanged"/>
+                            <CheckBox x:Name="ChkShowJoints" Content="ジョイント表示 (物理拘束)" IsChecked="True" Foreground="#ffffff" Margin="0,2,0,4" Checked="OnVisibilityChanged" Unchecked="OnVisibilityChanged"/>
+                            <CheckBox x:Name="ChkEnableIk" Content="足IKを有効化 (着地・屈み計算)" IsChecked="True" Foreground="#ffffff" Margin="0,2,0,4"/>
+                        </StackPanel>
+                    </GroupBox>
+
+                    <!-- VMDモーション指定 -->
+                    <GroupBox Header="VMD モーションファイル (.vmd)" Foreground="#cccccc" Margin="0,0,0,10" Padding="8">
+                        <StackPanel>
+                            <TextBox x:Name="TxtVmdPath" Background="#1e1e1e" Foreground="#ffffff" BorderBrush="#3f3f46" Padding="4" Margin="0,0,0,6"/>
+                            <Button x:Name="BtnBrowseVmd" Content="VMDモーション参照..." Background="#333337" Foreground="#ffffff" BorderBrush="#3f3f46" Padding="4" Click="BtnBrowseVmd_Click"/>
+                        </StackPanel>
+                    </GroupBox>
+
+                    <!-- 物理演算モード -->
+                    <GroupBox Header="物理演算モード" Foreground="#cccccc" Margin="0,0,0,10" Padding="8">
+                        <StackPanel>
+                            <RadioButton x:Name="RbPhysicsPlayOnly" Content="再生時のみ実行 (通常)" Foreground="#ffffff" Margin="0,2" IsChecked="True" Checked="PhysicsMode_Changed"/>
+                            <RadioButton x:Name="RbPhysicsAlways" Content="常時実行 (静止中もシミュレーション)" Foreground="#ffffff" Margin="0,2" Checked="PhysicsMode_Changed"/>
+                            <RadioButton x:Name="RbPhysicsOff" Content="オフモード (物理無効・ボーン追従)" Foreground="#ffffff" Margin="0,2" Checked="PhysicsMode_Changed"/>
+                        </StackPanel>
+                    </GroupBox>
+
+                    <!-- 再生コントロール -->
+                    <GroupBox Header="アニメーション再生" Foreground="#cccccc" Margin="0,0,0,10" Padding="8">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,8">
+                                <Button x:Name="BtnPlay" Content="再生" Width="70" Height="28" Background="#0e639c" Foreground="#ffffff" Margin="4,0" Click="BtnPlay_Click"/>
+                                <Button x:Name="BtnPause" Content="停止" Width="70" Height="28" Background="#333337" Foreground="#ffffff" Margin="4,0" Click="BtnPause_Click"/>
+                                <Button x:Name="BtnReset" Content="リセット" Width="70" Height="28" Background="#333337" Foreground="#ffffff" Margin="4,0" Click="BtnReset_Click"/>
+                            </StackPanel>
+                            <Slider x:Name="SliderTimeline" Minimum="0" Maximum="100" Value="0" ValueChanged="SliderTimeline_ValueChanged"/>
+                            <TextBlock x:Name="TxtFrameInfo" Text="フレーム: 0 / 0" Foreground="#aaaaaa" HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                        </StackPanel>
+                    </GroupBox>
+
+                    <!-- 物理ベイク出力 -->
+                    <GroupBox Header="Maya 物理ベイク出力" Foreground="#cccccc" Margin="0,0,0,10" Padding="8">
+                        <StackPanel>
+                            <Button x:Name="BtnBake" Content="物理ベイクVMD出力" Height="38" FontWeight="Bold" Background="#27ae60" Foreground="#ffffff" BorderThickness="0" Click="BtnBake_Click"/>
+                            <TextBlock x:Name="TxtStatus" Text="待機中" Foreground="#858585" Margin="0,8,0,0" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </GroupBox>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
+        <!-- 右側 3Dビューポート -->
+        <Grid Grid.Column="1" Background="#111111" x:Name="ViewportContainer"
+              MouseDown="Viewport_MouseDown" MouseMove="Viewport_MouseMove" MouseUp="Viewport_MouseUp" MouseLeave="Viewport_MouseLeave" MouseWheel="Viewport_MouseWheel">
+            <Viewport3D x:Name="MainViewport">
+                <!-- カメラ -->
+                <Viewport3D.Camera>
+                    <PerspectiveCamera x:Name="ViewportCamera" Position="0,15,35" LookDirection="0,-5,-35" UpDirection="0,1,0" FieldOfView="45"/>
+                </Viewport3D.Camera>
+
+                <!-- デフォルト照明 -->
+                <ModelVisual3D>
+                    <ModelVisual3D.Content>
+                        <Model3DGroup>
+                            <AmbientLight Color="#666666"/>
+                            <DirectionalLight Color="#ffffff" Direction="-1,-2,-3"/>
+                            <DirectionalLight Color="#555555" Direction="1,1,1"/>
+                        </Model3DGroup>
+                    </ModelVisual3D.Content>
+                </ModelVisual3D>
+
+                <!-- 地面グリッド -->
+                <ModelVisual3D x:Name="GridContainer"/>
+                <!-- メッシュ描画用コンテナ -->
+                <ModelVisual3D x:Name="MeshContainer"/>
+                <!-- ボーン描画用コンテナ -->
+                <ModelVisual3D x:Name="BoneContainer"/>
+                <!-- 剛体描画用コンテナ -->
+                <ModelVisual3D x:Name="RigidbodyContainer"/>
+                <!-- ジョイント描画用コンテナ -->
+                <ModelVisual3D x:Name="JointContainer"/>
+            </Viewport3D>
+
+            <!-- 操作ヘルプ表示 -->
+            <Border Background="#aa000000" CornerRadius="4" Padding="8,4" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="12">
+                <TextBlock Text="マウス左ドラッグ: カメラ回転 | 右ドラッグ: 平行移動 | ホイール: ズーム" Foreground="#888888" FontSize="11"/>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>

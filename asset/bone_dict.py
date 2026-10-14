@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 MMD 標準ボーン日英対応辞書モジュール
-mikudan, blender2pmxem, usausakokoko などの仕様・標準対応表に完全準拠し、
+mikudan, blender2pmxem, usausakokoko などの仕様・標準対応表に忠実に準拠し、
 ボーンの和名・英名相互変換および正規化マッピングを提供します。
 """
 
@@ -121,6 +121,24 @@ BASE_BONE_MAP_JA_TO_EN = {
 # 左右逆引きテーブルの自動生成用
 BASE_BONE_MAP_EN_TO_JA = {v: k for k, v in BASE_BONE_MAP_JA_TO_EN.items()}
 
+def reload_bone_map():
+    """bone_dict.json から最新のボーン対応表を再読み込みします"""
+    global BASE_BONE_MAP_JA_TO_EN, BASE_BONE_MAP_EN_TO_JA
+    try:
+        import os, json
+        json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bone_dict.json")
+        if os.path.exists(json_path):
+            with open(json_path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+                if isinstance(loaded, dict) and loaded:
+                    BASE_BONE_MAP_JA_TO_EN = loaded
+                    BASE_BONE_MAP_EN_TO_JA = {v: k for k, v in BASE_BONE_MAP_JA_TO_EN.items()}
+    except Exception:
+        pass
+
+# 初期化時にJSONが存在すれば読み込み
+reload_bone_map()
+
 def get_english_bone_name(japanese_name):
     """
     日本語ボーン名から標準英語ボーン名を解決します。
@@ -140,11 +158,11 @@ def get_english_bone_name(japanese_name):
     except Exception:
         pass
 
-    # 1. 完全一致
+    # 直接一致の探索
     if jp in BASE_BONE_MAP_JA_TO_EN:
         return BASE_BONE_MAP_JA_TO_EN[jp]
         
-    # 2. 左右プレフィックス ("左", "右") の解決
+    # 左右プレフィックス ("左", "右") の解決
     side = None
     core_name = jp
     if jp.startswith("左"):
@@ -158,7 +176,7 @@ def get_english_bone_name(japanese_name):
         en_core = BASE_BONE_MAP_JA_TO_EN[core_name]
         return f"{en_core}{side}" if side else en_core
         
-    # 3. スカート系ボーン (q_0_0 -> Skirt_0_0)
+    # スカート系ボーン (q_0_0 -> Skirt_0_0)
     if jp.startswith("q_"):
         return jp.replace("q_", "Skirt_")
         
@@ -184,11 +202,11 @@ def get_japanese_bone_name(english_name):
     except Exception:
         pass
 
-    # 1. 完全一致
+    # 直接一致の探索
     if en in BASE_BONE_MAP_EN_TO_JA:
         return BASE_BONE_MAP_EN_TO_JA[en]
         
-    # 2. 左右サフィックス ("_L", "_R", ".L", ".R") の解決
+    # 左右サフィックス ("_L", "_R", ".L", ".R") の解決
     side = None
     core_name = en
     if en.endswith("_L") or en.endswith(".L"):

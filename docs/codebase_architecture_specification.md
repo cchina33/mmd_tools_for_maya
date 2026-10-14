@@ -1,6 +1,6 @@
 # コードベース構成・各モジュール仕様書
 
-本ドキュメントは、「MMD Tools for Maya」プロジェクトを構成する全ディレクトリ、Python スクリプト、C++ 物理エンジン、および各モジュールの責務と仕様を詳細に解説する仕様書です。
+本ドキュメントは、「MMD Tools for Maya」プロジェクトを構成する全ディレクトリ、Python スクリプト、C++ 物理/シェーダープラグイン、C# 外部物理ビューア、および各モジュールの責務と仕様を詳細に解説する仕様書です。
 
 ```text
 mmd_tools_for_maya/
@@ -12,38 +12,72 @@ mmd_tools_for_maya/
 │
 ├── ui/                               # 統合UIパッケージ (PySide6 / PySide2)
 │   ├── __init__.py                   # UIエクスポート定義
-│   ├── gui.py                        # モダン統合タブ型UI (多重起動防止・閉じて再表示)
+│   ├── gui.py                        # モダン統合タブ型UI (多重起動防止・リアルタイムベイク連携)
 │   ├── gui_style.py                  # UIダークテーマスタイルシート (QSS)
-│   └── advanced_dict_dialog.py       # 高度なユーザー辞書・マテリアル保護設定GUI (左右分割・上級者向け)
+│   ├── morph_window.py               # 表情・モーフ操作GUI (4分割パネル・材質モーフ自動連携)
+│   ├── advanced_dict_dialog.py       # 高度なユーザー辞書・マテリアル保護設定GUI (左右分割・上級者向け)
+│   ├── bone_state_export_dialog.py   # ボーン状態・トランスフォーム情報エクスポートGUI
+│   ├── material_protect_dialog.py    # マテリアル保護キーワード管理GUI
+│   └── user_dict_dialog.py           # 未登録ボーン名検出・対話型辞書登録ダイアログ
 │
 ├── converters/                       # Maya ↔ MMD 相互変換・解析エンジンパッケージ
 │   ├── __init__.py                   # コンバータエクスポート定義
-│   ├── pmxpaimaya.py                 # MMDモデル (PMX/PMD/X) Mayaインポートエンジン (Toon/セルフ影3段階/IK)
+│   ├── pmxpaimaya.py                 # MMDモデル (PMX推奨、非推奨: PMD/X) インポートエンジン (材質モーフ/透過遮光/IK)
 │   ├── vmdpaimaya.py                 # MMDモーション (VMD) アニメーション適用エンジン
+│   ├── physics_stream.py             # 外部C#物理ビューア連携・リアルタイムストリーミング＆ベイク
 │   ├── vmd_analyzer.py               # VMDモーション構造解析・診断モジュール
 │   ├── mayapaipmx.py                 # MayaシーンからPMXへのエクスポートエンジン
-│   └── bullet_builder.py             # レガシー剛体構築補助モジュール
+│   └── bullet_builder.py             # 剛体構築補助モジュール
 │
 ├── pmx_analyzer/                     # PMXモデル詳細解析・一括保存 & ユーザー辞書対話登録パッケージ
 │   ├── __init__.py                   # 解析パッケージエクスポート定義
 │   ├── analyzer_core.py              # 材質・ボーン・モーフ・剛体・Joint一括シリアライズ保存 & 未登録漢字抽出
 │   └── user_dict_dialog.py           # 未登録ボーン名検出・ローマ字入力登録GUI & 再チェック (サイドチェック)
 │
-├── mmd_core/                         # 自作MMDバイナリ/テキスト構文解析パッケージ (MIT)
-│   ├── __init__.py                   # パッケージエクスポート定義
-│   ├── pmx.py                        # PMX 2.0 / 2.1 パーサー & ライター
-│   ├── pmd.py                        # PMD (MMD旧形式) パーサー & PMX自動変換
-│   ├── x_file.py                     # DirectX (.x) テキスト/バイナリ構文解析器
-│   ├── vmd.py                        # VMD モーションパーサー
-│   └── vpd.py                        # VPD ポーズパーサー
+├── mmd_material_plugin/              # MMD専用シェーダー C++ プラグイン (Viewport 2.0 対応)
+│   ├── bin/
+│   │   ├── 2025/mmd_material.mll     # Maya 2025 用コンパイル済みシェーダープラグイン
+│   │   ├── 2026/mmd_material.mll     # Maya 2026 用コンパイル済みシェーダープラグイン
+│   │   └── mmd_material.mll          # 標準リンク用シェーダープラグイン
+│   ├── shaders/
+│   │   └── mmd_material.fx           # Viewport 2.0 (DirectX 11) HLSL シェーダー
+│   ├── src/
+│   │   ├── mmd_material_node.cpp     # MPxNode 派生シェーダーノード実装
+│   │   ├── mmd_material_override.cpp # MPxShaderOverride 描画オーバーライド実装
+│   │   └── ...
+│   ├── scripts/
+│   │   └── mmd_material_setup.py     # シェーダーネットワーク自動構築・アサインスクリプト
+│   ├── CMakeLists.txt                # ビルド定義
+│   └── README.md                     # シェーダープラグインビルド・運用手順
+│
+├── mmd_motion_plugin/                # 高速モーション処理 C++ プラグイン
+│   ├── bin/
+│   │   ├── 2025/mmd_motion.mll       # Maya 2025 用コンパイル済みモーションプラグイン
+│   │   └── 2026/mmd_motion.mll       # Maya 2026 用コンパイル済みモーションプラグイン
+│   ├── src/                          # 高速補間・キーフレーム処理ソース群
+│   └── CMakeLists.txt                # ビルド定義
+│
+├── physics_bake_cs/                  # MMD物理演算リアルタイムベイクアプリ (C# / .NET 8 / WPF 3D)
+│   ├── bin/Release/net8.0-windows/   # 実行可能バイナリ群 (MmdPhysicsViewer.exe, BulletSharp.dll, etc.)
+│   ├── App.xaml / App.xaml.cs        # アプリケーションエントリ
+│   ├── ViewerWindow.xaml / .cs       # 物理シミュレーション同期描画ウィンドウ
+│   ├── PoseEvaluator.cs              # ボーンポーズ・物理挙動リアルタイム評価
+│   └── MmdPhysicsViewer.csproj       # プロジェクト定義
+│
+├── physics_bridge_cs/                # MMD物理演算シミュレーションビューア (C# / .NET 8 / WPF)
+│   ├── bin/Release/net8.0-windows/   # 実行可能バイナリ群 (MmdPhysicsBridge.exe, BulletSharp.dll, etc.)
+│   ├── MainWindow.xaml / .cs         # ビューア操作・描画画面
+│   ├── PhysicsSimulationEngine.cs    # BulletSharp 物理シミュレーションコア
+│   ├── PmxLoader.cs / VmdLoader.cs   # 高速 PMX / VMD 読み込みモジュール
+│   └── MmdPhysicsBridge.csproj       # プロジェクト定義
 │
 ├── bullet_engine/                    # MMD本家 Bullet 2.83.7 物理演算エンジン (zlib license)
 │   ├── bin/
 │   │   └── mmd_bullet.dll            # コンパイル済み Bullet 物理エンジンDLL
-│   ├── include/                      # Bullet C++ ヘッダー群 (LinearMath, BulletCollision, BulletDynamics)
+│   ├── include/                      # Bullet C++ ヘッダー群
 │   ├── src/                          # Bullet C++ ソース群 & C-API エクスポートラッパー
 │   ├── build_bullet_dll.py           # MSVC / MinGW 自動検出 DLL ビルドスクリプト
-│   ├── bullet_wrapper.py             # ctypes による Bullet DLL Python バインディング (ウォームアップ・リセット機能)
+│   ├── bullet_wrapper.py             # ctypes による Bullet DLL Python バインディング
 │   ├── bullet_maya_bridge.py         # Bullet 物理シミュレーション・Maya ベイク制御エンジン
 │   ├── LICENSE                       # Bullet 公式 zlib ライセンス条項
 │   └── README.md                     # Bullet エンジン概要・ビルド手順
@@ -52,39 +86,51 @@ mmd_tools_for_maya/
 │   ├── bin/
 │   │   └── mmd_xpbd.dll              # コンパイル済みXPBD物理エンジンDLL
 │   ├── include/
-│   │   └── xpbd_engine.h             # XPBDエンジンヘッダー (クラス・構造体定義)
+│   │   └── xpbd_engine.h             # XPBDエンジンヘッダー
 │   ├── src/
-│   │   └── xpbd_engine.cpp           # XPBDエンジン実装 (剛体・拘束・衝突)
+│   │   └── xpbd_engine.cpp           # XPBDエンジン実装
 │   ├── build_dll.py                  # MSVC / MinGW 自動検出DLLビルドスクリプト
 │   ├── xpbd_wrapper.py               # ctypes による C++ DLL Pythonバインディング
 │   ├── xpbd_visualizer.py            # Maya上のメッシュ・Jointロケーター追従・再吸着
 │   ├── xpbd_maya_bridge.py           # シミュレーションベイク制御エンジン
 │   └── test_xpbd.py                  # XPBDエンジンスタンドアロン単体テスト
 │
-├── asset/                            # ユーティリティデータ・補助モジュール
+├── mmd_core/                         # 自作MMDバイナリ/テキスト構文解析パッケージ (MIT)
+│   ├── __init__.py                   # パッケージエクスポート定義
+│   ├── pmx.py                        # PMX 2.0 / 2.1 パーサー & ライター (推奨標準フォーマット)
+│   ├── pmd.py                        # PMD (旧形式) パーサー & PMX自動変換 (非推奨)
+│   ├── x_file.py                     # DirectX (.x) 構文解析器 (非推奨)
+│   ├── vmd.py                        # VMD モーションパーサー
+│   └── vpd.py                        # VPD ポーズパーサー
+│
+├── asset/                            # 辞書データ・補助モジュール
 │   ├── user_dict_manager.py          # ユーザー辞書・マテリアル保護設定管理モジュール
 │   ├── user_dictionary.json          # ユーザー設定永続化ファイル (保護キーワード・カスタム辞書)
 │   ├── bone_dict.py                  # 標準ボーン日英相互変換モジュール (ユーザー辞書連動)
-│   ├── jaka.py                       # 日本語/中国語ノード名のローマ字変換 & 健全化 (ユーザー辞書連動・動的リロード)
-│   ├── hik.py                        # HumanIK (HIK) ボーン定義マッピング (Tポーズ展開・膝プレベンド・つま先対応)
+│   ├── bone_dict.json                # 標準ボーン定義JSON
+│   ├── jaka.py                       # 日本語/中国語ノード名のローマ字変換 & 健全化
+│   ├── jaka_dict.json                # ローマ字変換定義JSON
+│   ├── hik.py                        # HumanIK (HIK) ボーン定義マッピング
+│   ├── hik_dict.json                 # HIKボーンマッピング定義JSON
 │   ├── last_imported_structure.json  # 前回インポート時の専用ボーン構造キャッシュ
-│   ├── khatangton1.txt               # インポートUI設定永続化ファイル (モデルパス・各種フラグ)
+│   ├── khatangton1.txt               # インポートUI設定永続化ファイル
 │   └── khatangton2.txt               # エクスポートUI設定永続化ファイル
 │
 ├── toon/                             # MMD標準トゥーンテクスチャ
 │   └── toon01.bmp ～ toon10.bmp      # 各階調用標準BMPテクスチャ群
 │
-├── docs/                               # 独立技術仕様書群
-│   ├── codebase_architecture_specification.md # 本ファイル (全体の構造・各モジュール仕様)
-│   ├── pmx_analyzer_specification.md          # PMXモデル詳細解析・一括保存 & ユーザー辞書対話登録仕様
-│   ├── bullet_engine_specification.md         # MMD本家 Bullet 物理演算エンジン仕様
-│   ├── model_import_specification.md          # モデルインポート・Toon・セルフ影・質感仕様
-│   ├── physics_system_specification.md        # Maya物理システム連携仕様
-│   ├── vmd_import_specification.md            # VMDインポート仕様
-│   └── xpbd_engine_specification.md           # C++ XPBDエンジン仕様
-│
-└── docs/                             # プロジェクト機能アップデート・開発記録文書
-    └── ... (各機能アップデートごとの計画・タスクリスト・確認書)
+└── docs/                             # 独立技術仕様書群
+    ├── codebase_architecture_specification.md # 本ファイル (全体の構造・各モジュール仕様)
+    ├── mmd_material_plugin_specification.md   # Viewport 2.0 対応 C++ シェーダープラグイン仕様
+    ├── pmx_analyzer_specification.md          # PMXモデル詳細解析・一括保存 & ユーザー辞書対話登録仕様
+    ├── bullet_engine_specification.md         # MMD本家 Bullet 物理演算エンジン仕様
+    ├── model_import_specification.md          # モデルインポート・材質モーフ・Toon・質感仕様
+    ├── physics_system_specification.md        # Maya物理システム連携仕様
+    ├── vmd_import_specification.md            # VMDインポート仕様
+    ├── xpbd_engine_specification.md           # C++ XPBDエンジン仕様
+    ├── realtime_physics_bake_specification.md # リアルタイム物理ベイク技術仕様 (bullet_engine ✕ physics_bake_cs)
+    ├── technical_overview_guide.md            # インポートから物理ベイクまでの仕組み解説 (総合図解ガイド)
+    └── plugin_technical_guide.md             # プラグイン総合技術解説ガイド
 ```
 
 ---
@@ -94,12 +140,12 @@ mmd_tools_for_maya/
 ### 2-1. `mmd_tools_for_maya_plugin.py`
 
 - **種別**: Python (Mayaプラグイン公式エントリポイント)
-- **役割**: Maya のプラグインマネージャから直接ロードされ、トップメニューバーに「MMD」メニューを登録。
+- **役割**: Maya のプラグインマネージャからロードされ、メインメニューバーに「MMD」メニューを登録。
 - **主要関数**:
-  - `initializePlugin(plugin_obj)`: プラグイン登録、検索パス（`sys.path`）への新規フォルダ（`ui`・`converters`・`pmx_analyzer`）追加、メニュー生成。
-  - `uninitializePlugin(plugin_obj)`: プラグイン解除、メニュー破棄。
-  - `on_open_gui()`: モジュールリロード対応 GUI 起動ハンドラ。**既存ウィンドウを検索して安全に破棄（`close` / `deleteLater`）した上で1つだけ再表示する多重起動防止機構**を内包。
-  - `on_open_advanced_dict()`: 上級者向け警告ダイアログ付きのユーザー辞書・マテリアル保護設定 GUI 起動ハンドラ。
+  - `initializePlugin(plugin_obj)`: プラグイン登録、検索パス（`sys.path`）への内部パッケージ登録、メニュー生成。
+  - `uninitializePlugin(plugin_obj)`: プラグイン解除、登録メニューの破棄。
+  - `on_open_gui()`: モジュールリロード対応 GUI 起動ハンドラ。既存ウィンドウを検索して安全に破棄した上で単一ウィンドウを表示する多重起動防止機構を内包。
+  - `on_open_advanced_dict()`: ユーザー辞書・マテリアル保護設定 GUI 起動ハンドラ。
   - `on_show_about()`: バージョン・開発者・機能サマリー表示ダイアログ。
 
 ### 2-2. `__init__.py`
@@ -107,39 +153,57 @@ mmd_tools_for_maya/
 - **種別**: Python (パッケージ初期化モジュール)
 - **役割**: `mmd_tools_for_maya` を単一の Python パッケージとして成立させるエントリポイント。
 - **機能**:
-  - サブパッケージ群（`ui`, `converters`, `mmd_core`, `pmx_analyzer`, `bullet_engine`, `cpp_engine`, `asset`）の安全なインポートと `sys.path` 解決。
+  - サブパッケージ群（`ui`, `converters`, `mmd_core`, `pmx_analyzer`, `bullet_engine`, `cpp_engine`, `asset`）の安全なインポートとパス解決。
   - 外部スクリプトからの `from mmd_tools_for_maya import pmxpaimaya, vmdpaimaya` 等の後方互換アクセスを保証。
 
 ---
 
 ## 3. `ui/` パッケージ仕様 (統合インターフェース群)
 
-モダンな PySide6 / PySide2 デュアル対応 UI を提供します。
+PySide6 / PySide2 デュアル対応のモダン UI を提供します。
 
 ### 3-1. `ui/gui.py`
 
 - **主要クラス**: `MmdMayaMainWindow` (メインウィンドウ)
 - **主要タブ**:
-  - `ImportTabWidget`: モデルインポート、PMXモデル詳細解析・一括保存 (JSON)、未登録ボーン辞書登録連携、Toon/影設定。
+  - `ImportTabWidget`: モデルインポート（PMX推奨、PMD/.x非推奨）、PMX詳細解析・一括保存 (JSON)、未登録ボーン辞書登録連携、Toon/影設定。
   - `VmdImportTabWidget`: VMD モーション・カメラ・WAV 音声インポート。
   - `ExportTabWidget`: Maya シーンから PMX 形式へのエクスポート。
-  - `HumanIKTabWidget`: HIK キャラクター定義・Tポーズ（腕水平化＆膝プレベンド）自動展開、コントロールリグ生成、二重IK競合解除。
-  - `PhysicsTabWidget`: Bullet / XPBD 物理演算設定、剛体・Joint可視化生成、再吸着、物理ベイク実行（DLL自動検出による安全なフォールバック）。
+  - `HumanIKTabWidget`: HIK キャラクター定義・Tポーズ自動展開、コントロールリグ生成、二重IK競合解除。
+  - `PhysicsTabWidget`: Bullet / XPBD 物理演算設定、リアルタイム物理ビューア（`MmdPhysicsViewer.exe`）起動、剛体・Joint可視化生成、再吸着、物理ベイク実行。
   - `CleanupTabWidget`: シーン内 MMD 要素の一括削除・初期化。
 - **補助ダイアログ**: `ExecutionLogDialog` (リアルタイム進捗ログダイアログ・コピー機能付き)。
 
-### 3-2. `ui/advanced_dict_dialog.py`
+### 3-2. `ui/morph_window.py`
+
+- **主要クラス**: `MorphWindow` (表情・モーフ操作GUI)
+- **役割**:
+  - 「目」「まゆ」「リップ」「その他」の4分割パネル構成でスライダー操作・キーフレーム登録を提供。
+  - **材質モーフ連携**: 頂点モーフだけでなく、頬染め・目発光・帽子off・ドロワoff等の材質モーフアトリビュートを自動操作。加算・乗算オフセット演算に基づき、受光・輪郭線（エッジ）の連動フェードを制御。
+
+### 3-3. `ui/advanced_dict_dialog.py`
 
 - **主要クラス**: `AdvancedDictDialog`
 - **役割**: マテリアル保護キーワードおよびカスタムボーン日英辞書の上級者向け直接編集ダイアログ。
 
-### 3-3. `ui/gui_style.py`
+### 3-4. `ui/material_protect_dialog.py`
 
-- **役割**: モダンなダークテーマ QSS スタイルシート定義。
+- **主要クラス**: `MaterialProtectDialog`
+- **役割**: 顔や肌など、アニメ調特有のスペキュラ抑止・Toon保護対象となるマテリアルキーワードを視覚的に追加・削除・編集するダイアログ。
 
-### 3-4. `ui/__init__.py`
+### 3-5. `ui/bone_state_export_dialog.py`
 
-- **役割**: `MmdMayaMainWindow`, `show_ui`, `ExecutionLogDialog` 等の UI モジュール公開 API のエクスポート。
+- **主要クラス**: `BoneStateExportDialog`
+- **役割**: 現在のモデルのボーン姿勢・トランスフォーム情報を抽出・保存するユーティリティGUI。
+
+### 3-6. `ui/user_dict_dialog.py`
+
+- **主要クラス**: `UserDictRegisterDialog`
+- **役割**: インポート時に未登録の漢字ボーン名が検出された際、ローマ字入力欄を並べて即座に辞書へ登録する対話型ダイアログ。
+
+### 3-7. `ui/gui_style.py`
+
+- **役割**: ダークテーマ QSS スタイルシート定義。
 
 ---
 
@@ -147,30 +211,34 @@ mmd_tools_for_maya/
 
 ### 4-1. `converters/pmxpaimaya.py`
 
-- **主要関数**: `import_pmx`, `setup_mmd_ik`, `create_mmd_lighting`, `fix_toon_shading_in_scene`。
+- **主要関数**: `import_pmx`, `setup_mmd_ik`, `create_mmd_lighting`, `fix_toon_shading_in_scene`
 - **特徴**:
+  - **PMX 2.0 / 2.1 推奨サポート**。旧形式 PMD および DirectX .x は非推奨。
   - SDEF デュアルクォータニオン近似スキニング、PMX 剛体・Joint コライダー生成。
-  - モデル構造キャッシュ (`asset/last_imported_structure.json`) の保存。
+  - **材質モーフ自動構築**: モデル内の材質モーフを抽出し、Maya メッシュのカスタムアトリビュートおよびシェーダーノードパラメータへ自動接続。
+  - **透過メッシュ遮光設定**: チーク・涙・顔斜線等の透過ポリゴン板に対し、ディレクショナルライト受光遮断（`diffuse = 0.0`）とシャドウ最適化を適用。
 
 ### 4-2. `converters/vmdpaimaya.py`
 
-- **主要関数**: `import_vmd`, `apply_bone_motion`, `apply_morph_motion`, `apply_camera_motion`, `delete_mmd_scene_elements`。
+- **主要関数**: `import_vmd`, `apply_bone_motion`, `apply_morph_motion`, `apply_camera_motion`, `delete_mmd_scene_elements`
+- **特徴**: VMD ベジェ補間曲線の精密計算、IK ベイク、カメラ・照明・音声連動。
 
-### 4-3. `converters/vmd_analyzer.py`
+### 4-3. `converters/physics_stream.py`
+
+- **主要関数**: `stream_physics_to_maya`, `bake_external_simulation`
+- **役割**: MMD物理演算リアルタイムベイクアプリ（`physics_bake_cs` / `MmdPhysicsViewer.exe`）との通信パイプライン。シミュレーション結果をリアルタイムに受け取り、Maya シーン上のボーンへキーフレームを直接書き込み。
+
+### 4-4. `converters/vmd_analyzer.py`
 
 - **主要クラス**: `VmdAnalyzer` (ボーン・モーフ・カメラキーフレーム統計解析)。
 
-### 4-4. `converters/mayapaipmx.py`
+### 4-5. `converters/mayapaipmx.py`
 
 - **主要関数**: `export_pmx` (Maya メッシュ・ジョイントから PMX への出力)。
 
-### 4-5. `converters/bullet_builder.py`
+### 4-6. `converters/bullet_builder.py`
 
-- **役割**: レガシー剛体構築補助モジュール。
-
-### 4-6. `converters/__init__.py`
-
-- **役割**: コンバータ関連の公開 API を透過エクスポート。
+- **役割**: 剛体構築補助モジュール。
 
 ---
 
@@ -188,69 +256,113 @@ mmd_tools_for_maya/
   - `UserDictRegisterDialog(QDialog)`: 未登録漢字の隣にローマ字を記入できる対話型テーブル GUI。
   - `check_and_prompt_user_dict(parent, pmx_path)`: 未登録ボーン名検出プロンプトを表示し、「はい」で GUI 起動・登録後に再チェック（サイドチェック）を実行。「いいえ」でスルー。
 
-### 5-3. `pmx_analyzer/__init__.py`
+---
 
-- **役割**: パッケージ公開 API のエクスポート。
+## 6. `mmd_material_plugin/` パッケージ仕様 (Viewport 2.0 C++ シェーダー)
+
+Autodesk Maya の Viewport 2.0 上で本家 MMD のセル調シェーディング、輪郭線（エッジ）、スフィアマップ、二重構造透過を忠実に再現する高速 C++ プラグインです。
+
+- **`bin/2025/mmd_material.mll` / `bin/2026/mmd_material.mll`**: 各年度版 Maya 専用コンパイル済みプラグイン。
+- **`shaders/mmd_material.fx`**: DirectX 11 (HLSL) シェーダーコード。Toon 階調テクスチャ乗算、スフィア動的反射、二重透過加算ブレンドを実装。
+- **`src/mmd_material_node.cpp`**: Maya の `MPxNode` を拡張したカスタムシェーダーノード `mmdMaterial`。
+- **`src/mmd_material_override.cpp`**: `MPxShaderOverride` によるリアルタイム描画制御。
+- **`scripts/mmd_material_setup.py`**: インポートされたモデルのマテリアルを `mmdMaterial` に自動置換・アサインする Python スクリプト。
 
 ---
 
-## 6. `bullet_engine/` パッケージ仕様 (MMD本家 Bullet 物理演算エンジン)
+## 7. `mmd_motion_plugin/` パッケージ仕様 (高速モーション C++ プラグイン)
 
-MMD 本家（MikuMikuDance）と 100% 互換の挙動を実現する Bullet 2.83.7 ベースの物理演算モジュールです。
+大規模モーションデータのインポートおよび補間曲線計算をネイティブ C++ で高速化する拡張モジュールです。
 
-- **`bin/mmd_bullet.dll`**: 高速な C-API エクスポート物理 DLL。
+- **`bin/2025/mmd_motion.mll` / `bin/2026/mmd_motion.mll`**: 各年度版 Maya 専用コンパイル済みプラグイン。
+- **特徴**: 大量フレームの補間カーブ展開において Python 実行オーバーヘッドを削減し、安定したフレーム生成を実現。
+
+---
+
+## 8. `physics_bake_cs/` & `physics_bridge_cs/` サブシステム仕様
+
+Maya 本体の描画負荷から物理シミュレーションを分離し、独立プロセスでリアルタイム可視化やキーフレーム生成を行う C# (.NET 8) スタンドアロンシステム群です。
+
+### 8-1. `physics_bake_cs/` (MMD物理演算リアルタイムベイクアプリ)
+
+- **実行ファイル**: `bin/Release/net8.0-windows/MmdPhysicsViewer.exe`
+- **主要技術**: WPF 3D, BulletSharp, .NET 8
+- **責務**:
+  - Maya と標準入出力（JSON Lines）を通じて高速にプロセス間通信を実行。
+  - Maya 本体のビューポート負荷に左右されず、滑らかにしなやかな剛体挙動を評価しながらキーフレームを Maya のボーンへ直接同期ベイク。
+
+### 8-2. `physics_bridge_cs/` (MMD物理演算シミュレーションビューア)
+
+- **実行ファイル**: `bin/Release/net8.0-windows/MmdPhysicsBridge.exe`
+- **主要技術**: C# / BulletSharp / .NET 8 / WPF
+- **責務**:
+  - PMX 剛体・ジョイントデータと VMD モーションを高速読み込み。
+  - BulletSharp による物理シミュレーション挙動を独立した 3D 画面上でリアルタイムにプレビュー・動作検証できるシミュレーションビューア。
+
+---
+
+## 9. `bullet_engine/` パッケージ仕様 (MMD本家 Bullet 物理演算エンジン)
+
+MMD 本家（MikuMikuDance）に準拠した剛体シミュレーションを提供する Bullet 2.83.7 ベースの物理演算モジュールです。
+
+- **`bin/mmd_bullet.dll`**: C-API エクスポート物理 DLL。
 - **`bullet_wrapper.py`**: ctypes による Python バインディング。
 - **`bullet_maya_bridge.py`**: シミュレーションループ制御および Maya キーフレームベイク。
 
 ---
 
-## 7. `mmd_core/` パッケージ仕様 (バイナリパーサー群)
+## 10. `cpp_engine/` パッケージ仕様 (C++ XPBD 物理演算エンジン)
 
-外部依存ゼロの純粋な Python 標準ライブラリによるバイナリ／テキスト構文解析器です。
+位置ベース物理（XPBD）による高剛性・高安定なソルバーモジュールです。
 
-- **`pmx.py`**: PMX 2.0 / 2.1 パーサー & ライター。
-- **`pmd.py`**: PMD パーサー & PMX 構造への透過変換。
-- **`x_file.py`**: DirectX .x テキスト／バイナリ構文解析器。
-- **`vmd.py`**: VMD モーションパーサー。
-- **`vpd.py`**: VPD ポーズパーサー。
-
----
-
-## 8. `cpp_engine/` パッケージ仕様 (C++ XPBD 物理演算エンジン)
-
-- **`bin/mmd_xpbd.dll`**: 拡張位置ベース物理（XPBD）ソルバー。
+- **`bin/mmd_xpbd.dll`**: 拡張位置ベース物理（XPBD）ソルバー DLL。
 - **`xpbd_visualizer.py`**: Maya ビューポート用コライダーメッシュ生成および再吸着機構。
 - **`xpbd_maya_bridge.py`**: XPBD 物理シミュレーションベイク制御。
 
 ---
 
-## 9. `asset/` モジュール仕様 (辞書・ユーティリティ)
+## 11. `mmd_core/` パッケージ仕様 (バイナリパーサー群)
 
-- **`user_dict_manager.py`**: ユーザー辞書・マテリアル保護設定管理。
-- **`user_dictionary.json`**: ユーザー設定永続化ファイル（保護キーワード、カスタム辞書 `custom_name_translations`）。
-- **`bone_dict.py`**: 標準ボーン日英相互変換モジュール。
-- **`jaka.py`**: 日本語/中国語ノード名のローマ字変換 & 健全化（ユーザー辞書動的リロード対応）。
-- **`hik.py`**: HumanIK (HIK) ボーン定義マッピング（Tポーズ展開、膝の優先角度 `preferredAngle` & プレベンド設定、つま先ボーン ID 16/17 対応）。
-- **`last_imported_structure.json`**: 前回インポート時の専用ボーン構造キャッシュ（プラグイン直下の `asset/` に統一保存）。
-- **`khatangton1.txt`**: インポート UI 設定永続化ファイル（モデルパス・各種フラグ）。
-- **`khatangton2.txt`**: エクスポート UI 設定永続化ファイル。
+外部依存ゼロの純粋な Python 標準ライブラリによる構文解析器です。
+
+- **`pmx.py`**: PMX 2.0 / 2.1 パーサー & ライター（標準推奨フォーマット）。
+- **`pmd.py`**: PMD パーサー & PMX 構造への透過変換（非推奨）。
+- **`x_file.py`**: DirectX .x テキスト／バイナリ構文解析器（非推奨）。
+- **`vmd.py`**: VMD モーションパーサー。
+- **`vpd.py`**: VPD ポーズパーサー。
 
 ---
 
-## 10. `toon/` ディレクトリ仕様
+## 12. `asset/` モジュール・データ仕様 (辞書・ユーティリティ)
+
+- **`user_dict_manager.py`**: ユーザー辞書・マテリアル保護設定管理。
+- **`user_dictionary.json`**: ユーザー設定永続化ファイル（保護キーワード、カスタム辞書）。
+- **`bone_dict.py` / `bone_dict.json`**: 標準ボーン日英相互変換モジュールおよび定義データ。
+- **`jaka.py` / `jaka_dict.json`**: 日本語/中国語ノード名のローマ字変換 & 健全化。
+- **`hik.py` / `hik_dict.json`**: HumanIK (HIK) ボーン定義マッピング（Tポーズ展開、膝の優先角度 `preferredAngle` & プレベンド設定、つま先ボーン対応）。
+- **`last_imported_structure.json`**: 前回インポート時の専用ボーン構造キャッシュ。
+- **`khatangton1.txt` / `khatangton2.txt`**: UI設定永続化ファイル。
+
+---
+
+## 13. `toon/` ディレクトリ仕様
 
 MMD 標準のトゥーン階調テクスチャ（`toon01.bmp` 〜 `toon10.bmp`）を格納。モデルインポート時に参照・適用されます。
 
 ---
 
-## 11. `docs/` & `ai-task-docs/`
+## 14. `docs/` & `ai-task-docs/`
 
 - **`docs/`**: 各サブシステムの公式設計仕様書群。
   - `codebase_architecture_specification.md` (全体構造仕様書 - 本ドキュメント)
+  - `mmd_material_plugin_specification.md` (Viewport 2.0 C++ シェーダー仕様書)
   - `pmx_analyzer_specification.md` (PMXモデル詳細解析 & ユーザー辞書仕様書)
   - `bullet_engine_specification.md` (Bullet物理仕様書)
-  - `model_import_specification.md` (モデルインポート・質感仕様書)
+  - `model_import_specification.md` (モデルインポート・質感・材質モーフ仕様書)
   - `physics_system_specification.md` (Maya物理システム仕様書)
   - `vmd_import_specification.md` (VMDインポート仕様書)
   - `xpbd_engine_specification.md` (XPBD物理仕様書)
+  - `realtime_physics_bake_specification.md` (リアルタイム物理ベイク技術仕様書: bullet_engine ✕ physics_bake_cs)
+  - `technical_overview_guide.md` (インポートから物理ベイクまでの仕組み解説: 総合図解仕様書)
+  - `plugin_technical_guide.md` (プラグイン総合技術解説ガイド)
 - **`ai-task-docs/`**: AIペアプログラミングによる機能アップデートごとの計画・タスクリスト・確認書を格納（Git除外）。

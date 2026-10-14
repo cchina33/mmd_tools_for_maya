@@ -105,3 +105,21 @@ def reconnect_visualizers_to_bones():
 ### 4-3. 手動再吸着ボタン（GUI）
 - 物理演算タブ内に「剛体・Jointをモデルに再吸着」ボタン（`btn_reconnect`）を配備。
 - ベイク後やシーン編集時、いつでもワンクリックで追従状態を正常復元可能です。
+
+---
+
+## 5. リアルタイム物理ベイク連携 (`physics_bake_cs`) とマルチ物理エンジン体制
+
+本ツールでは、制作用途やモデルの動きに合わせて選べるマルチ物理エンジン体制と、外部高速ベイク連携を提供しています。
+
+### 5-1. 3つの物理シミュレーション方式
+- **MMD本家仕様 Bullet Physics (`bullet_engine`)**:
+  - MMD特有のしなやかで柔らかい髪やスカートの物理挙動を忠実に再現する標準エンジン。
+  - 詳細仕様: [bullet_engine_specification.md](bullet_engine_specification.md)
+- **高安定 XPBD Physics (`cpp_engine`)**:
+  - 激しいダンスや素早いアクションでも、髪が体に突き抜けたり暴れたりしにくい位置ベース物理（XPBD）ソルバー。
+  - 詳細仕様: [xpbd_engine_specification.md](xpbd_engine_specification.md)
+- **リアルタイム物理ベイクアプリ (`physics_bake_cs`)**:
+  - Maya の描画負荷から物理計算を分離し、外部スタンドアロンプロセス（C# / BulletSharp）でリアルタイムに 3D プレビューしながら Maya へ直接キーフレームを送信・記録する超高速ベイクシステム。
+  - 詳細仕様: [realtime_physics_bake_specification.md](realtime_physics_bake_specification.md)
+

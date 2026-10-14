@@ -54,7 +54,7 @@ def _match_bone_to_joint(bone_name, joint_map):
     if not bone_name or not joint_map:
         return None
 
-    # 完全一致
+    # 一致
     if bone_name in joint_map:
         return joint_map[bone_name]
 
@@ -165,21 +165,62 @@ def _find_blendshape_targets(target_root=None):
 
     return target_map
 
+def _normalize_bone_map(raw_bones):
+    """
+    新スキーマ2.0 (配列形式) および旧スキーマ (辞書形式) の両方から、
+    ボーン名 -> Mayaノードパスの照合辞書を安全に復元します。
+    """
+    if isinstance(raw_bones, dict):
+        return raw_bones
+    if isinstance(raw_bones, list):
+        mapping = {}
+        for b in raw_bones:
+            if isinstance(b, dict):
+                node = b.get('maya_node') or b.get('node')
+                if node:
+                    if b.get('name_jp'):
+                        mapping[b['name_jp']] = node
+                    if b.get('name_en') and b['name_en'] not in mapping:
+                        mapping[b['name_en']] = node
+        return mapping
+    return {}
+
+def _normalize_morph_map(raw_morphs):
+    """
+    新スキーマ2.0 (配列形式) および旧スキーマ (辞書形式) の両方から、
+    モーフ名 -> Mayaターゲット情報辞書を安全に復元します。
+    """
+    if isinstance(raw_morphs, dict):
+        return raw_morphs
+    if isinstance(raw_morphs, list):
+        mapping = {}
+        for m in raw_morphs:
+            if isinstance(m, dict):
+                target = m.get('maya_target')
+                if target:
+                    if m.get('name_jp'):
+                        mapping[m['name_jp']] = target
+                    if m.get('name_en') and m['name_en'] not in mapping:
+                        mapping[m['name_en']] = target
+        return mapping
+    return {}
+
 def resolve_model_structure(target_model_node=None):
     """
     対象モデルのボーン構造マップおよびモーフ構造マップを取得します。
-    モデルに埋め込まれたメタデータ属性、または直近インポート時の構造キャッシュを優先します。
+    モデルに埋め込まれたメタデータ属性（mmdModelStructure優先）、または直近インポート時の構造キャッシュを優先します。
+    新スキーマ2.0（配列形式）と旧スキーマ（辞書形式）の両方に対応します。
     """
     bone_map = {}
     morph_map = {}
     resolved_model = None
 
-    # 1. target_model_node の自動検出（未指定の場合）
+    # target_model_node の自動検出（未指定の場合）
     if not target_model_node or not mc.objExists(target_model_node):
         sel = mc.ls(selection=True)
         if sel:
             for s in sel:
-                if mc.attributeQuery('mmdBoneStructure', node=s, exists=True):
+                if mc.attributeQuery('mmdModelStructure', node=s, exists=True) or mc.attributeQuery('mmdBoneStructure', node=s, exists=True):
                     target_model_node = s
                     break
         if not target_model_node:
@@ -187,21 +228,31 @@ def resolve_model_structure(target_model_node=None):
             if roots:
                 target_model_node = roots[-1] # 最新のインポートモデル
 
-    # 2. モデルノードのアトリビュートから構造復元
+    # 2. モデルノードのアトリビュートから構造復元 (mmdModelStructure 優先)
     if target_model_node and mc.objExists(target_model_node):
         resolved_model = target_model_node
-        if mc.attributeQuery('mmdBoneStructure', node=target_model_node, exists=True):
+        if mc.attributeQuery('mmdModelStructure', node=target_model_node, exists=True):
+            try:
+                raw_json = mc.getAttr(f"{target_model_node}.mmdModelStructure")
+                if raw_json:
+                    sdata = json.loads(raw_json)
+                    bone_map = _normalize_bone_map(sdata.get('bones'))
+                    morph_map = _normalize_morph_map(sdata.get('morphs'))
+            except Exception:
+                pass
+
+        if not bone_map and mc.attributeQuery('mmdBoneStructure', node=target_model_node, exists=True):
             try:
                 raw_json = mc.getAttr(f"{target_model_node}.mmdBoneStructure")
                 if raw_json:
-                    bone_map = json.loads(raw_json)
+                    bone_map = _normalize_bone_map(json.loads(raw_json))
             except Exception:
                 pass
-        if mc.attributeQuery('mmdMorphStructure', node=target_model_node, exists=True):
+        if not morph_map and mc.attributeQuery('mmdMorphStructure', node=target_model_node, exists=True):
             try:
                 raw_json = mc.getAttr(f"{target_model_node}.mmdMorphStructure")
                 if raw_json:
-                    morph_map = json.loads(raw_json)
+                    morph_map = _normalize_morph_map(json.loads(raw_json))
             except Exception:
                 pass
 
@@ -213,10 +264,10 @@ def resolve_model_structure(target_model_node=None):
             try:
                 with open(cache_path, 'r', encoding='utf-8') as f:
                     cdata = json.load(f)
-                    bone_map = cdata.get('bones', {})
-                    morph_map = cdata.get('morphs', {})
+                    bone_map = _normalize_bone_map(cdata.get('bones'))
+                    morph_map = _normalize_morph_map(cdata.get('morphs'))
                     if not resolved_model:
-                        resolved_model = cdata.get('model_node')
+                        resolved_model = cdata.get('maya', {}).get('model_node') or cdata.get('model_node')
             except Exception:
                 pass
 
@@ -231,19 +282,33 @@ def resolve_model_structure(target_model_node=None):
 def _resolve_full_joint_path(node_candidate, target_model=None):
     """
     ジョイント候補名から、名前重複を回避して一意のフルDAGパスを取得します。
+    特殊文字や日本語名によるMaya lsコマンドのパースエラーを防止します。
     """
     if not node_candidate:
         return None
 
-    # 1. すでにフルパス（|で始まる）で存在する場合
-    if node_candidate.startswith('|') and mc.objExists(node_candidate):
-        return node_candidate
+    # すでにフルパス（|で始まる）または直接存在する場合
+    try:
+        if mc.objExists(node_candidate):
+            longs = mc.ls(node_candidate, long=True)
+            return longs[0] if longs else node_candidate
+    except Exception:
+        pass
 
     # 2. ショートネームからロングネームを解決
     short_name = node_candidate.split('|')[-1].split(':')[-1]
-    matches = mc.ls(short_name, long=True, type='joint') or []
+    matches = []
+    try:
+        if mc.objExists(short_name):
+            matches = mc.ls(short_name, long=True, type='joint') or []
+    except Exception:
+        pass
+
     if not matches:
-        matches = mc.ls(f"*{short_name}", long=True, type='joint') or []
+        try:
+            matches = mc.ls(f"*{short_name}", long=True, type='joint') or []
+        except Exception:
+            pass
 
     if matches:
         if len(matches) == 1:
@@ -255,17 +320,309 @@ def _resolve_full_joint_path(node_candidate, target_model=None):
                     return m
         return matches[-1]
 
-    # 3. 単純存在チェック
-    if mc.objExists(node_candidate):
-        longs = mc.ls(node_candidate, long=True)
-        return longs[0] if longs else node_candidate
-
     return None
 
-def apply_bone_motion(motion, joint_map, scale=8.0, target_model=None):
+def print_vmd_analysis_report(motion, joint_map, target_model=None):
+    """
+    VMDモーションデータの詳細解析レポートをコンソールに出力します。
+    すべてのボーン、キーフレーム数、対応するMayaジョイントのマッピング状況を整形表示します。
+    """
+    total_bone_keys = sum(len(frames) for frames in motion.bone_frames.values())
+    total_morph_keys = sum(len(frames) for frames in motion.morph_frames.values())
+    cam_keys = len(motion.camera_frames)
+    ik_keys = len(motion.ik_frames)
+
+    print("==================================================")
+    print("VMD モーション解析レポート")
+    print("==================================================")
+    print(f"  モデル名 (VMDヘッダー): {motion.model_name}")
+    print(f"  最大フレーム数: {motion.max_frame} フレーム ({motion.max_frame / 30.0:.2f} 秒 @ 30fps)")
+    print(f"  ボーン総数: {len(motion.bone_frames)} 本 (総キーフレーム数: {total_bone_keys})")
+    print(f"  モーフ総数: {len(motion.morph_frames)} 種 (総キーフレーム数: {total_morph_keys})")
+    print(f"  カメラキー数: {cam_keys} キー")
+    print(f"  IK制御フレーム数: {ik_keys} フレーム")
+    print("--------------------------------------------------")
+    print("【全ボーン解析 & モデル対応マッピング一覧】")
+
+    matched_count = 0
+    unmatched_count = 0
+
+    # ボーン名をソートして全件出力
+    for idx, (b_name, frames) in enumerate(sorted(motion.bone_frames.items())):
+        k_count = len(frames)
+        candidate = _match_bone_to_joint(b_name, joint_map)
+
+        if candidate:
+            matched_count += 1
+            resolved_path = _resolve_full_joint_path(candidate, target_model)
+            final_path = resolved_path or candidate
+            short_j = final_path.split('|')[-1]
+            print(f"  [{idx+1:3d}] {b_name:<16s}: {k_count:5d} キー -> {short_j} [マッチ]")
+        else:
+            unmatched_count += 1
+            print(f"  [{idx+1:3d}] {b_name:<16s}: {k_count:5d} キー -> [未対応/モデルなし]")
+
+    print("--------------------------------------------------")
+    print(f"  マッピング結果: マッチ={matched_count}本, 未対応={unmatched_count}本")
+
+    # 特筆すべき重要ボーン（足・体幹・IK）のサマリー確認
+    important_bones = ["全ての親", "センター", "グルーブ", "下半身", "上半身", "左足", "右足", "左ひざ", "右ひざ", "左足首", "右足首", "左足ＩＫ", "右足ＩＫ"]
+    found_important = []
+    for ib in important_bones:
+        if ib in motion.bone_frames:
+            found_important.append(f"{ib}({len(motion.bone_frames[ib])}キー)")
+    if found_important:
+        print(f"  主要ボーン検出: {', '.join(found_important)}")
+
+    if "左足" in motion.bone_frames or "右足" in motion.bone_frames:
+        print("  [重要] 「左足」「右足」のキーフレームを検出しました。モデルの対応ボーンへ確実に書き込みます。")
+
+    print("==================================================")
+
+
+def apply_ik_motion(motion, target_model=None):
+    """
+    VMDのIK制御フレーム（VmdShowIkFrame）をMayaの足IKハンドルの ikBlend にキーフレーム設定します。
+    """
+    if not motion.ik_frames:
+        return
+
+    # シーン内の足IKハンドルを探索
+    ik_handles = {}
+    for side_jp, side_en in [("左", "L"), ("右", "R")]:
+        h_pattern = f"*ikHandle_leg_{side_en}*"
+        matches = mc.ls(h_pattern, type='ikHandle') or []
+        if matches:
+            ik_handles[f"{side_jp}足ＩＫ"] = matches[0]
+            ik_handles[f"{side_jp}足IK"] = matches[0]
+
+    if not ik_handles:
+        return
+
+    applied_ik_keys = 0
+    for ik_frame in motion.ik_frames:
+        f = ik_frame.frame
+        for ik_info in ik_frame.ik_list:
+            ik_name = ik_info.name
+            enabled = ik_info.enabled
+            blend_val = 1.0 if enabled else 0.0
+
+            if ik_name in ik_handles:
+                h_node = ik_handles[ik_name]
+                try:
+                    mc.setKeyframe(h_node, attribute='ikBlend', time=f, value=blend_val)
+                    applied_ik_keys += 1
+                except Exception:
+                    pass
+
+    if applied_ik_keys > 0:
+        print(f"  - IK制御キーフレームを足IKハンドルに設定しました ({applied_ik_keys} キー)")
+
+
+def apply_leg_knee_orientation(motion, joint_map, target_model=None, scale=8.0):
+    """
+    大腿（左足・右足）のVMD回転キーおよび腰・足IKの姿勢変化に基づき、
+    膝の外開き方向（斜め前外側）へポールベクターロケータの位置軌道を算出し、
+    キーフレームを設定します。
+    これにより、しゃがみポーズやダンス動作において膝が自然に外側へ開く姿勢を再現します。
+    """
+    if not motion.bone_frames:
+        return 0
+
+    applied_keys = 0
+
+    for side_jp, side_en in [("左", "L"), ("右", "R")]:
+        pv_name = f"poleVector_leg_{side_en}_{target_model}" if target_model else f"poleVector_leg_{side_en}"
+        pv_candidates = mc.ls(f"*{pv_name}*", type='transform') or mc.ls(f"*poleVector_leg_{side_en}*", type='transform') or []
+        if not pv_candidates:
+            continue
+        pv_node = pv_candidates[0]
+
+        # 大腿のVMDキーフレームを取得
+        leg_bone_name = f"{side_jp}足"
+        leg_frames = motion.bone_frames.get(leg_bone_name, [])
+
+        # 足IKやセンターのキーフレームも考慮（ポーズ変化フレームの網羅）
+        ik_frames = motion.bone_frames.get(f"{side_jp}足ＩＫ", []) or motion.bone_frames.get(f"{side_jp}足IK", [])
+        center_frames = motion.bone_frames.get("センター", []) or motion.bone_frames.get("全ての親", [])
+
+        # 評価対象フレーム一覧（大腿キーを中心に足IK・センターのキーフレームを包含）
+        target_frame_set = set()
+        for bf in leg_frames:
+            target_frame_set.add(bf.frame)
+        for bf in ik_frames:
+            target_frame_set.add(bf.frame)
+        for bf in center_frames:
+            target_frame_set.add(bf.frame)
+
+        if not target_frame_set:
+            continue
+
+        sorted_frames = sorted(target_frame_set)
+
+        # 大腿フレームのマップ（フレーム番号 -> VmdBoneFrame）
+        leg_frame_map = {bf.frame: bf for bf in leg_frames}
+
+        # 初期Zオフセット（前方距離）の取得
+        try:
+            base_dist = mc.getAttr(f"{pv_node}.translateZ")
+            if abs(base_dist) < 1.0:
+                base_dist = 25.0
+        except Exception:
+            base_dist = 25.0
+
+        # 直前の大腿クォータニオン（キーが存在しないフレームでの保持用）
+        curr_rot = om.MQuaternion()
+        is_left = (side_en == "L")
+
+        tx_list = []
+        ty_list = []
+        tz_list = []
+        frame_list = []
+
+        for f in sorted_frames:
+            if f in leg_frame_map:
+                bf = leg_frame_map[f]
+                qx, qy, qz, qw = bf.rotation
+                curr_rot = om.MQuaternion(-qx, -qy, qz, qw)
+
+            # 前方単位ベクトル (0, 0, 1) に大腿回転を適用
+            fwd_vec = om.MVector(0.0, 0.0, 1.0)
+            rot_vec = curr_rot.rotate(fwd_vec)
+
+            # 大腿の外開き角度の算出
+            vx = rot_vec.x
+            vy = rot_vec.y
+            vz = rot_vec.z
+
+            # 外開き成分の反映 (左右対称の外開きオフセット)
+            lateral_offset = vx * base_dist * 0.85
+
+            # ボーン軸に直交する前方距離（常に十分な前方距離を保持してフリップを防止）
+            forward_offset = max(base_dist * 0.8, vz * base_dist)
+
+            vertical_offset = 0.0
+
+            mc.setKeyframe(pv_node, attribute='translateX', time=f, value=lateral_offset)
+            mc.setKeyframe(pv_node, attribute='translateY', time=f, value=vertical_offset)
+            mc.setKeyframe(pv_node, attribute='translateZ', time=f, value=forward_offset)
+
+            frame_list.append(f)
+            tx_list.append(lateral_offset)
+            ty_list.append(vertical_offset)
+            tz_list.append(forward_offset)
+            applied_keys += 1
+
+        # カーブの滑らかなスプライン補間設定
+        if len(frame_list) >= 2:
+            try:
+                mc.keyTangent(pv_node, attribute='translate', edit=True, inTangentType='spline', outTangentType='spline')
+            except Exception:
+                pass
+
+    if applied_keys > 0:
+        print(f"  - 膝の向き・外開きポールベクターキーフレームを設定しました ({applied_keys} キー)")
+    return applied_keys
+
+
+def extract_vmd_bone_bezier_points(interpolation_bytes, channel_idx):
+    """
+    VMDボーンキーフレームの64バイト補間データから制御点 (x1, y1, x2, y2) を抽出します。
+    channel_idx: 0=X移動, 1=Y移動, 2=Z移動, 3=回転
+    """
+    if not interpolation_bytes or len(interpolation_bytes) < 16:
+        return 20.0 / 127.0, 20.0 / 127.0, 107.0 / 127.0, 107.0 / 127.0
+    c = channel_idx
+    x1 = float(interpolation_bytes[c]) / 127.0
+    y1 = float(interpolation_bytes[4 + c]) / 127.0
+    x2 = float(interpolation_bytes[8 + c]) / 127.0
+    y2 = float(interpolation_bytes[12 + c]) / 127.0
+    return x1, y1, x2, y2
+
+
+def extract_vmd_camera_bezier_points(interpolation_bytes, channel_idx):
+    """
+    VMDカメラキーフレームの24バイト補間データから制御点 (x1, y1, x2, y2) を抽出します。
+    channel_idx: 0=X移動, 1=Y移動, 2=Z移動, 3=回転, 4=距離, 5=画角
+    """
+    if not interpolation_bytes or len(interpolation_bytes) < 24:
+        return 20.0 / 127.0, 20.0 / 127.0, 107.0 / 127.0, 107.0 / 127.0
+    offset = channel_idx * 4
+    x1 = float(interpolation_bytes[offset + 0]) / 127.0
+    x2 = float(interpolation_bytes[offset + 1]) / 127.0
+    y1 = float(interpolation_bytes[offset + 2]) / 127.0
+    y2 = float(interpolation_bytes[offset + 3]) / 127.0
+    return x1, y1, x2, y2
+
+
+def apply_curve_bezier_tangents(node, attr, key_frames, key_values, bezier_params_list):
+    """
+    指定ノード・属性のアニメーションカーブに対して、MMDベジェ補間曲線に基づく重み付き接線を設定します。
+    key_frames: キーフレーム番号のリスト
+    key_values: キーフレームの値のリスト
+    bezier_params_list: 各キーフレームの (x1, y1, x2, y2) のリスト
+    """
+    if len(key_frames) < 2:
+        return
+
+    attr_plug = f"{node}.{attr}"
+    try:
+        mc.keyTangent(attr_plug, edit=True, weightedTangents=True)
+    except Exception:
+        pass
+
+    num_keys = len(key_frames)
+    for i in range(num_keys - 1):
+        f0 = key_frames[i]
+        f1 = key_frames[i + 1]
+        dt = float(f1 - f0)
+        if dt <= 0:
+            continue
+
+        v0 = key_values[i]
+        v1 = key_values[i + 1]
+        dv = float(v1 - v0)
+
+        # MMD仕様: 遷移 k0 -> k1 の補間パラメータは k1 に格納されている
+        x1, y1, x2, y2 = bezier_params_list[i + 1]
+
+        # 出接線ベクトル (k0 側)
+        dx_out = max(1e-4, x1 * dt)
+        dv_out = y1 * dv
+        out_angle = math.degrees(math.atan2(dv_out, dx_out))
+        out_weight = math.sqrt(dx_out * dx_out + dv_out * dv_out) / 3.0
+
+        # 入接線ベクトル (k1 側)
+        dx_in = max(1e-4, (1.0 - x2) * dt)
+        dv_in = (1.0 - y2) * dv
+        in_angle = math.degrees(math.atan2(dv_in, dx_in))
+        in_weight = math.sqrt(dx_in * dx_in + dv_in * dv_in) / 3.0
+
+        # k0 の出接線
+        try:
+            mc.keyTangent(
+                attr_plug, edit=True, time=(f0, f0),
+                lock=False, outTangentType='fixed',
+                outAngle=out_angle, outWeight=max(1e-4, out_weight)
+            )
+        except Exception:
+            pass
+
+        # k1 の入接線
+        try:
+            mc.keyTangent(
+                attr_plug, edit=True, time=(f1, f1),
+                lock=False, inTangentType='fixed',
+                inAngle=in_angle, inWeight=max(1e-4, in_weight)
+            )
+        except Exception:
+            pass
+
+
+def apply_bone_motion(motion, joint_map, scale=8.0, target_model=None, progress_callback=None):
     """
     VMDボーンモーションをMayaのジョイント階層にキーフレーム設定します。
-    フルDAGパス解決と個別例外保護により名前重複エラーによる途中中断を防止します。
+    すべてのキーフレームをモデル対応するボーンへ漏れなく書き込みます。
     """
     applied_bones = 0
     total_keys = 0
@@ -315,14 +672,19 @@ def apply_bone_motion(motion, joint_map, scale=8.0, target_model=None):
     # 各ジョイントの直前フレームオイラー角キャッシュ (フリップ防止用)
     prev_joint_eulers = {}
 
+    # 進捗計測用の有効キーフレーム総数を事前集計
+    total_expected_keys = sum(len(frames) for b, frames in motion.bone_frames.items() if b in valid_joints)
+    last_reported_frame = -1
+
     for bone_name, frames in motion.bone_frames.items():
         if bone_name not in valid_joints:
             continue
 
         j_node = valid_joints[bone_name]
 
-        # コンストレイントで駆動されているDボーン等の従属ジョイントは直接キー打ちをスキップして追従連動を保護
-        if any(k in bone_name for k in ["足D", "ひざD", "足首D"]):
+        # コンストレイントで駆動されている足首やDボーン等の従属ジョイントは直接キー打ちをスキップして追従連動を保護
+        # (足IKハンドルのorientConstraintと直接キー打ちが競合して足首が180度反転ねじれを起こす現象を確実に防止)
+        if any(k in bone_name for k in ["足首", "足D", "ひざD", "足首D"]):
             try:
                 if mc.listConnections(j_node, type="orientConstraint"):
                     continue
@@ -330,17 +692,14 @@ def apply_bone_motion(motion, joint_map, scale=8.0, target_model=None):
                 pass
 
         # 腕捩1..3、手捩1..3等の分散補助ボーンはモデル側の付与エクスプレッションによる自動ロール分散を優先
-        # (VMDの直接キー打ちとエクスプレッションが競合してメッシュがキャンディ状にねじれる現象を完全防止)
         if re.search(r'(腕捩|手捩)[0-9]', bone_name):
             continue
 
-        # 直列捩り階層モデル（腕 -> 腕捩 -> ひじ）における二重回転防止
-        # 親の「腕」や「ひじ」に既にキーフレームが存在する場合、直列の中間捩りボーンへの重複キー打ちをスキップ
+        # 直列捩り階層モデルにおける二重回転防止
         if bone_name in ["左腕捩", "右腕捩", "左手捩", "右手捩"]:
             side_prefix = "左" if "左" in bone_name else "右" if "右" in bone_name else ""
             parent_bone_key = f"{side_prefix}腕" if "腕捩" in bone_name else f"{side_prefix}ひじ"
             if parent_bone_key in motion.bone_frames:
-                # 直列階層の親（ひじの親が腕捩になっている構造）かどうかを判定
                 children = mc.listRelatives(j_node, children=True, type='joint') or []
                 is_serial_parent = any("hiji" in c.lower() or "tekubi" in c.lower() for c in children)
                 if is_serial_parent:
@@ -358,6 +717,20 @@ def apply_bone_motion(motion, joint_map, scale=8.0, target_model=None):
         inv_jo_q, inv_ra_q, ro = joint_rot_props.get(j_node, (om.MQuaternion(), om.MQuaternion(), 0))
         bone_success = False
 
+        rot_keys = []
+        rx_vals = []
+        ry_vals = []
+        rz_vals = []
+        rot_beziers = []
+
+        trans_keys = []
+        tx_vals = []
+        ty_vals = []
+        tz_vals = []
+        trans_x_beziers = []
+        trans_y_beziers = []
+        trans_z_beziers = []
+
         for bf in frames:
             f = bf.frame
             try:
@@ -373,7 +746,7 @@ def apply_bone_motion(motion, joint_map, scale=8.0, target_model=None):
                 euler = local_rot_q.asEulerRotation()
                 euler.reorderIt(ro)
 
-                # 前フレームからの最短連続角度を維持 (180度フリップ・裏返りを完全防止)
+                # 前フレームからの最短連続角度を維持 (180度フリップ・裏返りを防止)
                 if j_node in prev_joint_eulers:
                     euler = euler.closestSolution(prev_joint_eulers[j_node])
                 prev_joint_eulers[j_node] = euler
@@ -386,11 +759,20 @@ def apply_bone_motion(motion, joint_map, scale=8.0, target_model=None):
                 mc.setKeyframe(j_node, attribute='rotateY', time=f, value=ry)
                 mc.setKeyframe(j_node, attribute='rotateZ', time=f, value=rz)
 
-                # 移動オフセットの適用（移動値が存在する場合、またはIK・ルート・下半身系）
+                rot_keys.append(f)
+                rx_vals.append(rx)
+                ry_vals.append(ry)
+                rz_vals.append(rz)
+                rot_beziers.append(extract_vmd_bone_bezier_points(bf.interpolation, 3))
+
+                # 移動オフセットの適用（IK・ルート・センター等の移動可能ボーン、または有意な移動値がある場合）
                 px, py, pz = bf.position
+                has_pos_val = (abs(px) > 1e-4 or abs(py) > 1e-4 or abs(pz) > 1e-4)
+                # 回転専用ボーン（髪・スカート・紐・手足等）への意図しない平行移動の書き込みを防止
+                is_rotation_only_part = any(k in bone_name for k in ["スカート", "髪", "コード", "紐", "リボン", "ネクタイ", "胸", "指", "腕", "ひじ", "手首", "ひざ", "足首", "目", "頭", "首"])
                 is_movable_bone = (
-                    any(keyword in bone_name for keyword in ["ＩＫ", "IK", "親", "センター", "グルーブ", "全ての親", "下半身", "腰"])
-                    or abs(px) > 1e-5 or abs(py) > 1e-5 or abs(pz) > 1e-5
+                    any(keyword in bone_name for keyword in ["ＩＫ", "IK", "親", "センター", "グルーブ", "全ての親", "下半身", "腰", "足先EX"])
+                    or (has_pos_val and not is_rotation_only_part)
                 )
                 if is_movable_bone:
                     tx = init_t[0] + px * scale
@@ -400,8 +782,57 @@ def apply_bone_motion(motion, joint_map, scale=8.0, target_model=None):
                     mc.setKeyframe(j_node, attribute='translateY', time=f, value=ty)
                     mc.setKeyframe(j_node, attribute='translateZ', time=f, value=tz)
 
+                    trans_keys.append(f)
+                    tx_vals.append(tx)
+                    ty_vals.append(ty)
+                    tz_vals.append(tz)
+                    trans_x_beziers.append(extract_vmd_bone_bezier_points(bf.interpolation, 0))
+                    trans_y_beziers.append(extract_vmd_bone_bezier_points(bf.interpolation, 1))
+                    trans_z_beziers.append(extract_vmd_bone_bezier_points(bf.interpolation, 2))
+
                 total_keys += 1
                 bone_success = True
+
+                # 進捗コールバック通知 (約30キーごと、またはフレーム単位)
+                if progress_callback and (total_keys % 30 == 0 or total_keys == total_expected_keys):
+                    progress_callback(f, motion.max_frame, total_keys, max(1, total_expected_keys))
+            except Exception:
+                pass
+
+        # 回転カーブへのMMDベジェ接線適用
+        if len(rot_keys) >= 2:
+            apply_curve_bezier_tangents(j_node, 'rotateX', rot_keys, rx_vals, rot_beziers)
+            apply_curve_bezier_tangents(j_node, 'rotateY', rot_keys, ry_vals, rot_beziers)
+            apply_curve_bezier_tangents(j_node, 'rotateZ', rot_keys, rz_vals, rot_beziers)
+        else:
+            try:
+                mc.keyTangent(j_node, attribute='rotate', edit=True, inTangentType='spline', outTangentType='spline')
+            except Exception:
+                pass
+
+        # 大腿ボーンの回転カーブをFKガイド（fkGuide_leg_*）へ接続し、膝の向き・ポールベクターを忠実追従
+        if bone_name in ("左足", "右足"):
+            side_en = "L" if bone_name.startswith("左") else "R"
+            g_name = f"fkGuide_leg_{side_en}_{target_model}" if target_model else f"fkGuide_leg_{side_en}"
+            g_candidates = mc.ls(f"*{g_name}*", type='transform') or mc.ls(f"*fkGuide_leg_{side_en}*", type='transform') or []
+            if g_candidates:
+                target_g = g_candidates[0]
+                for ax in "XYZ":
+                    crv = mc.listConnections(f"{j_node}.rotate{ax}", source=True, destination=False, type='animCurve') or []
+                    if crv:
+                        try:
+                            mc.connectAttr(f"{crv[0]}.output", f"{target_g}.rotate{ax}", force=True)
+                        except Exception:
+                            pass
+
+        # 移動カーブへのMMDベジェ接線適用
+        if len(trans_keys) >= 2:
+            apply_curve_bezier_tangents(j_node, 'translateX', trans_keys, tx_vals, trans_x_beziers)
+            apply_curve_bezier_tangents(j_node, 'translateY', trans_keys, ty_vals, trans_y_beziers)
+            apply_curve_bezier_tangents(j_node, 'translateZ', trans_keys, tz_vals, trans_z_beziers)
+        elif trans_keys:
+            try:
+                mc.keyTangent(j_node, attribute='translate', edit=True, inTangentType='spline', outTangentType='spline')
             except Exception:
                 pass
 
@@ -410,12 +841,11 @@ def apply_bone_motion(motion, joint_map, scale=8.0, target_model=None):
         else:
             failed_bones.append(bone_name)
 
-    # アニメーションカーブの補間をスプラインに設定
-    for j_node in valid_joints.values():
-        try:
-            mc.keyTangent(j_node, edit=True, inTangentType='spline', outTangentType='spline')
-        except Exception:
-            pass
+    # VMD内のIK制御情報をMaya足IKハンドルへ適用
+    try:
+        apply_ik_motion(motion, target_model)
+    except Exception as e:
+        print(f"  [情報] IKモーション適用: {e}")
 
     if failed_bones:
         print(f"  [情報] スキップされたボーン: {len(failed_bones)}本")
@@ -499,6 +929,23 @@ def apply_camera_motion(motion, scale=8.0):
     aperture_inch = mc.camera(cam_shape, query=True, verticalFilmAperture=True)
     aperture_mm = aperture_inch * 25.4
 
+    cam_keys = []
+    aim_tx = []
+    aim_ty = []
+    aim_tz = []
+    aim_rx = []
+    aim_ry = []
+    aim_rz = []
+    cam_dist_vals = []
+    cam_fl_vals = []
+
+    cam_bx = []
+    cam_by = []
+    cam_bz = []
+    cam_brot = []
+    cam_bdist = []
+    cam_bfov = []
+
     for cf in motion.camera_frames:
         f = cf.frame
 
@@ -532,35 +979,169 @@ def apply_camera_motion(motion, scale=8.0):
         fl = (aperture_mm / 2.0) / math.tan(fov_rad / 2.0)
         mc.setKeyframe(cam_shape, attribute='focalLength', time=f, value=fl)
 
-    # スプライン補間設定
-    for node in [aim_locator, cam_trans, cam_shape]:
-        try:
-            mc.keyTangent(node, edit=True, inTangentType='spline', outTangentType='spline')
-        except Exception:
-            pass
+        cam_keys.append(f)
+        aim_tx.append(tx)
+        aim_ty.append(ty)
+        aim_tz.append(tz)
+        aim_rx.append(rx)
+        aim_ry.append(ry)
+        aim_rz.append(rz)
+        cam_dist_vals.append(cam_dist)
+        cam_fl_vals.append(fl)
+
+        cam_bx.append(extract_vmd_camera_bezier_points(cf.interpolation, 0))
+        cam_by.append(extract_vmd_camera_bezier_points(cf.interpolation, 1))
+        cam_bz.append(extract_vmd_camera_bezier_points(cf.interpolation, 2))
+        cam_brot.append(extract_vmd_camera_bezier_points(cf.interpolation, 3))
+        cam_bdist.append(extract_vmd_camera_bezier_points(cf.interpolation, 4))
+        cam_bfov.append(extract_vmd_camera_bezier_points(cf.interpolation, 5))
+
+    # カメラアニメーションカーブへのMMDベジェ接線適用
+    if len(cam_keys) >= 2:
+        apply_curve_bezier_tangents(aim_locator, 'translateX', cam_keys, aim_tx, cam_bx)
+        apply_curve_bezier_tangents(aim_locator, 'translateY', cam_keys, aim_ty, cam_by)
+        apply_curve_bezier_tangents(aim_locator, 'translateZ', cam_keys, aim_tz, cam_bz)
+        apply_curve_bezier_tangents(aim_locator, 'rotateX', cam_keys, aim_rx, cam_brot)
+        apply_curve_bezier_tangents(aim_locator, 'rotateY', cam_keys, aim_ry, cam_brot)
+        apply_curve_bezier_tangents(aim_locator, 'rotateZ', cam_keys, aim_rz, cam_brot)
+        apply_curve_bezier_tangents(cam_trans, 'translateZ', cam_keys, cam_dist_vals, cam_bdist)
+        apply_curve_bezier_tangents(cam_shape, 'focalLength', cam_keys, cam_fl_vals, cam_bfov)
+    else:
+        for node in [aim_locator, cam_trans, cam_shape]:
+            try:
+                mc.keyTangent(node, edit=True, inTangentType='spline', outTangentType='spline')
+            except Exception:
+                pass
 
     print(f"[情報] カメラアニメーションを適用しました: {len(motion.camera_frames)} フレーム")
     return aim_locator
 
 def clear_model_animation(target_model_node=None, clear_camera=True):
     """
-    指定モデル（または検出モデル）のボーンおよびモーフのアニメーションキーを全削除し、
-    初期ポーズへ復元します。カメラアニメーションのクリアも行います。
+    指定モデル（または検出モデル）のボーンおよびモーフのモーションキーを全削除し、
+    初期ポーズへ復元します。剛体・Jointのキーフレームも初期化してボーンへ再吸着させます。
     """
     resolved_model, joint_map, morph_map = resolve_model_structure(target_model_node)
     cleared_bones = 0
     cleared_morphs = 0
 
-    # ボーンのアニメーション削除 & 初期化
+    # ボーンのモーションキー削除 (構造マップ登録ボーン + 階層下全ジョイント)
+    processed_joints = set()
     for bone_name, candidate in joint_map.items():
         resolved_path = _resolve_full_joint_path(candidate, resolved_model)
         if resolved_path and mc.objExists(resolved_path):
             try:
                 mc.cutKey(resolved_path, clear=True)
-                mc.setAttr(f"{resolved_path}.rotate", 0.0, 0.0, 0.0)
                 cleared_bones += 1
+                processed_joints.add(resolved_path)
+                short_names = mc.ls(resolved_path, shortNames=True)
+                if short_names:
+                    processed_joints.add(short_names[0])
             except Exception:
                 pass
+
+    # モデル階層下（または未指定時はシーン内全域）のジョイントも漏れなくキー削除
+    if resolved_model and mc.objExists(resolved_model):
+        hierarchy_joints = mc.listRelatives(resolved_model, allDescendents=True, type='joint', fullPath=True) or []
+    else:
+        hierarchy_joints = mc.ls(type='joint', long=True) or []
+
+    for j in hierarchy_joints:
+        if j not in processed_joints:
+            try:
+                mc.cutKey(j, clear=True)
+                cleared_bones += 1
+                processed_joints.add(j)
+            except Exception:
+                pass
+
+    # 足IKハンドルのモーションキー削除 & 初期化
+    ik_handles = mc.ls("*ikHandle_leg_*", type='ikHandle') or []
+    for ikh in ik_handles:
+        try:
+            mc.cutKey(ikh, clear=True)
+            if mc.attributeQuery('ikBlend', node=ikh, exists=True):
+                mc.setAttr(f"{ikh}.ikBlend", 1.0)
+        except Exception:
+            pass
+
+    # ポールベクターロケータのキー削除 & 初期オフセット位置へのリセット
+    for pv in (mc.ls("*poleVector_leg_*", type='transform') or []):
+        try:
+            mc.cutKey(pv, clear=True)
+            if mc.attributeQuery('translateX', node=pv, exists=True):
+                mc.setAttr(f"{pv}.translateX", 0.0)
+            if mc.attributeQuery('translateY', node=pv, exists=True):
+                mc.setAttr(f"{pv}.translateY", 0.0)
+        except Exception:
+            pass
+
+    # FKガイドの回転・接続初期化
+    for g in (mc.ls("fkGuide_leg_*", type='transform') or mc.ls("*fkGuide_leg_*", type='transform') or []):
+        try:
+            for ax in "XYZ":
+                conns = mc.listConnections(f"{g}.rotate{ax}", source=True, destination=False, plugs=True) or []
+                for c_plug in conns:
+                    try:
+                        mc.disconnectAttr(c_plug, f"{g}.rotate{ax}")
+                    except Exception:
+                        pass
+            mc.setAttr(f"{g}.rotate", 0.0, 0.0, 0.0, type='double3')
+        except Exception:
+            pass
+
+    # バインドポーズの復元 (Translate, Rotate を含む初期ポーズ復元)
+    restored_pose = False
+    dag_poses = mc.ls(type="dagPose") or []
+    for dp in dag_poses:
+        try:
+            if mc.attributeQuery("bindPose", node=dp, exists=True) and mc.getAttr(f"{dp}.bindPose"):
+                mc.dagPose(dp, restore=True)
+                restored_pose = True
+        except Exception:
+            pass
+
+    # dagPoseで復元されなかった場合の回転初期化
+    if not restored_pose:
+        for bone_name, candidate in joint_map.items():
+            resolved_path = _resolve_full_joint_path(candidate, resolved_model)
+            if resolved_path and mc.objExists(resolved_path):
+                try:
+                    mc.setAttr(f"{resolved_path}.rotate", 0.0, 0.0, 0.0)
+                except Exception:
+                    pass
+
+    # 剛体およびJointノードのキーフレーム初期化
+    vis_groups = [
+        "MMD_RigidBody_Joint_Visualizers",
+        "MMD_RigidBody_Visualizers",
+        "MMD_Joint_Visualizers",
+        "MMD_Bullet_Physics_Rig"
+    ]
+    for grp in vis_groups:
+        if mc.objExists(grp):
+            try:
+                mc.cutKey(grp, hierarchy='below', clear=True)
+            except Exception:
+                pass
+
+    # 個別剛体・Jointトランスフォームノードのキーフレーム削除
+    phys_nodes = mc.ls("rb_vis_*", "joint_vis_*", "bullet_rb_*", "bullet_joint_*", transforms=True) or []
+    for p_node in phys_nodes:
+        try:
+            mc.cutKey(p_node, clear=True)
+        except Exception:
+            pass
+
+    # 剛体・Joint追従コンストレイントの復元 & モデルボーンへの再吸着
+    try:
+        try:
+            from ..cpp_engine import xpbd_visualizer
+        except Exception:
+            from cpp_engine import xpbd_visualizer
+        xpbd_visualizer.reconnect_visualizers_to_bones()
+    except Exception as e:
+        print(f"  [情報] 剛体・Joint再吸着スキップ: {e}")
 
     # BlendShapeのキーフレーム削除 & ウェイトリセット (0.0)
     bs_nodes = mc.ls(type='blendShape') or []
@@ -583,16 +1164,102 @@ def clear_model_animation(target_model_node=None, clear_camera=True):
                 except Exception:
                     pass
 
-    mc.currentTime(0)
-    print(f"[情報] アニメーションをクリアしました: ボーン={cleared_bones}, BlendShape={cleared_morphs}")
+    # カレントフレームを0へ戻し、ビューポート表示を強制同期
+    try:
+        mc.currentTime(0)
+        mc.dgdirty(allPlugs=True)
+        mc.refresh(force=True)
+    except Exception:
+        pass
+
+    print(f"[情報] モーションをクリアしました: ボーン={cleared_bones}, BlendShape={cleared_morphs}, 剛体・Joint復元完了")
     return cleared_bones, cleared_morphs
 
-def import_audio(wav_file_path, offset=0):
+import wave
+import struct
+import tempfile
+
+_current_audio_source_path = None
+_current_audio_offset = 0
+
+def scale_wav_volume(input_wav_path, output_wav_path, volume_ratio):
+    """
+    WAVファイルのPCM振幅を volume_ratio (0.0〜1.0) でスケーリングして出力
+    """
+    with wave.open(input_wav_path, 'rb') as r:
+        params = r.getparams()
+        nchannels, sampwidth, framerate, nframes = params[:4]
+        raw_data = r.readframes(nframes)
+
+    if volume_ratio >= 0.999:
+        with wave.open(output_wav_path, 'wb') as w:
+            w.setparams(params)
+            w.writeframes(raw_data)
+        return
+
+    # サンプル幅に応じたPCM振幅のスケーリング
+    if sampwidth == 2:
+        count = len(raw_data) // 2
+        fmt = f"<{count}h"
+        samples = struct.unpack(fmt, raw_data)
+        scaled = [max(-32768, min(32767, int(s * volume_ratio))) for s in samples]
+        out_bytes = struct.pack(fmt, *scaled)
+    elif sampwidth == 1:
+        samples = list(raw_data)
+        scaled = [max(0, min(255, int(128 + (s - 128) * volume_ratio))) for s in samples]
+        out_bytes = bytes(scaled)
+    elif sampwidth == 4:
+        count = len(raw_data) // 4
+        fmt = f"<{count}i"
+        samples = struct.unpack(fmt, raw_data)
+        scaled = [max(-2147483648, min(2147483647, int(s * volume_ratio))) for s in samples]
+        out_bytes = struct.pack(fmt, *scaled)
+    else:
+        out_bytes = raw_data
+
+    with wave.open(output_wav_path, 'wb') as w:
+        w.setparams(params)
+        w.writeframes(out_bytes)
+
+def set_audio_volume(volume_percent):
+    """
+    現在の BGM 音声ノードの音量を volume_percent (0〜100) に調節
+    """
+    global _current_audio_source_path, _current_audio_offset
+    audio_nodes = mc.ls("MMD_Audio*", type="audio") or []
+    if not audio_nodes:
+        return False
+
+    audio_node = audio_nodes[0]
+    src_path = _current_audio_source_path
+    if not src_path or not os.path.exists(src_path):
+        src_path = mc.getAttr(f"{audio_node}.filename")
+        if not src_path or not os.path.exists(src_path):
+            return False
+        _current_audio_source_path = src_path
+
+    vol_ratio = max(0.0, min(1.0, float(volume_percent) / 100.0))
+    temp_dir = tempfile.gettempdir()
+    scaled_wav = os.path.join(temp_dir, "mmd_temp_scaled_volume.wav")
+
+    try:
+        scale_wav_volume(src_path, scaled_wav, vol_ratio)
+        mc.setAttr(f"{audio_node}.filename", scaled_wav, type="string")
+        return True
+    except Exception as e:
+        print(f"[警告] 音量調節に失敗しました: {e}")
+        return False
+
+def import_audio(wav_file_path, offset=0, volume_percent=100):
     """
     WAVオーディオファイルをMayaにインポートし、タイムスライダーに接続して再生同期を有効化します。
     """
+    global _current_audio_source_path, _current_audio_offset
     if not wav_file_path or not os.path.isfile(wav_file_path):
         return None
+
+    _current_audio_source_path = os.path.abspath(wav_file_path)
+    _current_audio_offset = offset
 
     # 既存の MMD_Audio ノードを整理
     for old_audio in mc.ls("MMD_Audio*", type="audio") or []:
@@ -603,8 +1270,16 @@ def import_audio(wav_file_path, offset=0):
                 pass
 
     try:
+        # 音量指定がある場合スケーリングしたファイルを作成
+        actual_wav = _current_audio_source_path
+        if volume_percent < 99.9:
+            temp_dir = tempfile.gettempdir()
+            scaled_wav = os.path.join(temp_dir, "mmd_temp_scaled_volume.wav")
+            scale_wav_volume(_current_audio_source_path, scaled_wav, float(volume_percent) / 100.0)
+            actual_wav = scaled_wav
+
         # sound ノードを作成
-        audio_node = mc.sound(file=wav_file_path, offset=offset, name="MMD_Audio")
+        audio_node = mc.sound(file=actual_wav, offset=offset, name="MMD_Audio")
 
         # タイムスライダー（PlaybackSlider）にアタッチ
         try:
@@ -615,7 +1290,7 @@ def import_audio(wav_file_path, offset=0):
         except Exception:
             pass
 
-        print(f"[情報] BGM音声をタイムスライダーに読み込みました: {os.path.basename(wav_file_path)} (ノード: {audio_node})")
+        print(f"[情報] BGM音声をタイムスライダーに読み込みました: {os.path.basename(wav_file_path)} (音量: {volume_percent}%, ノード: {audio_node})")
         return audio_node
     except Exception as e:
         print(f"[警告] 音声ファイルの読み込みに失敗しました: {e}")
@@ -673,8 +1348,8 @@ def delete_mmd_scene_elements(target_model_node=None, delete_lights=True, delete
         except Exception:
             pass
 
-    # シーン内の未接続IKハンドル・MMDジョイントのクリーンアップ
-    for ik_h in mc.ls('ikHandle_*') or []:
+    # シーン内の未接続IKハンドル・ポールベクター・FKガイド・MMDジョイントのクリーンアップ
+    for ik_h in (mc.ls('ikHandle_*') or []) + (mc.ls('poleVector_leg_*') or []) + (mc.ls('poleVector_grp_leg_*') or []) + (mc.ls('fkGuide_leg_*') or []):
         if mc.objExists(ik_h):
             try:
                 mc.delete(ik_h)
@@ -784,7 +1459,46 @@ def delete_mmd_scene_elements(target_model_node=None, delete_lights=True, delete
     print(f"[完了] MMD関連ノードをクリーンアップしました (削除数: {deleted_count})")
     return deleted_count
 
-def import_vmd(vmd_file_path=None, camera_vmd_path=None, audio_wav_path=None, scale=8.0, target_model_node=None):
+def restore_viewport_lighting():
+    """
+    ビューポートのライティング、ビュー変換、およびテクスチャ表示を復元・最適化します。
+    モーション適用後に発色が暗く沈むのを防止し、MMD最適化表示を維持します。
+    """
+    try:
+        try:
+            from . import pmxpaimaya
+        except Exception:
+            try:
+                from converters import pmxpaimaya
+            except Exception:
+                import pmxpaimaya
+
+        # ビュー変換を Un-tone-mapped (sRGB) に設定して色の沈み・暗化を防止
+        if hasattr(pmxpaimaya, "set_untone_mapped_view_transform"):
+            pmxpaimaya.set_untone_mapped_view_transform()
+
+        # ビューポートのテクスチャ表示、アンチエイリアシング、深度ピーリングを適用
+        if hasattr(pmxpaimaya, "setup_viewport_display"):
+            pmxpaimaya.setup_viewport_display(shadow_mode=1)
+    except Exception as e:
+        print(f"  [警告] ビューポート表示の復元中に軽微な例外: {e}")
+
+    try:
+        # シーン内のライト存在確認
+        has_lights = bool(mc.ls(type=["directionalLight", "ambientLight", "pointLight", "spotLight"]))
+        target_mode = "all" if has_lights else "default"
+
+        panels = mc.getPanel(type="modelPanel") or []
+        for p in panels:
+            try:
+                mc.modelEditor(p, edit=True, displayLights=target_mode, displayTextures=True)
+            except Exception:
+                pass
+        mc.refresh(force=True)
+    except Exception:
+        pass
+
+def import_vmd(vmd_file_path=None, camera_vmd_path=None, audio_wav_path=None, scale=8.0, target_model_node=None, audio_volume=100, progress_callback=None):
     """
     VMDファイルをMayaにインポートし、対象モデル、カメラ、およびBGM音声を適用します。
     モデルモーション、カメラモーション、BGM音声の個別・一括指定に対応します。
@@ -793,6 +1507,9 @@ def import_vmd(vmd_file_path=None, camera_vmd_path=None, audio_wav_path=None, sc
     print("==================================================")
     print("VMD モーションインポート開始")
     print("==================================================")
+
+    # インポート開始前のビューポートライティング状態を保護・最適化
+    restore_viewport_lighting()
 
     # タイムライン開始フレームを0に設定し、フレーム0を基準に初期化
     try:
@@ -811,70 +1528,85 @@ def import_vmd(vmd_file_path=None, camera_vmd_path=None, audio_wav_path=None, sc
         'audio_applied': False
     }
 
-    # 1. カメラモーションの読み込み・適用
-    cam_file = camera_vmd_path
-    if not cam_file and vmd_file_path:
-        # モデルファイル側にカメラが含まれているかのチェック用
-        pass
+    try:
+        # 1. カメラモーションの読み込み・適用
+        cam_file = camera_vmd_path
+        if not cam_file and vmd_file_path:
+            # モデルファイル側にカメラが含まれているかのチェック用
+            pass
 
-    # 明示的なカメラVMDがある場合
-    if cam_file and os.path.isfile(cam_file):
-        print(f"[カメラ] ファイル読み込み中: {os.path.basename(cam_file)}")
-        cam_motion = mmd_core.vmd.load(cam_file)
-        if cam_motion.camera_frames:
-            apply_camera_motion(cam_motion, scale)
-            result['camera_applied'] = True
-            max_frame = max(max_frame, cam_motion.max_frame)
-            print(f"  - カメラモーションを適用しました ({len(cam_motion.camera_frames)} キー)")
+        # 明示的なカメラVMDがある場合
+        if cam_file and os.path.isfile(cam_file):
+            print(f"[カメラ] ファイル読み込み中: {os.path.basename(cam_file)}")
+            cam_motion = mmd_core.vmd.load(cam_file)
+            if cam_motion.camera_frames:
+                apply_camera_motion(cam_motion, scale)
+                result['camera_applied'] = True
+                max_frame = max(max_frame, cam_motion.max_frame)
+                print(f"  - カメラモーションを適用しました ({len(cam_motion.camera_frames)} キー)")
 
-    # 2. キャラクターモーションの読み込み・適用
-    if vmd_file_path and os.path.isfile(vmd_file_path):
-        print(f"[モデル] ファイル読み込み中: {os.path.basename(vmd_file_path)}")
-        motion = mmd_core.vmd.load(vmd_file_path)
-        result['source_model_name'] = motion.model_name
-        max_frame = max(max_frame, motion.max_frame)
+        # 2. キャラクターモーションの読み込み・適用
+        if vmd_file_path and os.path.isfile(vmd_file_path):
+            print(f"[モデル] ファイル読み込み中: {os.path.basename(vmd_file_path)}")
+            motion = mmd_core.vmd.load(vmd_file_path)
+            result['source_model_name'] = motion.model_name
+            max_frame = max(max_frame, motion.max_frame)
 
-        # 単体カメラモーションだった場合の自動判定
-        if motion.is_camera_motion and not result['camera_applied']:
-            apply_camera_motion(motion, scale)
-            result['camera_applied'] = True
-            print(f"  - 単体カメラモーションを検出・適用しました")
-        else:
-            # ボーン構造・モーフ構造の解決
-            resolved_model, joint_map, morph_map = resolve_model_structure(target_model_node)
-            target_display = resolved_model if resolved_model else "シーン全体"
-            print(f"  - 適用対象モデル: {target_display}")
-            print(f"  - 認識されたボーンマッピング数: {len(joint_map)} 本")
-
-            # ボーンアニメーションの適用
-            b_count, b_keys = apply_bone_motion(motion, joint_map, scale, resolved_model)
-            result['bones_applied'] = b_count
-            print(f"  - {b_count} 個のボーンにキーフレームを設定しました (総キー数: {b_keys})")
-
-            # モーフ（ブレンドシェイプ）アニメーションの適用
-            m_count, m_keys = apply_morph_motion(motion, morph_map, resolved_model)
-            result['morphs_applied'] = m_count
-            print(f"  - {m_count} 個のモーフにキーフレームを設定しました (総キー数: {m_keys})")
-
-            # 同一ファイルにカメラが含まれていた場合の適用
-            if motion.camera_frames and not result['camera_applied']:
+            # 単体カメラモーションだった場合の自動判定
+            if motion.is_camera_motion and not result['camera_applied']:
                 apply_camera_motion(motion, scale)
                 result['camera_applied'] = True
-                print(f"  - 複合VMD内のカメラモーションを適用しました")
+                print(f"  - 単体カメラモーションを検出・適用しました")
+            else:
+                # ボーン構造・モーフ構造の解決
+                resolved_model, joint_map, morph_map = resolve_model_structure(target_model_node)
+                target_display = resolved_model if resolved_model else "シーン全体"
+                print(f"  - 適用対象モデル: {target_display}")
+                print(f"  - 認識されたボーンマッピング数: {len(joint_map)} 本")
 
-    # 3. BGM音声 (.wav) の読み込み・タイムライン接続
-    if audio_wav_path and os.path.isfile(audio_wav_path):
-        print(f"[音声] ファイル読み込み中: {os.path.basename(audio_wav_path)}")
-        audio_node = import_audio(audio_wav_path)
-        if audio_node:
-            result['audio_applied'] = True
+                # VMDモーションの詳細解析レポート（全ボーン・キーフレーム一覧）を出力
+                print_vmd_analysis_report(motion, joint_map, resolved_model)
 
-    # 4. Maya再生環境の設定 (MMD標準 30 fps)
-    result['max_frame'] = max_frame
-    if max_frame > 0:
-        mc.currentUnit(time='ntsc') # 30 fps
-        mc.playbackOptions(minTime=0, maxTime=max_frame, animationStartTime=0, animationEndTime=max_frame)
-        mc.currentTime(0)
+                # VMD再インポート時に0フレームからモーションを上書きするため、既存キー・ポーズを自動初期化
+                try:
+                    clear_model_animation(resolved_model, clear_camera=False)
+                    mc.currentTime(0)
+                except Exception as e:
+                    print(f"  [情報] 既存モーション初期化: {e}")
+
+                # ボーンアニメーションの適用
+                b_count, b_keys = apply_bone_motion(motion, joint_map, scale, resolved_model, progress_callback=progress_callback)
+                result['bones_applied'] = b_count
+                print(f"  - {b_count} 個のボーンにキーフレームを設定しました (総キー数: {b_keys})")
+
+                # モーフ（ブレンドシェイプ）アニメーションの適用
+                m_count, m_keys = apply_morph_motion(motion, morph_map, resolved_model)
+                result['morphs_applied'] = m_count
+                print(f"  - {m_count} 個のモーフにキーフレームを設定しました (総キー数: {m_keys})")
+
+                # 同一ファイルにカメラが含まれていた場合の適用
+                if motion.camera_frames and not result['camera_applied']:
+                    apply_camera_motion(motion, scale)
+                    result['camera_applied'] = True
+                    print(f"  - 複合VMD内のカメラモーションを適用しました")
+
+        # 3. BGM音声 (.wav) の読み込み・タイムライン接続
+        if audio_wav_path and os.path.isfile(audio_wav_path):
+            print(f"[音声] ファイル読み込み中: {os.path.basename(audio_wav_path)}")
+            audio_node = import_audio(audio_wav_path, volume_percent=audio_volume)
+            if audio_node:
+                result['audio_applied'] = True
+
+        # 4. Maya再生環境の設定 (MMD標準 30 fps)
+        result['max_frame'] = max_frame
+        if max_frame > 0:
+            mc.currentUnit(time='ntsc') # 30 fps
+            mc.playbackOptions(minTime=0, maxTime=max_frame, animationStartTime=0, animationEndTime=max_frame)
+            mc.currentTime(0)
+
+    finally:
+        # インポート完了後にビューポートのライティングとシェーディングを確実に復元
+        restore_viewport_lighting()
 
     elapsed = time.time() - start_time
     print(f"[完了] VMD インポートが完了しました ({elapsed:.2f} 秒)")

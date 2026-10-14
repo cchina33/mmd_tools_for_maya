@@ -1,0 +1,332 @@
+{
+  "0": {
+    "id": 0,
+    "label": "センター",
+    "pattern": ".*sentaa"
+  },
+  "1": {
+    "id": 1,
+    "label": "下半身",
+    "pattern": "kahanshin"
+  },
+  "2": {
+    "id": 2,
+    "label": "左足",
+    "pattern": "hidariashi"
+  },
+  "3": {
+    "id": 3,
+    "label": "左膝",
+    "pattern": "hidarihiza"
+  },
+  "4": {
+    "id": 4,
+    "label": "左足首",
+    "pattern": "hidariashikubi"
+  },
+  "5": {
+    "id": 5,
+    "label": "右足",
+    "pattern": "migiashi"
+  },
+  "6": {
+    "id": 6,
+    "label": "右膝",
+    "pattern": "migihiza"
+  },
+  "7": {
+    "id": 7,
+    "label": "右足首",
+    "pattern": "migiashikubi"
+  },
+  "8": {
+    "id": 8,
+    "label": "上半身",
+    "pattern": "jouhanshin"
+  },
+  "9": {
+    "id": 9,
+    "label": "左腕",
+    "pattern": "hidariude"
+  },
+  "10": {
+    "id": 10,
+    "label": "左肘",
+    "pattern": "hidarihiji"
+  },
+  "11": {
+    "id": 11,
+    "label": "左手首",
+    "pattern": "hidarite(kubi)?"
+  },
+  "12": {
+    "id": 12,
+    "label": "右腕",
+    "pattern": "migiude"
+  },
+  "13": {
+    "id": 13,
+    "label": "右肘",
+    "pattern": "migihiji"
+  },
+  "14": {
+    "id": 14,
+    "label": "右手首",
+    "pattern": "migite(kubi)?"
+  },
+  "15": {
+    "id": 15,
+    "label": "頭",
+    "pattern": "atama"
+  },
+  "16": {
+    "id": 16,
+    "label": "左つま先",
+    "pattern": "hidari(tsuma|ashi)saki"
+  },
+  "17": {
+    "id": 17,
+    "label": "右つま先",
+    "pattern": "migi(tsuma|ashi)saki"
+  },
+  "18": {
+    "id": 18,
+    "label": "左肩",
+    "pattern": "hidarikata"
+  },
+  "19": {
+    "id": 19,
+    "label": "右肩",
+    "pattern": "migikata"
+  },
+  "20": {
+    "id": 20,
+    "label": "首",
+    "pattern": "kubi"
+  },
+  "23": {
+    "id": 23,
+    "label": "上半身2",
+    "pattern": "jouhanshin2"
+  },
+  "45": {
+    "id": 45,
+    "label": "左腕捩",
+    "pattern": "hidariudemojiri"
+  },
+  "46": {
+    "id": 46,
+    "label": "左手捩",
+    "pattern": "hidaritemojiri"
+  },
+  "47": {
+    "id": 47,
+    "label": "右腕捩",
+    "pattern": "migiudemojiri"
+  },
+  "48": {
+    "id": 48,
+    "label": "右手捩",
+    "pattern": "migitemojiri"
+  },
+  "50": {
+    "id": 50,
+    "label": "左親指0",
+    "pattern": "hidarioyayubi0M?"
+  },
+  "51": {
+    "id": 51,
+    "label": "左親指1",
+    "pattern": "hidarioyayubi1"
+  },
+  "52": {
+    "id": 52,
+    "label": "左親指2",
+    "pattern": "hidarioyayubi2"
+  },
+  "53": {
+    "id": 53,
+    "label": "左親指先",
+    "pattern": "hidarioyayubi.*saki"
+  },
+  "54": {
+    "id": 54,
+    "label": "左人差指1",
+    "pattern": "hidari(hitosashi|nin)yubi1"
+  },
+  "55": {
+    "id": 55,
+    "label": "左人差指2",
+    "pattern": "hidari(hitosashi|nin)yubi2"
+  },
+  "56": {
+    "id": 56,
+    "label": "左人差指3",
+    "pattern": "hidari(hitosashi|nin)yubi3"
+  },
+  "57": {
+    "id": 57,
+    "label": "左人差指先",
+    "pattern": "hidari(hitosashi|nin)yubi.*saki"
+  },
+  "58": {
+    "id": 58,
+    "label": "左中指1",
+    "pattern": "(sachuu|hidarinaka)yubi1"
+  },
+  "59": {
+    "id": 59,
+    "label": "左中指2",
+    "pattern": "(sachuu|hidarinaka)yubi2"
+  },
+  "60": {
+    "id": 60,
+    "label": "左中指3",
+    "pattern": "(sachuu|hidarinaka)yubi3"
+  },
+  "61": {
+    "id": 61,
+    "label": "左中指先",
+    "pattern": "(sachuu|hidarinaka)yubi.*saki"
+  },
+  "62": {
+    "id": 62,
+    "label": "左薬指1",
+    "pattern": "hidarikusuriyubi1"
+  },
+  "63": {
+    "id": 63,
+    "label": "左薬指2",
+    "pattern": "hidarikusuriyubi2"
+  },
+  "64": {
+    "id": 64,
+    "label": "左薬指3",
+    "pattern": "hidarikusuriyubi3"
+  },
+  "65": {
+    "id": 65,
+    "label": "左薬指先",
+    "pattern": "hidarikusuriyubi.*saki"
+  },
+  "66": {
+    "id": 66,
+    "label": "左小指1",
+    "pattern": "hidarikoyubi1"
+  },
+  "67": {
+    "id": 67,
+    "label": "左小指2",
+    "pattern": "hidarikoyubi2"
+  },
+  "68": {
+    "id": 68,
+    "label": "左小指3",
+    "pattern": "hidarikoyubi3"
+  },
+  "69": {
+    "id": 69,
+    "label": "左小指先",
+    "pattern": "hidarikoyubi.*saki"
+  },
+  "74": {
+    "id": 74,
+    "label": "右親指0",
+    "pattern": "migioyayubi0M?"
+  },
+  "75": {
+    "id": 75,
+    "label": "右親指1",
+    "pattern": "migioyayubi1"
+  },
+  "76": {
+    "id": 76,
+    "label": "右親指2",
+    "pattern": "migioyayubi2"
+  },
+  "77": {
+    "id": 77,
+    "label": "右親指先",
+    "pattern": "migioyayubi.*saki"
+  },
+  "78": {
+    "id": 78,
+    "label": "右人差指1",
+    "pattern": "migi(hitosashi|nin)yubi1"
+  },
+  "79": {
+    "id": 79,
+    "label": "右人差指2",
+    "pattern": "migi(hitosashi|nin)yubi2"
+  },
+  "80": {
+    "id": 80,
+    "label": "右人差指3",
+    "pattern": "migi(hitosashi|nin)yubi3"
+  },
+  "81": {
+    "id": 81,
+    "label": "右人差指先",
+    "pattern": "migi(hitosashi|nin)yubi.*saki"
+  },
+  "82": {
+    "id": 82,
+    "label": "右中指1",
+    "pattern": "(uchuu|miginaka)yubi1"
+  },
+  "83": {
+    "id": 83,
+    "label": "右中指2",
+    "pattern": "(uchuu|miginaka)yubi2"
+  },
+  "84": {
+    "id": 84,
+    "label": "右中指3",
+    "pattern": "(uchuu|miginaka)yubi3"
+  },
+  "85": {
+    "id": 85,
+    "label": "右中指先",
+    "pattern": "(uchuu|miginaka)yubi.*saki"
+  },
+  "86": {
+    "id": 86,
+    "label": "右薬指1",
+    "pattern": "migikusuriyubi1"
+  },
+  "87": {
+    "id": 87,
+    "label": "右薬指2",
+    "pattern": "migikusuriyubi2"
+  },
+  "88": {
+    "id": 88,
+    "label": "右薬指3",
+    "pattern": "migikusuriyubi3"
+  },
+  "89": {
+    "id": 89,
+    "label": "右薬指先",
+    "pattern": "migikusuriyubi.*saki"
+  },
+  "90": {
+    "id": 90,
+    "label": "右小指1",
+    "pattern": "migikoyubi1"
+  },
+  "91": {
+    "id": 91,
+    "label": "右小指2",
+    "pattern": "migikoyubi2"
+  },
+  "92": {
+    "id": 92,
+    "label": "右小指3",
+    "pattern": "migikoyubi3"
+  },
+  "93": {
+    "id": 93,
+    "label": "右小指先",
+    "pattern": "migikoyubi.*saki"
+  }
+}

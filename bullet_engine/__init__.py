@@ -2,10 +2,6 @@
 """
 Bullet Physics 2.83.7 MMD 物理演算エンジンパッケージ
 ライセンス: zlib license (詳細は bullet_engine/LICENSE を参照)
-
-本パッケージは独立したモジュールとして設計されており、
-この 'bullet_engine' フォルダごと削除することで、
-プロジェクト全体は純粋な MIT License のみ（自作XPBDエンジンのみ）として運用可能です。
 """
 
 from .bullet_wrapper import BulletEngineWrapper

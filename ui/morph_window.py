@@ -2,7 +2,7 @@
 """
 MMD表情操作モーフGUIモジュール (morph_window.py)
 
-MMD Tools for Maya のメインGUIと完全統一されたモダンダークテーマを採用。
+MMD Tools for Maya のメインGUIと統一されたモダンダークテーマを採用。
 Maya上のBlendShapeターゲットウェイトを直感的に操作・キーフレーム登録できるUIを提供します。
 ウィンドウはQWidgetベースのモードレスウィンドウとし、他アプリ（ブラウザ等）の背面に適切に隠れる設計です。
 """
@@ -60,7 +60,7 @@ _image_dir = os.path.abspath(os.path.join(_script_dir, "..", "image")).replace("
 _arrow_icon = f"{_image_dir}/arrow_down.png"
 _arrow_hover_icon = f"{_image_dir}/arrow_down_hover.png"
 
-# メインGUI（MMD Tools for Maya）と完全統一されたモダンダークテーマQSS
+# メインGUI（MMD Tools for Maya）と統一されたモダンダークテーマQSS
 MODERN_DARK_STYLE = f"""
 QWidget#MorphMainWindow {{
     background-color: #2b2b2b;
@@ -552,13 +552,13 @@ class MMDMorphWindow(QWidget):
         main_layout.addLayout(grid)
 
     def refresh_morph_data(self):
-        """シーン内のBlendShapeノードと解析JSONから各パネルへモーフを割り当て"""
+        """シーン内のBlendShapeノード、モデルノードおよび解析JSONから各パネルへモーフを割り当て"""
         if not mc:
             return
 
         # BlendShapeノードと全ターゲットアトリビュートを探索
         bs_nodes = mc.ls(type="blendShape") or []
-        scene_targets = {}  # {attr_name: bs_node}
+        scene_targets = {}  # {attr_name: target_node}
         for bs in bs_nodes:
             # エイリアス一覧
             try:
@@ -574,6 +574,23 @@ class MMDMorphWindow(QWidget):
                     scene_targets[tgt] = bs
             except Exception:
                 pass
+
+        # モデルノード上のカスタム材質モーフアトリビュートを探索
+        model_nodes = mc.ls('*.mmdModelRoot', objectsOnly=True) or []
+        if not model_nodes:
+            all_transforms = mc.ls(transforms=True) or []
+            model_nodes = [n for n in all_transforms if any(a.startswith("matmorph_") for a in (mc.listAttr(n, userDefined=True) or []))]
+        for m_node in model_nodes:
+            user_attrs = mc.listAttr(m_node, userDefined=True) or []
+            for u_attr in user_attrs:
+                if u_attr.startswith("matmorph_"):
+                    scene_targets[u_attr] = m_node
+                    try:
+                        nice = mc.attributeQuery(u_attr, node=m_node, niceName=True)
+                        if nice:
+                            scene_targets[nice] = m_node
+                    except Exception:
+                        pass
 
         # 解析JSONデータの探索 (asset/User_pmx_data 配下を最優先)
         json_morphs, structure_morph_map = self._load_pmx_data()
@@ -597,26 +614,34 @@ class MMDMorphWindow(QWidget):
                     p_id = 4
 
                 # structure_morph_map またはシーン内ターゲットから探索
-                target_attr, matched_bs = self._resolve_target_attr(name, structure_morph_map, scene_targets)
+                target_attr, matched_node = self._resolve_target_attr(name, structure_morph_map, scene_targets, model_nodes)
                 if target_attr and target_attr not in registered_attrs:
-                    panels[p_id].append((name, target_attr, matched_bs))
+                    panels[p_id].append((name, target_attr, matched_node))
                     registered_attrs.add(target_attr)
 
-        # シーン内BlendShapeターゲットのフォールバック割り当て（未登録の全ターゲットを網羅）
-        for attr, bs in scene_targets.items():
+        # シーン内ターゲットのフォールバック割り当て（未登録の全ターゲットを網羅）
+        for attr, tgt_node in scene_targets.items():
             if attr in registered_attrs:
                 continue
 
             # 表示用モーフ名を特定
             disp_name = attr
-            # 構造マップから逆引き
+            # 材質モーフのniceNameまたは構造マップから逆引き
+            if mc.objExists(tgt_node) and mc.attributeQuery(attr, node=tgt_node, exists=True):
+                try:
+                    nice = mc.attributeQuery(attr, node=tgt_node, niceName=True)
+                    if nice and not nice.startswith("matmorph_"):
+                        disp_name = nice
+                except Exception:
+                    pass
+
             for jp_name, t_name in structure_morph_map.items():
                 if t_name == attr:
                     disp_name = jp_name
                     break
 
             p_id = self._guess_panel_id_by_name(disp_name)
-            panels[p_id].append((disp_name, attr, bs))
+            panels[p_id].append((disp_name, attr, tgt_node))
             registered_attrs.add(attr)
 
         # 各パネルユニットへ適用
@@ -625,27 +650,39 @@ class MMDMorphWindow(QWidget):
         self.unit_lip.set_morphs(panels[3])
         self.unit_other.set_morphs(panels[4])
 
-    def _resolve_target_attr(self, morph_name, structure_morph_map, scene_targets):
+    def _resolve_target_attr(self, morph_name, structure_morph_map, scene_targets, model_nodes=None):
         """モーフ名からMayaのターゲットアトリビュートを特定"""
         # 構造マップに明示されている場合
         if morph_name in structure_morph_map:
             t_attr = structure_morph_map[morph_name]
             if t_attr in scene_targets:
                 return t_attr, scene_targets[t_attr]
+            if model_nodes:
+                for mn in model_nodes:
+                    if mc.objExists(mn) and mc.attributeQuery(t_attr, node=mn, exists=True):
+                        return t_attr, mn
 
         # 直接一致
         if morph_name in scene_targets:
             return morph_name, scene_targets[morph_name]
 
-        # クリーン名や部分一致による照合
+        # クリーン名や材質モーフ接頭辞による照合
         clean_name = re.sub(r'[^a-zA-Z0-9_\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]', '_', morph_name)
-        for attr, bs in scene_targets.items():
+        for attr, tgt_node in scene_targets.items():
             if attr == clean_name:
-                return attr, bs
-            if attr.endswith(f"_{morph_name}") or attr.endswith(f"_{clean_name}"):
-                return attr, bs
+                return attr, tgt_node
+            if attr == f"matmorph_{clean_name}" or attr.endswith(f"_{clean_name}"):
+                return attr, tgt_node
             if f"_{clean_name}_" in attr:
-                return attr, bs
+                return attr, tgt_node
+
+        if model_nodes:
+            for mn in model_nodes:
+                if not mc.objExists(mn):
+                    continue
+                mat_attr = f"matmorph_{clean_name}"
+                if mc.attributeQuery(mat_attr, node=mn, exists=True):
+                    return mat_attr, mn
 
         return None, None
 
@@ -654,13 +691,26 @@ class MMDMorphWindow(QWidget):
         plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         structure_morph_map = {}
 
-        # last_imported_structure.json からマップを取得
+        # last_imported_structure.json からマップを取得 (新スキーマ2.0対応)
         cache_path = os.path.join(plugin_root, 'asset', 'last_imported_structure.json')
         if os.path.isfile(cache_path):
             try:
                 with open(cache_path, 'r', encoding='utf-8') as f:
                     cdata = json.load(f)
-                    structure_morph_map = cdata.get('morphs', {})
+                    raw_m = cdata.get('morphs')
+                    if isinstance(raw_m, dict):
+                        structure_morph_map = raw_m
+                    elif isinstance(raw_m, list):
+                        for m in raw_m:
+                            if isinstance(m, dict):
+                                target = m.get('maya_target')
+                                if target:
+                                    if m.get('name_jp'):
+                                        structure_morph_map[m['name_jp']] = target
+                                    if m.get('name_en'):
+                                        structure_morph_map[m['name_en']] = target
+                    if not structure_morph_map and isinstance(cdata.get('legacy_compatibility', {}).get('morphs'), dict):
+                        structure_morph_map = cdata['legacy_compatibility']['morphs']
             except Exception:
                 pass
 
@@ -724,8 +774,52 @@ class MMDMorphWindow(QWidget):
 _global_morph_window = None
 
 def show_morph_window(parent=None):
-    """表情操作GUIを表示（既存ウィンドウがあれば前面にフォーカス）"""
+    """表情操作GUIを表示（既存ウィンドウがあれば前面にフォーカス、事前検証付き）"""
     global _global_morph_window
+
+    # Mayaシーン内のボーン・ブレンドシェイプの存在確認
+    if mc:
+        joints = mc.ls(type="joint") or []
+        bs_nodes = mc.ls(type="blendShape") or []
+        has_targets = False
+        if bs_nodes:
+            for bs in bs_nodes:
+                try:
+                    aliases = mc.listAttr(f"{bs}.w", multi=True) or []
+                    targets = mc.blendShape(bs, query=True, target=True) or []
+                    if aliases or targets:
+                        has_targets = True
+                        break
+                except Exception:
+                    pass
+
+        has_matmorphs = False
+        all_transforms = mc.ls(transforms=True) or []
+        for tr in all_transforms:
+            if any(a.startswith("matmorph_") for a in (mc.listAttr(tr, userDefined=True) or [])):
+                has_matmorphs = True
+                break
+
+        has_any_morphs = has_targets or has_matmorphs
+        if not joints or (not bs_nodes and not has_matmorphs) or not has_any_morphs:
+            missing_items = []
+            if not joints:
+                missing_items.append("・ボーン (Joint)")
+            if not has_any_morphs:
+                missing_items.append("・ブレンドシェイプ / モーフ (blendShape / 材質モーフ)")
+
+            missing_str = "\n".join(missing_items)
+            msg_parent = parent or get_maya_main_window()
+            QMessageBox.warning(
+                msg_parent,
+                "表情操作の準備ができていません",
+                f"モデル（ボーン・モーフ・ブレンドシェイプ）がインポートされていないか、必要な要素が不足しています。\n\n"
+                f"不足している要素:\n{missing_str}\n\n"
+                f"[MMD → Maya (インポート)] タブからモデルをインポートし直してください。\n"
+                f"（※インポート設定で「ボーン生成」「ブレンドシェイプ生成」にチェックが入っていることをご確認ください）"
+            )
+            return None
+
     if _global_morph_window is not None:
         try:
             _global_morph_window.refresh_morph_data()

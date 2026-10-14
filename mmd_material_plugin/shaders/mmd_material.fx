@@ -1,5 +1,5 @@
 // MMDオリジナルマテリアル Viewport 2.0用 DirectX 11 HLSLシェーダー
-// MMD (MikuMikuDance) 本家シェーディングモデル完全互換
+// MMD (MikuMikuDance) 本家シェーディングモデル互換
 
 cbuffer UpdatePerObject : register(b0)
 {
@@ -196,7 +196,9 @@ float4 PS_Main(PS_INPUT IN) : SV_Target
     // テクスチャカラー全体に対し、ディフューズ受光色(Toon含む)と環境光(アンビエント)を乗算
     float3 diffuseTerm = gDiffuseColor * lightCol * toonColor;
     float3 ambientTerm = amb;
-    float3 baseColor = texColor.rgb * (diffuseTerm + ambientTerm);
+    // 白飛び防止: 受光エネルギー合計の上限を 1.0 に飽和制御 (saturate)
+    float3 lightingTerm = saturate(diffuseTerm + ambientTerm);
+    float3 baseColor = texColor.rgb * lightingTerm;
 
     // スフィアマップの計算
     if (gUseSphereTexture && gSphereMode > 0)
@@ -258,8 +260,8 @@ PS_EDGE_INPUT VS_Edge(VS_INPUT IN)
 {
     PS_EDGE_INPUT OUT;
 
-    // エッジ無効またはサイズ0の場合は無効化
-    if (!gEdgeEnable || gEdgeSize <= 0.0f)
+    // エッジ無効またはサイズ0、もしくは材質アルファが微小（透明モーフ等）の場合は無効化
+    if (!gEdgeEnable || gEdgeSize <= 0.0f || gDiffuseAlpha <= 0.05f || gEdgeColor.a <= 0.0f)
     {
         OUT.Position = float4(0.0f, 0.0f, 0.0f, 0.0f);
         return OUT;
@@ -298,7 +300,7 @@ PS_EDGE_INPUT VS_Edge(VS_INPUT IN)
 // MMDエッジ専用 ピクセルシェーダー (ライティングなしのPMXエッジ色単色出力)
 float4 PS_Edge(PS_EDGE_INPUT IN) : SV_Target
 {
-    if (!gEdgeEnable)
+    if (!gEdgeEnable || gDiffuseAlpha <= 0.05f || gEdgeColor.a <= 0.0f)
     {
         discard;
     }

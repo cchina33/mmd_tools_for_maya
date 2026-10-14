@@ -4,7 +4,7 @@ MMD Tools for Maya - Maya用 MMD (PMX/PMD/X) 統合ツールセット
 Author: Hina33
 """
 
-__version__ = "1.0.2"
+__version__ = "1.0.3"
 __author__ = "Hina33"
 
 import os
@@ -22,6 +22,8 @@ from . import ui
 from . import converters
 from .ui.gui import MmdMayaMainWindow, show_ui, close_existing_ui, Natanglak
 from .ui.advanced_dict_dialog import AdvancedDictDialog, show_advanced_dict_dialog
+from .ui.material_protect_dialog import MaterialProtectDialog, show_material_protect_dialog
+from .ui.user_dict_dialog import UserDictDialog, show_user_dict_dialog
 
 # 後方互換エクスポート (以前のルート直下モジュール名でのアクセスをサポート)
 from .converters import pmxpaimaya
@@ -43,6 +45,10 @@ __all__ = [
     "close_existing_ui",
     "AdvancedDictDialog",
     "show_advanced_dict_dialog",
+    "MaterialProtectDialog",
+    "show_material_protect_dialog",
+    "UserDictDialog",
+    "show_user_dict_dialog",
     "pmxpaimaya",
     "mayapaipmx",
     "vmdpaimaya",

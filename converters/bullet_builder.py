@@ -112,9 +112,9 @@ def build_bullet_rig(pmx_path, scale=8.0):
             rb.position[1] * scale,
             -rb.position[2] * scale
         )
-        deg_x = math.degrees(rb.rotation[0])
-        deg_y = math.degrees(rb.rotation[1])
-        deg_z = -math.degrees(rb.rotation[2])
+        deg_x = -math.degrees(rb.rotation[0])
+        deg_y = -math.degrees(rb.rotation[1])
+        deg_z = math.degrees(rb.rotation[2])
         e = om.MEulerRotation(math.radians(deg_x), math.radians(deg_y), math.radians(deg_z), om.MEulerRotation.kXYZ)
         rb_bind_q = e.asQuaternion()
 
@@ -251,6 +251,10 @@ def build_bullet_rig(pmx_path, scale=8.0):
 
         loc = mc.spaceLocator(name=c_name)[0]
         mc.xform(loc, worldSpace=True, translation=pos)
+        j_deg_x = -math.degrees(j.rotation[0])
+        j_deg_y = -math.degrees(j.rotation[1])
+        j_deg_z = math.degrees(j.rotation[2])
+        mc.xform(loc, worldSpace=True, rotation=(j_deg_x, j_deg_y, j_deg_z))
 
         c_shape = mc.createNode("bulletRigidBodyConstraint", name=f"{c_name}Shape", parent=loc)
         mc.setAttr(f"{c_shape}.constraintType", 6) # 6DOF Generic Constraint
@@ -266,13 +270,13 @@ def build_bullet_rig(pmx_path, scale=8.0):
         except Exception:
             pass
 
-        # 制限・バネ設定
-        mc.setAttr(f"{c_shape}.angularConstraintMinX", math.degrees(j.angular_limit_min[0]))
-        mc.setAttr(f"{c_shape}.angularConstraintMaxX", math.degrees(j.angular_limit_max[0]))
-        mc.setAttr(f"{c_shape}.angularConstraintMinY", math.degrees(j.angular_limit_min[1]))
-        mc.setAttr(f"{c_shape}.angularConstraintMaxY", math.degrees(j.angular_limit_max[1]))
-        mc.setAttr(f"{c_shape}.angularConstraintMinZ", -math.degrees(j.angular_limit_max[2]))
-        mc.setAttr(f"{c_shape}.angularConstraintMaxZ", -math.degrees(j.angular_limit_min[2]))
+        # 制限・バネ設定 (X, Yは符号反転に伴いMinとMaxが反転、Zは維持)
+        mc.setAttr(f"{c_shape}.angularConstraintMinX", -math.degrees(j.angular_limit_max[0]))
+        mc.setAttr(f"{c_shape}.angularConstraintMaxX", -math.degrees(j.angular_limit_min[0]))
+        mc.setAttr(f"{c_shape}.angularConstraintMinY", -math.degrees(j.angular_limit_max[1]))
+        mc.setAttr(f"{c_shape}.angularConstraintMaxY", -math.degrees(j.angular_limit_min[1]))
+        mc.setAttr(f"{c_shape}.angularConstraintMinZ", math.degrees(j.angular_limit_min[2]))
+        mc.setAttr(f"{c_shape}.angularConstraintMaxZ", math.degrees(j.angular_limit_max[2]))
 
         mc.parent(loc, root_grp)
 

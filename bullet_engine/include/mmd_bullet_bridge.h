@@ -62,7 +62,8 @@ BULLET_MMD_API int bullet_add_joint(
     float rotMinX, float rotMinY, float rotMinZ,
     float rotMaxX, float rotMaxY, float rotMaxZ,
     float springPosX, float springPosY, float springPosZ,
-    float springRotX, float springRotY, float springRotZ
+    float springRotX, float springRotY, float springRotZ,
+    int jointType = 0
 );
 
 BULLET_MMD_API void bullet_step_simulation(
@@ -84,3 +85,13 @@ BULLET_MMD_API void bullet_relax_penetration(
     int steps,
     float relaxationDamping
 );
+
+// 床判定 (Y=0 地面衝突) の設定
+BULLET_MMD_API void bullet_set_floor_plane(
+    BulletEngine* engine,
+    int enable,
+    float yHeight,
+    float friction,
+    float restitution
+);
+

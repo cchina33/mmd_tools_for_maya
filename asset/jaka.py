@@ -200,6 +200,23 @@ MMD_KANJI_DICT = {
     '色': 'iro'
 }
 
+def reload_kanji_dict():
+    """jaka_dict.json から最新の漢字・ローマ字変換対応表を再読み込みします"""
+    global MMD_KANJI_DICT
+    try:
+        import os, json
+        json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jaka_dict.json")
+        if os.path.exists(json_path):
+            with open(json_path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+                if isinstance(loaded, dict) and loaded:
+                    MMD_KANJI_DICT = loaded
+    except Exception:
+        pass
+
+# 初期化時にJSONが存在すれば読み込み
+reload_kanji_dict()
+
 # 拗音・促音等を含む2文字のかなマッピング（ヘボン式）
 KANA_COMBO_MAP = {
     'きゃ': 'kya', 'きゅ': 'kyu', 'きょ': 'kyo',
@@ -394,7 +411,7 @@ def romaji(x):
 def safe_node_name(name, name_e=None, prefix="node", index=None):
     """
     日本語・中国語（簡体字/繁体字）・英語など多言語の文字列から、
-    Mayaのノード名として完全に安全かつ衝突しにくい識別子を生成します。
+    Mayaのノード名として極めて安全かつ衝突しにくい識別子を生成します。
 
     引数:
         name (str): 元の名称（日本語または中国語など）
@@ -405,6 +422,26 @@ def safe_node_name(name, name_e=None, prefix="node", index=None):
     戻り値:
         str: Mayaノード名として有効な英数字・アンダースコア文字列
     """
+    # モーフ名またはボーン名の場合、カスタム辞書・標準辞書からの英名補完
+    if not name_e and name:
+        try:
+            from .user_dict_manager import load_user_settings, load_morph_dict_json
+            user_settings = load_user_settings()
+            if prefix == "morph" or "morph" in str(prefix):
+                c_morph = user_settings.get("custom_morph_dict", {})
+                if name in c_morph:
+                    name_e = c_morph[name]
+                else:
+                    m_std = load_morph_dict_json()
+                    if name in m_std:
+                        name_e = m_std[name]
+            elif prefix == "bone" or "bone" in str(prefix):
+                c_bone = user_settings.get("custom_bone_dict", {})
+                if name in c_bone:
+                    name_e = c_bone[name]
+        except Exception:
+            pass
+
     # 英名（name_e）が有効に定義されている場合は最優先で検討
     if name_e:
         clean_e = str(name_e).strip()

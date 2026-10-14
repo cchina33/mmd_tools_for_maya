@@ -57,6 +57,24 @@ def quat_to_euler_xyz(q):
     e = mq.asEulerRotation()
     return (math.degrees(e.x), math.degrees(e.y), math.degrees(e.z))
 
+def restore_viewport_lighting():
+    """
+    ビューポートのライティング（全ライト使用: displayLights='all'）および
+    テクスチャ表示（displayTextures=True）を安定化・復元します。
+    """
+    try:
+        has_lights = bool(mc.ls(type=["directionalLight", "ambientLight", "pointLight", "spotLight"]))
+        target_mode = "all" if has_lights else "default"
+        panels = mc.getPanel(type="modelPanel") or []
+        for p in panels:
+            try:
+                mc.modelEditor(p, edit=True, displayLights=target_mode, displayTextures=True)
+            except Exception:
+                pass
+        mc.refresh(force=True)
+    except Exception:
+        pass
+
 def get_dag_path(node_name):
     """ノード名から OpenMaya MDagPath を取得"""
     sel = om.MSelectionList()
@@ -129,9 +147,9 @@ class XpbdMayaBridge:
                 rb.position[1] * self.scale,
                 -rb.position[2] * self.scale
             )
-            deg_x = math.degrees(rb.rotation[0])
-            deg_y = math.degrees(rb.rotation[1])
-            deg_z = -math.degrees(rb.rotation[2])
+            deg_x = -math.degrees(rb.rotation[0])
+            deg_y = -math.degrees(rb.rotation[1])
+            deg_z = math.degrees(rb.rotation[2])
             rb_bind_q = quat_from_euler_xyz(deg_x, deg_y, deg_z)
 
             size = (
@@ -218,15 +236,15 @@ class XpbdMayaBridge:
         for j in self.pmx_model.joints:
             rb_a = self.pmx_model.rigid_bodies[j.rigid_body_a]
             rb_a_bind_p = (rb_a.position[0] * self.scale, rb_a.position[1] * self.scale, -rb_a.position[2] * self.scale)
-            deg_ax = math.degrees(rb_a.rotation[0])
-            deg_ay = math.degrees(rb_a.rotation[1])
-            deg_az = -math.degrees(rb_a.rotation[2])
+            deg_ax = -math.degrees(rb_a.rotation[0])
+            deg_ay = -math.degrees(rb_a.rotation[1])
+            deg_az = math.degrees(rb_a.rotation[2])
             rb_a_bind_q = quat_from_euler_xyz(deg_ax, deg_ay, deg_az)
 
             j_bind_p = (j.position[0] * self.scale, j.position[1] * self.scale, -j.position[2] * self.scale)
-            deg_jx = math.degrees(j.rotation[0])
-            deg_jy = math.degrees(j.rotation[1])
-            deg_jz = -math.degrees(j.rotation[2])
+            deg_jx = -math.degrees(j.rotation[0])
+            deg_jy = -math.degrees(j.rotation[1])
+            deg_jz = math.degrees(j.rotation[2])
             j_bind_q = quat_from_euler_xyz(deg_jx, deg_jy, deg_jz)
 
             inv_ra_q = quat_inverse(rb_a_bind_q)
@@ -334,7 +352,7 @@ class XpbdMayaBridge:
         mc.currentTime(orig_time, edit=True)
         print("[XPBD] アニメーション姿勢の事前キャッシュ完了")
 
-    def bake_simulation(self, start_frame=None, end_frame=None, gravity_y=-980.0, substeps=10):
+    def bake_simulation(self, start_frame=None, end_frame=None, gravity_y=-980.0, substeps=10, fps=60.0, progress_callback=None, cancel_callback=None, physics_mode="dance"):
         """
         タイムライン上でXPBD物理シミュレーションを実行し、Mayaボーンへキーフレームをベイク
         """
@@ -347,25 +365,32 @@ class XpbdMayaBridge:
         if end_frame is None:
             end_frame = int(mc.playbackOptions(query=True, maxTime=True))
 
-        print(f"[XPBD] 物理シミュレーション開始: フレーム {start_frame} ～ {end_frame} (Substeps: {substeps})")
+        fps_val = float(fps) if fps else 60.0
+
+        if physics_mode == "dance":
+            actual_substeps = max(int(substeps), 30)
+            relax_steps = 35
+        else:
+            actual_substeps = min(int(substeps), 15) if int(substeps) > 15 else int(substeps)
+            relax_steps = 15
+
+        print(f"[XPBD] 物理シミュレーション開始: フレーム {start_frame} ～ {end_frame} (モード: {physics_mode}, FPS: {fps_val:.1f}, Substeps: {actual_substeps})")
+
+        # ベイク開始前のビューポートライティング状態を保護・最適化
+        restore_viewport_lighting()
 
         # Dynamic剛体の追従コンストレイントを無効化（物理計算と競合させないため）
         mute_dynamic_constraints(mute=True)
 
-        # アニメーションボーンの事前キャッシュを作成（自己増幅フィードバックの完全遮断）
+        # アニメーションボーンの事前キャッシュを作成（自己増幅フィードバックの遮断）
         self._cache_animated_bone_transforms(start_frame, end_frame)
 
-        # 重力設定
-        self.engine.set_gravity(0.0, float(gravity_y), 0.0)
+        # 重力設定 (MMD本家の値 -9.80 は実寸 cm/s² に換算)
+        gy = float(gravity_y)
+        actual_gy = gy * 100.0 if abs(gy) < 50.0 else gy
+        self.engine.set_gravity(0.0, actual_gy, 0.0)
 
-        # FPS取得
-        fps_map = {
-            'game': 15.0, 'film': 24.0, 'pal': 25.0, 'ntsc': 30.0,
-            'show': 48.0, 'palf': 50.0, 'ntscf': 60.0
-        }
-        time_unit = mc.currentUnit(query=True, time=True)
-        fps = fps_map.get(time_unit, 30.0)
-        dt = 1.0 / fps
+        dt = 1.0 / fps_val
 
         # 初期姿勢の同期（開始フレーム）
         mc.currentTime(start_frame, edit=True)
@@ -374,7 +399,7 @@ class XpbdMayaBridge:
 
         # 初期めり込み解消ウォームアップ (Pre-roll Relaxation)
         print("[XPBD] 初期めり込み解消ウォームアップ (Pre-roll Relaxation) を実行中...")
-        self.engine.relax_penetration(steps=25, damping=0.99)
+        self.engine.relax_penetration(steps=relax_steps, damping=0.99)
         self.engine.reset_velocities()
         self.engine.reset_constraints()
         print("[XPBD] 初期めり込み解消完了。初速ゼロの安定姿勢からベイクを開始します。")
@@ -393,15 +418,20 @@ class XpbdMayaBridge:
                     all_trans[idx] = t
             sync_visualizer_transforms(all_trans, frame=start_frame)
 
-        # 2. フレーム1以降の物理シミュレーションループ (0→1フレームから自然に動き始める)
-        for f in range(start_frame + 1, end_frame + 1):
+        # フレーム1以降の物理シミュレーションループ (0→1フレームから自然に動き始める)
+        total_frames = end_frame - start_frame + 1
+        for f_idx, f in enumerate(range(start_frame + 1, end_frame + 1)):
+            if cancel_callback and cancel_callback():
+                print(f"[XPBD] ユーザーによりベイクが中止されました (フレーム {f})。")
+                break
+
             mc.currentTime(f, edit=True)
 
             # キャッシュからクリーンなボーン位置・回転を同期
             self._sync_animated_bodies_from_cache(f)
 
             # XPBDステップ実行 (前フレームからのボーン移動量を受けて自然に揺れ動く)
-            self.engine.step_simulation(dt=dt, substeps=substeps)
+            self.engine.step_simulation(dt=dt, substeps=actual_substeps)
 
             # Dynamic剛体の揺れを階層マトリクス計算によりMayaボーンへベイク
             self._apply_dynamic_bodies_to_maya(f, prev_eulers)
@@ -415,8 +445,13 @@ class XpbdMayaBridge:
                         all_trans[idx] = t
                 sync_visualizer_transforms(all_trans, frame=f)
 
-        # 3. ベイク完了後、剛体・Joint可視化ノードのキーフレームをクリアし、ボーン追従を完全復元
+            if progress_callback:
+                progress_callback(f, end_frame, f_idx + 1, total_frames)
+
+        # ベイク完了後、剛体・Joint可視化ノードのキーフレームをクリアし、ボーン追従を復元
         reconnect_visualizers_to_bones()
+        # ベイク完了後にビューポートのライティング状態を確実に復元
+        restore_viewport_lighting()
         print("[XPBD] 物理シミュレーションベイクが完了しました！剛体・Jointをモデルに再吸着しました。")
 
     def _sync_animated_bodies_from_cache(self, frame):

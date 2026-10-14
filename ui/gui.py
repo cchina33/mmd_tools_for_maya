@@ -17,6 +17,8 @@ import re
 import sys
 import importlib
 import traceback
+import time
+import json
 
 try:
     from PySide6.QtWidgets import (
@@ -24,7 +26,7 @@ try:
         QCheckBox, QButtonGroup, QRadioButton, QHBoxLayout,
         QVBoxLayout, QScrollArea, QFileDialog, QMessageBox,
         QTabWidget, QGroupBox, QFrame, QSizePolicy, QApplication,
-        QDialog, QTextEdit, QProgressBar
+        QDialog, QTextEdit, QProgressBar, QSlider
     )
     from PySide6.QtCore import Qt, QSize
     from PySide6.QtGui import QDragEnterEvent, QDropEvent, QTextCursor, QFont
@@ -35,7 +37,7 @@ except ImportError:
         QCheckBox, QButtonGroup, QRadioButton, QHBoxLayout,
         QVBoxLayout, QScrollArea, QFileDialog, QMessageBox,
         QTabWidget, QGroupBox, QFrame, QSizePolicy, QApplication,
-        QDialog, QTextEdit, QProgressBar
+        QDialog, QTextEdit, QProgressBar, QSlider
     )
     from PySide2.QtCore import Qt, QSize
     from PySide2.QtGui import QDragEnterEvent, QDropEvent, QTextCursor, QFont
@@ -46,19 +48,24 @@ except ImportError:
 
 import maya.cmds as mc
 from maya import mel
+import maya.OpenMaya as om
 import maya.OpenMayaUI as omui
 
 try:
-    from ..converters import pmxpaimaya, mayapaipmx, vmdpaimaya
+    from ..converters import pmxpaimaya, mayapaipmx, vmdpaimaya, physics_stream
     from ..asset.hik import dic_hik, kangkhaen, setup_leg_stance_and_angles, normalize_bone_name, get_bone_matching_candidates
     from ..pmx_analyzer import export_pmx_structure, check_and_prompt_user_dict
 except Exception:
     try:
-        from converters import pmxpaimaya, mayapaipmx, vmdpaimaya
+        from converters import pmxpaimaya, mayapaipmx, vmdpaimaya, physics_stream
         from asset.hik import dic_hik, kangkhaen, setup_leg_stance_and_angles, normalize_bone_name, get_bone_matching_candidates
         from pmx_analyzer import export_pmx_structure, check_and_prompt_user_dict
     except Exception:
         import pmxpaimaya, mayapaipmx, vmdpaimaya
+        try:
+            import physics_stream
+        except Exception:
+            physics_stream = None
         from asset.hik import dic_hik, kangkhaen, setup_leg_stance_and_angles, normalize_bone_name, get_bone_matching_candidates
         try:
             import pmx_analyzer
@@ -93,6 +100,24 @@ def get_maya_main_window():
         pass
     return None
 
+def restore_viewport_lighting():
+    """
+    ビューポートのライティング（全ライト使用: displayLights='all'）および
+    テクスチャ表示（displayTextures=True）を安定化・復元します。
+    """
+    try:
+        has_lights = bool(mc.ls(type=["directionalLight", "ambientLight", "pointLight", "spotLight"]))
+        target_mode = "all" if has_lights else "default"
+        panels = mc.getPanel(type="modelPanel") or []
+        for p in panels:
+            try:
+                mc.modelEditor(p, edit=True, displayLights=target_mode, displayTextures=True)
+            except Exception:
+                pass
+        mc.refresh(force=True)
+    except Exception:
+        pass
+
 # ==============================================================================
 # モダン QSS スタイルシート (gui_style.py からインポート)
 # ==============================================================================
@@ -126,7 +151,7 @@ class StreamRedirector(object):
 
 class ExecutionLogDialog(QDialog):
     """インポート／エクスポート処理のリアルタイムログダイアログ"""
-    def __init__(self, parent=None, title="実行ログ"):
+    def __init__(self, parent=None, title="実行ログ", show_cancel=False):
         super(ExecutionLogDialog, self).__init__(parent)
         self.setWindowTitle(title)
         self.resize(620, 440)
@@ -134,7 +159,10 @@ class ExecutionLogDialog(QDialog):
         self.setStyleSheet(MODERN_STYLE)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint | Qt.WindowStaysOnTopHint)
 
+        self.show_cancel = show_cancel
         self.success = False
+        self.is_cancelled = False
+        self._start_time = None
 
         # レイアウト構築
         layout = QVBoxLayout(self)
@@ -146,6 +174,17 @@ class ExecutionLogDialog(QDialog):
         self.lb_status.setStyleSheet("font-weight: bold; font-size: 15px; color: #52b7ff;")
         layout.addWidget(self.lb_status)
 
+        # 進捗詳細情報（フレーム数 / 残りフレーム / ETA）
+        h_info = QHBoxLayout()
+        self.lb_frame_info = QLabel("進捗: 待機中")
+        self.lb_frame_info.setStyleSheet("font-size: 13px; color: #e0e0e0; font-weight: bold;")
+        self.lb_eta_info = QLabel("推定残り時間: --")
+        self.lb_eta_info.setStyleSheet("font-size: 13px; color: #aaa;")
+        h_info.addWidget(self.lb_frame_info)
+        h_info.addStretch()
+        h_info.addWidget(self.lb_eta_info)
+        layout.addLayout(h_info)
+
         # ログテキストエリア
         self.te_log = QTextEdit()
         self.te_log.setReadOnly(True)
@@ -154,34 +193,124 @@ class ExecutionLogDialog(QDialog):
 
         # プログレスバー
         self.progress_bar = QProgressBar()
-        self.progress_bar.setFixedHeight(20)
-        self.progress_bar.setRange(0, 0) # 実行中はアニメーション
+        self.progress_bar.setFixedHeight(22)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
         layout.addWidget(self.progress_bar)
 
         # ボタングループ
         h_btn = QHBoxLayout()
         self.btn_copy = QPushButton("ログをコピー")
-        self.btn_copy.setFixedWidth(120)
+        self.btn_copy.setFixedWidth(110)
         self.btn_copy.clicked.connect(self._copy_log)
         h_btn.addWidget(self.btn_copy)
 
         h_btn.addStretch()
 
+        if self.show_cancel:
+            self.btn_cancel = QPushButton("ベイク中止")
+            self.btn_cancel.setFixedWidth(110)
+            self.btn_cancel.setStyleSheet(
+                "QPushButton { background-color: #5d2525; color: #ffcccc; border: 1px solid #853333; border-radius: 4px; font-weight: bold; font-size: 13px; }"
+                "QPushButton:hover { background-color: #782e2e; color: #ffffff; }"
+            )
+            self.btn_cancel.clicked.connect(self._on_cancel_clicked)
+            h_btn.addWidget(self.btn_cancel)
+        else:
+            self.btn_cancel = None
+
+        self._last_process_time = 0
+
         self.btn_close = QPushButton("閉じる")
         self.btn_close.setFixedWidth(100)
         self.btn_close.setEnabled(False) # 実行中は無効化
-        self.btn_close.clicked.connect(self.accept)
+        self.btn_close.clicked.connect(self.close)
         h_btn.addWidget(self.btn_close)
 
         layout.addLayout(h_btn)
 
+    def _on_cancel_clicked(self):
+        """ベイク中止ボタン押下時の処理"""
+        if not self.is_cancelled:
+            self.is_cancelled = True
+            if self.btn_cancel:
+                self.btn_cancel.setEnabled(False)
+                self.btn_cancel.setText("中止中...")
+            self.append_log("\n>>> ベイク中止要求を受信しました。安全に中断しています...\n")
+            self.lb_status.setText("中断中: 安全に停止しています...")
+            self.lb_status.setStyleSheet("font-weight: bold; font-size: 15px; color: #ffaa55;")
+            QApplication.processEvents()
+
+    def check_cancelled(self):
+        """物理エンジン等から定期ポーリングされるキャンセル確認"""
+        QApplication.processEvents()
+        return self.is_cancelled
+
+    def update_progress(self, current, total=None, step_idx=None, total_steps=None, label_prefix="進捗", unit=""):
+        """進捗の更新および推定残り時間(ETA)の算出・表示"""
+        if self._start_time is None:
+            self._start_time = time.time()
+
+        # 4引数呼び出し update_progress(current_frame, end_frame, step_idx, total_steps) の互換処理
+        if total_steps is not None and step_idx is not None:
+            curr_step = float(step_idx)
+            max_step = max(1.0, float(total_steps))
+            curr_val = current
+            end_val = total
+            val_unit = unit or "フレーム"
+        else:
+            curr_step = float(current)
+            max_step = max(1.0, float(total if total is not None else 100))
+            curr_val = current
+            end_val = total
+            val_unit = unit
+
+        percent = int(min(100, max(0, (curr_step / max_step) * 100)))
+        self.progress_bar.setValue(percent)
+
+        if self.lb_frame_info and self.lb_eta_info:
+            if end_val is not None:
+                if val_unit:
+                    info_text = f"{label_prefix}: {val_unit} {curr_val} / {end_val} ({percent}%)"
+                else:
+                    info_text = f"{label_prefix}: {curr_val} / {end_val} ({percent}%)"
+            else:
+                info_text = f"{label_prefix}: {percent}%"
+            self.lb_frame_info.setText(info_text)
+
+            elapsed = time.time() - self._start_time
+            if curr_step > 0 and elapsed > 0.2:
+                remain_steps = max(0.0, max_step - curr_step)
+                sec_per_step = elapsed / curr_step
+                remain_sec = sec_per_step * remain_steps
+                if remain_sec < 60:
+                    eta_str = f"約 {max(0, int(remain_sec))} 秒"
+                else:
+                    eta_m = int(remain_sec // 60)
+                    eta_s = int(remain_sec % 60)
+                    eta_str = f"約 {eta_m} 分 {eta_s} 秒"
+                self.lb_eta_info.setText(f"推定残り時間: {eta_str}")
+
+        now = time.time()
+        if now - self._last_process_time > 0.05 or curr_step >= max_step:
+            self._last_process_time = now
+            QApplication.processEvents()
+
     def append_log(self, text):
-        """ログを追加して最下部へスクロール"""
+        """ログを追加して最下部へスクロール。ステップログを解析して進捗と残り時間を自動更新"""
         cursor = self.te_log.textCursor()
         cursor.movePosition(QTextCursor.End)
         cursor.insertText(text)
         self.te_log.setTextCursor(cursor)
         self.te_log.ensureCursorVisible()
+
+        # ログ文字列からステップ進捗（例: [1/6] や [2/5] 等）を検出して進捗バー・ETAを自動連動
+        m_step = re.search(r'\[(\d+)/(\d+)\]', text)
+        if m_step:
+            cur_s = int(m_step.group(1))
+            tot_s = int(m_step.group(2))
+            self.update_progress(cur_s, tot_s, label_prefix="工程進捗", unit="ステップ")
+
         QApplication.processEvents()
 
     def _copy_log(self):
@@ -193,6 +322,11 @@ class ExecutionLogDialog(QDialog):
     def run_task(self, task_func, *args, **kwargs):
         """タスクを実行し、ログをキャプチャ"""
         self.show()
+        self.is_cancelled = False
+        self._start_time = time.time()
+        if self.btn_cancel:
+            self.btn_cancel.setEnabled(True)
+            self.btn_cancel.setText("ベイク中止")
         QApplication.processEvents()
 
         # 標準出力・標準エラーを一時リダイレクト
@@ -207,25 +341,30 @@ class ExecutionLogDialog(QDialog):
             self.append_log(">>> 処理を開始しました...\n")
             task_func(*args, **kwargs)
             self.success = True
-            self.append_log("\n>>> 処理が正常に完了しました！\n")
-            self.lb_status.setText("完了: 正常に処理が終了しました")
-            self.lb_status.setStyleSheet("font-weight: bold; font-size: 15px; color: #2ecc71;")
-            self.progress_bar.setRange(0, 100)
-            self.progress_bar.setValue(100)
+            if self.is_cancelled:
+                self.append_log("\n>>> 処理がユーザーにより中断されました。\n")
+                self.lb_status.setText("中断: ユーザーにより処理が停止されました")
+                self.lb_status.setStyleSheet("font-weight: bold; font-size: 15px; color: #ffaa55;")
+            else:
+                self.append_log("\n>>> 処理が正常に完了しました！\n")
+                self.lb_status.setText("完了: 正常に処理が終了しました")
+                self.lb_status.setStyleSheet("font-weight: bold; font-size: 15px; color: #2ecc71;")
+                self.progress_bar.setValue(100)
         except Exception as e:
             self.success = False
             err_trace = traceback.format_exc()
             self.append_log(f"\n[エラー] 処理中に問題が発生しました:\n{err_trace}\n")
             self.lb_status.setText("エラー: 処理が中断されました")
             self.lb_status.setStyleSheet("font-weight: bold; font-size: 15px; color: #ff7675;")
-            self.progress_bar.setRange(0, 100)
-            self.progress_bar.setValue(0)
         finally:
             sys.stdout = orig_stdout
             sys.stderr = orig_stderr
+            if self.btn_cancel:
+                self.btn_cancel.setEnabled(False)
             self.btn_close.setEnabled(True)
             self.btn_close.setProperty("class", "primary")
-            self.btn_close.setStyleSheet(self.styleSheet()) # スタイル再適用
+            self.btn_close.setStyleSheet(self.styleSheet())
+            self.btn_close.setFocus()
             QApplication.processEvents()
 
         return self.success
@@ -270,20 +409,6 @@ class ImportTabWidget(QWidget):
         self.btn_clear_file.clicked.connect(self._clear_file)
         h_file_input.addWidget(self.btn_clear_file)
         file_layout.addLayout(h_file_input)
-
-        # モデルチェック・データ一括保存および未登録ボーン辞書登録ボタン
-        h_tool_row = QHBoxLayout()
-        self.btn_analyze_model = QPushButton("PMXモデルチェック・データ一括保存 (材質/ボーン/モーフ/剛体/Joint)")
-        self.btn_analyze_model.setToolTip("選択中PMXの全要素（材質・ボーン・モーフ・剛体・Joint）をJSONに一括保存し、未登録漢字のユーザー辞書登録を行います。")
-        self.btn_analyze_model.clicked.connect(self._analyze_and_save_structure)
-        h_tool_row.addWidget(self.btn_analyze_model)
-
-        self.btn_morph_ui = QPushButton("表情操作 (モーフ,ベータ版)")
-        self.btn_morph_ui.setToolTip("MMD本家風の表情操作パネルを開き、目・リップ・まゆ・その他のモーフを操作・登録します。")
-        self.btn_morph_ui.clicked.connect(self._open_morph_window)
-        h_tool_row.addWidget(self.btn_morph_ui)
-
-        file_layout.addLayout(h_tool_row)
 
         layout.addWidget(file_box)
 
@@ -446,7 +571,7 @@ class ImportTabWidget(QWidget):
         self.cb_create_bones.setChecked(True)
         self.cb_create_physics.setChecked(True)
         self.cb_create_bs.setChecked(True)
-        self.cbb_material.setCurrentIndex(4) # StandardSurface
+        self.cbb_material.setCurrentIndex(5) # MMD Shader (オリジナル,ベータ版)
         self.cb_close_on_finish.setChecked(False)
         self.cb_create_light.setChecked(True)
         self.cb_untone_mapped.setChecked(True)
@@ -631,6 +756,7 @@ class ImportTabWidget(QWidget):
         create_physics = self.cb_create_physics.isChecked()
 
         def full_import_task():
+            total_start_time = time.time()
             if file_path.lower().endswith('.pmx'):
                 print("==================================================")
                 print(f"[PMXチェック] モデルファイル: {os.path.basename(file_path)}")
@@ -641,7 +767,7 @@ class ImportTabWidget(QWidget):
             importlib.reload(pmxpaimaya)
             import_func = getattr(pmxpaimaya, 'import_pmx', pmxpaimaya.sang)
             res = import_func(
-                file_path, scale, split_poly, create_bs, create_bones, material_type, create_light, set_untone_mapped, enable_toon, shadow_mode=shadow_mode
+                file_path, scale, split_poly, create_bs, create_bones, material_type, create_light, set_untone_mapped, enable_toon, shadow_mode=shadow_mode, show_completion_message=False
             )
             # ボーン作成時、Aポーズの状態で剛体・Jointコライダーを同時生成 (ログダイアログ内で実行)
             if create_bones and create_physics and file_path.lower().endswith('.pmx'):
@@ -654,6 +780,12 @@ class ImportTabWidget(QWidget):
                     print("[MMD Tools for Maya] 初期Aポーズにて剛体・Jointコライダーを自動生成しました。")
                 except Exception as e:
                     print(f"[MMD Tools for Maya] 剛体自動生成のスキップ/エラー: {e}")
+
+            # すべてのインポート工程（メッシュ・ボーン・剛体・Joint等）の終了直後に総括完了メッセージを表示
+            total_elapsed = time.time() - total_start_time
+            print("==================================================")
+            print(f"モデルインポートが完了しました！ (所要時間: {total_elapsed:.2f}秒)")
+            print("==================================================")
             return res
 
         # ログウィンドウを起動して実行
@@ -1147,7 +1279,7 @@ class HikTabWidget(QWidget):
             label_text, regex_name = bone_info[0], bone_info[1]
             matched_joint = None
 
-            # 照合1: 日本語名正規化候補リストによる完全一致
+            # 照合1: 日本語名正規化候補リストによる一律一致
             candidates = get_bone_matching_candidates(label_text)
             for cand in candidates:
                 if cand in norm_orig_to_joints:
@@ -1355,7 +1487,7 @@ class HikTabWidget(QWidget):
         print("HumanIK コントロールリグ作成を開始します...")
         print("==================================================")
 
-        # リグ作成直前にも既存IKハンドルの競合を完全排除
+        # リグ作成直前にも既存IKハンドルの競合を漏れなく排除
         self._cleanup_conflicting_mmd_ik()
 
         if hasattr(self, 'current_hik_node') and self.current_hik_node and mc.objExists(self.current_hik_node):
@@ -1369,6 +1501,52 @@ class HikTabWidget(QWidget):
         print("==================================================")
         mc.inViewMessage(amg='<span style="color:#52b7ff;">HumanIK:</span> コントロールリグを作成しました。', pos='topCenter', fade=True)
         return True
+
+# ==============================================================================
+# HumanIK 管理独立ウィンドウ
+# ==============================================================================
+class HikWindow(QWidget):
+    """MMD HumanIK管理独立ウィンドウ"""
+    def __init__(self, parent=None):
+        super(HikWindow, self).__init__(parent)
+        self.setWindowTitle("HumanIK 管理 - MMD Tools for Maya")
+        self.setObjectName("MmdHikWindow")
+        self.resize(760, 680)
+        self.setMinimumSize(640, 520)
+        self.setWindowFlags(Qt.Window)
+        self.setStyleSheet(MODERN_STYLE)
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(12, 12, 12, 12)
+
+        self.hik_widget = HikTabWidget(self)
+        main_layout.addWidget(self.hik_widget)
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        if hasattr(self, "hik_widget"):
+            self.hik_widget._refresh_models()
+
+    def keyPressEvent(self, e):
+        if e.key() == Qt.Key_Escape:
+            self.close()
+
+_hik_window_instance = None
+
+def show_hik_window(parent=None):
+    """HumanIK管理ウィンドウを表示"""
+    global _hik_window_instance
+    if _hik_window_instance is not None:
+        try:
+            _hik_window_instance.close()
+            _hik_window_instance.deleteLater()
+        except Exception:
+            pass
+    _hik_window_instance = HikWindow(parent=parent)
+    _hik_window_instance.show()
+    _hik_window_instance.raise_()
+    _hik_window_instance.activateWindow()
+    return _hik_window_instance
 
 # ==============================================================================
 # モーションインポートタブ (VMD → Maya)
@@ -1411,7 +1589,7 @@ class VmdImportTabWidget(QWidget):
         file_layout.addLayout(h_model_file)
 
         # カメラモーション
-        lbl_cam = QLabel("カメラモーション (.vmd) ※省略可能:")
+        lbl_cam = QLabel("カメラモーション (.vmd) ※省略可能,ベータ版:")
         lbl_cam.setStyleSheet("margin-top: 6px;")
         file_layout.addWidget(lbl_cam)
         h_cam_file = QHBoxLayout()
@@ -1451,6 +1629,24 @@ class VmdImportTabWidget(QWidget):
         self.btn_clear_audio.clicked.connect(self._clear_audio_file)
         h_audio_file.addWidget(self.btn_clear_audio)
         file_layout.addLayout(h_audio_file)
+
+        # BGM音量スライダー
+        h_volume = QHBoxLayout()
+        h_volume.addWidget(QLabel("BGM音量:"))
+        self.slider_audio_volume = QSlider(Qt.Horizontal)
+        self.slider_audio_volume.setRange(0, 100)
+        self.slider_audio_volume.setValue(100)
+        self.lbl_audio_volume = QLabel("100%")
+        self.lbl_audio_volume.setFixedWidth(45)
+        self.slider_audio_volume.valueChanged.connect(self._on_audio_volume_changed)
+        h_volume.addWidget(self.slider_audio_volume)
+        h_volume.addWidget(self.lbl_audio_volume)
+
+        self.btn_apply_audio_volume = QPushButton("確定")
+        self.btn_apply_audio_volume.setFixedWidth(60)
+        self.btn_apply_audio_volume.clicked.connect(self._on_apply_audio_volume)
+        h_volume.addWidget(self.btn_apply_audio_volume)
+        file_layout.addLayout(h_volume)
 
         layout.addWidget(file_box)
 
@@ -1501,13 +1697,6 @@ class VmdImportTabWidget(QWidget):
         h_action.addWidget(self.cb_close_on_finish)
         h_action.addStretch()
 
-        # 表情操作 (モーフ) ボタン
-        self.btn_morph_ui = QPushButton("表情操作 (モーフ)")
-        self.btn_morph_ui.setFixedHeight(46)
-        self.btn_morph_ui.setToolTip("MMD本家風の表情操作パネルを開き、目・リップ・まゆ・その他のモーフを操作・登録します。")
-        self.btn_morph_ui.clicked.connect(self._open_morph_window)
-        h_action.addWidget(self.btn_morph_ui)
-
         # モーションインポート実行ボタン
         self.btn_execute = QPushButton("モーションをインポート")
         self.btn_execute.setProperty("class", "primary")
@@ -1518,6 +1707,9 @@ class VmdImportTabWidget(QWidget):
         h_action.addWidget(self.btn_execute)
 
         layout.addLayout(h_action)
+
+        # 初期化中フラグ
+        self._is_initializing = True
 
         # 前回パスの復元 (空白が保存されている場合は空白を維持)
         if mc.optionVar(exists="MMDToolsForMaya_LastModelVmdPath"):
@@ -1534,6 +1726,9 @@ class VmdImportTabWidget(QWidget):
             last_audio = mc.optionVar(q="MMDToolsForMaya_LastAudioPath")
             if last_audio and os.path.exists(last_audio):
                 self.le_audio_path.setText(last_audio)
+
+        self._is_initializing = False
+        self._on_file_changed()
 
     def _open_morph_window(self):
         """MMD本家風の表情操作ウィンドウを開く"""
@@ -1567,10 +1762,15 @@ class VmdImportTabWidget(QWidget):
         valid3 = path3.lower().endswith('.wav') and os.path.exists(path3)
         self.btn_execute.setEnabled(valid1 or valid2 or valid3)
 
-        # 空白状態も含めて正確に保存
-        mc.optionVar(sv=("MMDToolsForMaya_LastModelVmdPath", path1 if valid1 else ""))
-        mc.optionVar(sv=("MMDToolsForMaya_LastCameraVmdPath", path2 if valid2 else ""))
-        mc.optionVar(sv=("MMDToolsForMaya_LastAudioPath", path3 if valid3 else ""))
+        if getattr(self, "_is_initializing", False):
+            return
+
+        if valid1:
+            mc.optionVar(sv=("MMDToolsForMaya_LastModelVmdPath", path1))
+        if valid2:
+            mc.optionVar(sv=("MMDToolsForMaya_LastCameraVmdPath", path2))
+        if valid3:
+            mc.optionVar(sv=("MMDToolsForMaya_LastAudioPath", path3))
 
     def _clear_model_file(self):
         """モデルモーション入力欄をクリア"""
@@ -1586,6 +1786,28 @@ class VmdImportTabWidget(QWidget):
         """BGM音声ファイル入力欄をクリア"""
         self.le_audio_path.clear()
         mc.optionVar(sv=("MMDToolsForMaya_LastAudioPath", ""))
+
+    def _on_audio_volume_changed(self, value):
+        """BGM音量スライダー変更時の数値ラベル表示更新"""
+        self.lbl_audio_volume.setText(f"{value}%")
+
+    def _on_apply_audio_volume(self):
+        """音量確定ボタン押下時にPCM波形をゲイン乗算した一時WAVを出力し、MMD_Audioノードに即時反映"""
+        vol = self.slider_audio_volume.value()
+        dlg = ExecutionLogDialog(self, title="BGM音量調整 実行ログ")
+
+        def _task():
+            print(f">>> BGM音量を {vol}% に設定中...")
+            try:
+                from ..converters import vmdpaimaya
+            except Exception:
+                from converters import vmdpaimaya
+            vmdpaimaya.set_audio_volume(vol)
+            msg = f"[MMD Audio] Python 標準ライブラリ（wave + struct）によりPCM波形をゲイン乗算した一時WAVを出力し、Maya の MMD_Audio ノードに即時反映しました（音量: {vol}%）"
+            om.MGlobal.displayInfo(msg)
+            print(msg)
+
+        dlg.run_task(_task)
 
     def _browse_file(self):
         start_dir = self.le_file_path.text().strip()
@@ -1728,7 +1950,28 @@ class VmdImportTabWidget(QWidget):
 
         log_dialog = ExecutionLogDialog(self.parent_window or self, title="VMDモーションインポート実行ログ")
         import_func = vmdpaimaya.import_vmd
-        success = log_dialog.run_task(import_func, file_path, camera_path, audio_path, scale, target_model)
+        audio_volume = self.slider_audio_volume.value()
+
+        if audio_path and os.path.exists(audio_path):
+            mc.optionVar(sv=("MMDToolsForMaya_LastAudioPath", audio_path))
+        if file_path and os.path.exists(file_path):
+            mc.optionVar(sv=("MMDToolsForMaya_LastModelVmdPath", file_path))
+        if camera_path and os.path.exists(camera_path):
+            mc.optionVar(sv=("MMDToolsForMaya_LastCameraVmdPath", camera_path))
+
+        success = log_dialog.run_task(
+            import_func,
+            file_path,
+            camera_path,
+            audio_path,
+            scale,
+            target_model,
+            audio_volume,
+            progress_callback=log_dialog.update_progress
+        )
+
+        # インポート完了後のビューポートライティングを確実に復元
+        restore_viewport_lighting()
 
         if success:
             mc.inViewMessage(amg='<span style="color:#52b7ff;">MMD Tools for Maya:</span> モーション・音声インポートが完了しました。', pos='topCenter', fade=True)
@@ -1778,26 +2021,60 @@ class PhysicsTabWidget(QWidget):
         layout.addWidget(file_box)
 
         # 物理シミュレーション設定
-        param_box = QGroupBox("XPBD 物理演算パラメータ")
+        param_box = QGroupBox("物理演算パラメータ (XPBD / Bullet 共通)")
         param_layout = QVBoxLayout(param_box)
 
-        # 重力設定
+        # 動作モード選択 (ダンスモーションモード vs 簡易モード)
+        h_mode = QHBoxLayout()
+        h_mode.addWidget(QLabel("物理演算モード:"))
+        self.rb_mode_dance = QRadioButton("ダンスモーションモード (高精度・しなやか)")
+        self.rb_mode_simple = QRadioButton("簡易モード (ベイク速さ重視)")
+        self.rb_mode_dance.setChecked(True)
+        self.rb_mode_dance.toggled.connect(self._on_physics_mode_toggled)
+
+        self.bg_physics_mode = QButtonGroup(self)
+        self.bg_physics_mode.addButton(self.rb_mode_dance)
+        self.bg_physics_mode.addButton(self.rb_mode_simple)
+
+        h_mode.addWidget(self.rb_mode_dance)
+        h_mode.addWidget(self.rb_mode_simple)
+        h_mode.addStretch()
+        param_layout.addLayout(h_mode)
+
+        # 重力設定 (MMD本家仕様: 加速度 9.80)
         h_grav = QHBoxLayout()
         h_grav.addWidget(QLabel("重力加速度 (Y):"))
-        self.le_gravity = QLineEdit("-980.0")
-        self.le_gravity.setFixedWidth(80)
+        self.le_gravity = QLineEdit("-9.80")
+        self.le_gravity.setFixedWidth(75)
+        self.le_gravity.setToolTip(
+            "MMD重力加速度 (下向き: -9.80)\n"
+            "・MMD標準地球重力 (1.0G): -9.80 (通常・ダンス推奨)\n"
+            "・ふんわり軽め (0.5G): -4.90 (スカートがふわっと浮き上がる)\n"
+            "・重め (1.5G): -14.70 (素早く下へ落ち着かせる)\n"
+            "・無重力 (0.0G): 0.0"
+        )
         h_grav.addWidget(self.le_gravity)
-        h_grav.addWidget(QLabel("cm/s² (Maya標準単位)"))
+        lbl_grav_hint = QLabel("(MMD標準 1.0G: -9.80 ／ ふんわり: -4.90 ／ 重め: -14.70)")
+        lbl_grav_hint.setStyleSheet("color: #aaaaaa; font-size: 11px;")
+        h_grav.addWidget(lbl_grav_hint)
         h_grav.addStretch()
         param_layout.addLayout(h_grav)
 
         # サブステップ数
         h_sub = QHBoxLayout()
         h_sub.addWidget(QLabel("サブステップ数:"))
-        self.le_substeps = QLineEdit("10")
-        self.le_substeps.setFixedWidth(80)
+        self.le_substeps = QLineEdit("30")
+        self.le_substeps.setFixedWidth(75)
+        self.le_substeps.setToolTip(
+            "1フレームあたりの物理計算分割数。\n"
+            "・ダンスモーションモード: 30 (激しいステップやターンでも剛体・Jointが破綻せずしなやか)\n"
+            "・簡易モード: 10～15 (ベイク速さ重視)\n"
+            "※数値を高くするほど剛体の貫通や伸びが抑制され安定しますが、計算時間が増加します。"
+        )
         h_sub.addWidget(self.le_substeps)
-        h_sub.addWidget(QLabel("(推奨: 8～15、高いほど高精度・安定)"))
+        lbl_sub_hint = QLabel("(ダンス推奨: 30 ／ 簡易速さ重視: 10～15)")
+        lbl_sub_hint.setStyleSheet("color: #aaaaaa; font-size: 11px;")
+        h_sub.addWidget(lbl_sub_hint)
         h_sub.addStretch()
         param_layout.addLayout(h_sub)
 
@@ -1833,20 +2110,20 @@ class PhysicsTabWidget(QWidget):
         h_custom_frame.setContentsMargins(24, 0, 0, 0)
         h_custom_frame.addWidget(QLabel("開始フレーム:"))
         self.le_start_frame = QLineEdit()
-        self.le_start_frame.setFixedWidth(60)
+        self.le_start_frame.setFixedWidth(70)
         self.le_start_frame.setEnabled(False)
         h_custom_frame.addWidget(self.le_start_frame)
 
         h_custom_frame.addWidget(QLabel("終了フレーム:"))
         self.le_end_frame = QLineEdit()
-        self.le_end_frame.setFixedWidth(60)
+        self.le_end_frame.setFixedWidth(70)
         self.le_end_frame.setEnabled(False)
         h_custom_frame.addWidget(self.le_end_frame)
         h_custom_frame.addStretch()
         param_layout.addLayout(h_custom_frame)
 
         # ベイク完了後の補助ノード非表示設定
-        self.cb_hide_helpers = QCheckBox("物理ベイク完了後に補助ノード (Apose_view_cnt / Apose_subetenoya / 剛体) を非表示にする")
+        self.cb_hide_helpers = QCheckBox("物理ベイク完了後に補助ノード (Apose_view_cnt / Apose_subetenoya / *_master / 剛体・ジョイント可視化メッシュ) を非表示にする")
         hide_default = True
         if mc.optionVar(exists="MMDToolsForMaya_HideHelpersAfterBake"):
             hide_default = bool(mc.optionVar(q="MMDToolsForMaya_HideHelpersAfterBake"))
@@ -1854,24 +2131,28 @@ class PhysicsTabWidget(QWidget):
         self.cb_hide_helpers.toggled.connect(self._on_hide_helpers_toggled)
         param_layout.addWidget(self.cb_hide_helpers)
 
+        # 床判定（Y=0 地面衝突）
+        self.cb_enable_floor = QCheckBox("床判定 (地面無限平面 Y=0) を有効化する ※ひもやスカートの床下沈み込みを防止")
+        self.cb_enable_floor.setChecked(True)
+        param_layout.addWidget(self.cb_enable_floor)
         layout.addWidget(param_box)
         layout.addStretch()
 
         # 実行ボタンエリア
         v_action = QVBoxLayout()
 
-        # 上段: 物理ベイク実行ボタン (Bullet と XPBD を横並び)
+        # 中段: 従来の物理ベイク実行ボタン (Bullet と XPBD を横並び)
         h_bake_action = QHBoxLayout()
 
         self.btn_bullet_bake = QPushButton("Bullet 物理ベイク実行 (MMD本家仕様)")
-        self.btn_bullet_bake.setFixedHeight(44)
+        self.btn_bullet_bake.setFixedHeight(40)
         self.btn_bullet_bake.setStyleSheet("QPushButton { background-color: #2e6b9e; color: #fff; font-weight: bold; border-radius: 4px; } QPushButton:hover { background-color: #3b88c7; } QPushButton:disabled { background-color: #444; color: #888; }")
         self.btn_bullet_bake.clicked.connect(self._execute_bullet_bake)
         h_bake_action.addWidget(self.btn_bullet_bake)
 
-        self.btn_bake = QPushButton("XPBD 物理ベイク実行")
+        self.btn_bake = QPushButton("XPBD 物理ベイク実行(ベータ版)")
         self.btn_bake.setProperty("class", "primary")
-        self.btn_bake.setFixedHeight(44)
+        self.btn_bake.setFixedHeight(40)
         self.btn_bake.clicked.connect(self._execute_bake)
         h_bake_action.addWidget(self.btn_bake)
 
@@ -1900,6 +2181,43 @@ class PhysicsTabWidget(QWidget):
 
         self._refresh_bullet_status()
 
+    def _check_motion_plugin_status(self):
+        """mmd_motion.mll プラグインのロード状況を確認しラベルを更新"""
+        loaded = False
+        try:
+            if hasattr(mc, "mmdFastBakeBone"):
+                loaded = True
+            elif hasattr(mel, "eval") and mel.eval('exists "mmdFastBakeBone"') == 1:
+                loaded = True
+            elif any("mmd_motion" in p.lower() for p in (mc.pluginInfo(query=True, listPlugins=True) or [])):
+                loaded = True
+            elif mc.pluginInfo("mmd_motion.mll", query=True, loaded=True) or mc.pluginInfo("mmd_motion", query=True, loaded=True):
+                loaded = True
+        except Exception:
+            pass
+
+        if loaded:
+            self.lbl_motion_plugin_status.setText("<span style='color:#55ff77; font-weight:bold;'>● プラグイン読み込み済み (mmd_motion.mll)</span>")
+        else:
+            self.lbl_motion_plugin_status.setText("<span style='color:#ff7777; font-weight:bold;'>○ プラグイン未読み込み (mmd_motion.mll)</span>")
+
+    def _reload_motion_plugin(self):
+        """mmd_motion.mll プラグインを強制リロード"""
+        try:
+            try:
+                from ..bullet_engine import bullet_maya_bridge
+            except Exception:
+                from bullet_engine import bullet_maya_bridge
+            bridge = bullet_maya_bridge.BulletMayaBridge.__new__(bullet_maya_bridge.BulletMayaBridge)
+            success = bridge._ensure_motion_plugin_loaded()
+            self._check_motion_plugin_status()
+            if success:
+                QMessageBox.information(self, "プラグイン", "MMDモーションプラグイン (mmd_motion.mll) が正常にロードされました。")
+            else:
+                QMessageBox.warning(self, "プラグイン", "MMDモーションプラグイン (mmd_motion.mll) のロードに失敗しました。")
+        except Exception as e:
+            QMessageBox.warning(self, "エラー", f"プラグインのロード中にエラーが発生しました: {e}")
+
     def _is_bullet_available(self):
         """Bullet物理モジュール (bullet_engine) が存在し利用可能か判定"""
         try:
@@ -1919,6 +2237,13 @@ class PhysicsTabWidget(QWidget):
             self.btn_bullet_bake.setToolTip("本家MMD仕様のBullet Physics (2.83.7) により、柔らかくしなやかな髪やスカートの物理をベイクします。")
         else:
             self.btn_bullet_bake.setToolTip("Bullet物理モジュール (bullet_engine) は削除または未導入です。\n下の「XPBD 物理ベイク実行」をご利用ください。")
+
+    def _on_physics_mode_toggled(self, checked):
+        """ダンスモーションモードと簡易モードの切り替え"""
+        if self.rb_mode_dance.isChecked():
+            self.le_substeps.setText("30")
+        else:
+            self.le_substeps.setText("10")
 
     def showEvent(self, event):
         super(PhysicsTabWidget, self).showEvent(event)
@@ -1970,11 +2295,11 @@ class PhysicsTabWidget(QWidget):
         mc.optionVar(iv=("MMDToolsForMaya_HideHelpersAfterBake", int(checked)))
 
     def _hide_helper_nodes_if_needed(self):
-        """物理ベイク完了後に補助ノード（カメラビューコントローラ、全ての親、剛体可視化等）を非表示化"""
+        """物理ベイク完了後に補助ノード（カメラビューコントローラ、全ての親、*_master、剛体・ジョイント可視化メッシュ等）を非表示化"""
         if not self.cb_hide_helpers.isChecked():
             return
 
-        target_names = ["Apose_view_cnt", "Apose_subetenoya", "MMD_RigidBody_Visualizers"]
+        target_names = ["Apose_view_cnt", "Apose_subetenoya", "MMD_RigidBody_Joint_Visualizers"]
         for name in target_names:
             if mc.objExists(name):
                 try:
@@ -1982,15 +2307,21 @@ class PhysicsTabWidget(QWidget):
                 except Exception:
                     pass
 
-        # ワイルドカード検索でマッチする補助ノードも非表示化
-        for pattern in ["*view_cnt*", "*subetenoya*"]:
-            matched = mc.ls(pattern, type="transform") or []
+        # ワイルドカード検索でマッチする補助ノード（カメラ、全ての親、*_master）も非表示化
+        # ライトやカメラ関連ノードを誤って非表示に巻き込まないよう保護
+        for pattern in ["*view_cnt*", "*subetenoya*", "*_master*"]:
+            matched = mc.ls(pattern, type=["transform", "joint"]) or []
             for m in matched:
+                m_lower = m.lower()
+                if any(ex in m_lower for ex in ["light", "camera", "aim"]):
+                    continue
                 try:
                     mc.setAttr(f"{m}.visibility", False)
                 except Exception:
                     pass
 
+        # ビューポートライティングを確実に復元
+        restore_viewport_lighting()
     def _execute_bullet_bake(self):
         """Bullet Physics (MMD本家仕様) による物理ベイク実行"""
         if not self._is_bullet_available():
@@ -2008,6 +2339,7 @@ class PhysicsTabWidget(QWidget):
 
         try:
             scale = float(self.le_scale.text())
+            gravity = float(self.le_gravity.text())
             substeps = int(self.le_substeps.text())
         except ValueError:
             QMessageBox.warning(self, "エラー", "パラメータの数値が正しくありません。")
@@ -2026,6 +2358,12 @@ class PhysicsTabWidget(QWidget):
                 QMessageBox.warning(self, "エラー", "開始・終了フレーム番号を正しく入力してください。")
                 return
 
+        enable_floor = self.cb_enable_floor.isChecked()
+        fps = 30.0
+        physics_mode = "dance" if self.rb_mode_dance.isChecked() else "simple"
+
+        log_dialog = ExecutionLogDialog(self.parent_window or self, title="Bullet 物理演算ベイク実行ログ (MMD本家仕様)", show_cancel=True)
+
         def run_bullet_task():
             try:
                 from ..bullet_engine import bullet_maya_bridge
@@ -2035,18 +2373,30 @@ class PhysicsTabWidget(QWidget):
             bridge.bake_simulation(
                 start_frame=start_frame,
                 end_frame=end_frame,
-                sub_steps=substeps
+                sub_steps=substeps,
+                enable_floor=enable_floor,
+                gravity_y=gravity,
+                fps=fps,
+                physics_mode=physics_mode,
+                progress_callback=log_dialog.update_progress,
+                cancel_callback=log_dialog.check_cancelled
             )
 
-        log_dialog = ExecutionLogDialog(self.parent_window or self, title="Bullet 物理演算ベイク実行ログ (MMD本家仕様)")
         success = log_dialog.run_task(run_bullet_task)
         if success:
             self._hide_helper_nodes_if_needed()
-            mc.inViewMessage(
-                amg='<span style="color:#2ecc71;">MMD Tools for Maya:</span> Bullet物理シミュレーションのベイクが完了しました。',
-                pos='topCenter',
-                fade=True
-            )
+            if log_dialog.is_cancelled:
+                mc.inViewMessage(
+                    amg='<span style="color:#ffaa55;">MMD Tools for Maya:</span> Bullet物理ベイクがユーザーにより中断されました。',
+                    pos='topCenter',
+                    fade=True
+                )
+            else:
+                mc.inViewMessage(
+                    amg='<span style="color:#2ecc71;">MMD Tools for Maya:</span> Bullet物理シミュレーションのベイクが完了しました。',
+                    pos='topCenter',
+                    fade=True
+                )
 
     def _execute_bake(self):
         pmx_path = self.le_pmx_path.text().strip()
@@ -2075,6 +2425,11 @@ class PhysicsTabWidget(QWidget):
                 QMessageBox.warning(self, "エラー", "開始・終了フレーム番号を正しく入力してください。")
                 return
 
+        fps = 30.0
+        physics_mode = "dance" if self.rb_mode_dance.isChecked() else "simple"
+
+        log_dialog = ExecutionLogDialog(self.parent_window or self, title="XPBD 物理演算ベイク実行ログ", show_cancel=True)
+
         def run_physics_task():
             try:
                 from ..cpp_engine import xpbd_maya_bridge
@@ -2088,18 +2443,28 @@ class PhysicsTabWidget(QWidget):
                 start_frame=start_frame,
                 end_frame=end_frame,
                 gravity_y=gravity,
-                substeps=substeps
+                substeps=substeps,
+                fps=fps,
+                physics_mode=physics_mode,
+                progress_callback=log_dialog.update_progress,
+                cancel_callback=log_dialog.check_cancelled
             )
 
-        log_dialog = ExecutionLogDialog(self.parent_window or self, title="XPBD 物理演算ベイク実行ログ")
         success = log_dialog.run_task(run_physics_task)
         if success:
             self._hide_helper_nodes_if_needed()
-            mc.inViewMessage(
-                amg='<span style="color:#2ecc71;">MMD Tools for Maya:</span> XPBD物理シミュレーションのベイクが完了しました。',
-                pos='topCenter',
-                fade=True
-            )
+            if log_dialog.is_cancelled:
+                mc.inViewMessage(
+                    amg='<span style="color:#ffaa55;">MMD Tools for Maya:</span> XPBD物理ベイクがユーザーにより中断されました。',
+                    pos='topCenter',
+                    fade=True
+                )
+            else:
+                mc.inViewMessage(
+                    amg='<span style="color:#2ecc71;">MMD Tools for Maya:</span> XPBD物理シミュレーションのベイクが完了しました。',
+                    pos='topCenter',
+                    fade=True
+                )
 
     def _execute_clear_keys(self):
         pmx_path = self.le_pmx_path.text().strip()
@@ -2167,10 +2532,627 @@ class PhysicsTabWidget(QWidget):
             QMessageBox.critical(self, "エラー", f"可視化生成中にエラーが発生しました:\n{e}")
 
 # ==============================================================================
+# 物理演算GUI タブ（外部物理エンジン連携・キーフレームベイク）
+# ==============================================================================
+class PhysicsGuiTabWidget(QWidget):
+    """外部物理演算エンジンとのデータ連携（モーション書き出し＆キーフレームベイク）を行うUIタブ"""
+    def __init__(self, parent=None):
+        super(PhysicsGuiTabWidget, self).__init__(parent)
+        self.parent_window = parent
+        self.setAcceptDrops(True)
+        self._init_ui()
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(12, 12, 12, 12)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll_content = QWidget()
+        content_layout = QVBoxLayout(scroll_content)
+        content_layout.setSpacing(12)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+
+        # シーン内インポート状態確認
+        status_box = QGroupBox("シーン読み込み状態の確認")
+        status_layout = QVBoxLayout(status_box)
+
+        h_status_row = QHBoxLayout()
+        v_status_labels = QVBoxLayout()
+        self.lbl_scene_pmx_status = QLabel("PMXモデル: 確認中...")
+        self.lbl_scene_pmx_status.setStyleSheet("font-weight: bold;")
+        self.lbl_scene_motion_status = QLabel("モーション: 確認中...")
+        self.lbl_scene_motion_status.setStyleSheet("font-weight: bold;")
+        v_status_labels.addWidget(self.lbl_scene_pmx_status)
+        v_status_labels.addWidget(self.lbl_scene_motion_status)
+        h_status_row.addLayout(v_status_labels)
+
+        h_status_row.addStretch()
+        self.btn_refresh_scene_status = QPushButton("状態を再確認")
+        self.btn_refresh_scene_status.setFixedWidth(110)
+        self.btn_refresh_scene_status.clicked.connect(self._check_scene_import_status)
+        h_status_row.addWidget(self.btn_refresh_scene_status)
+        status_layout.addLayout(h_status_row)
+        content_layout.addWidget(status_box)
+
+        # PMXモデル参照情報
+        pmx_box = QGroupBox("PMX モデル情報")
+        pmx_layout = QVBoxLayout(pmx_box)
+
+        h_pmx_path = QHBoxLayout()
+        self.le_pmx_path = QLineEdit()
+        self.le_pmx_path.setPlaceholderText("PMXファイルのパス（インポートタブと連動）")
+        last_pmx = mc.optionVar(q="MMDToolsForMaya_LastPmxPath") if mc.optionVar(exists="MMDToolsForMaya_LastPmxPath") else ""
+        if last_pmx and os.path.exists(last_pmx):
+            self.le_pmx_path.setText(last_pmx)
+        self.le_pmx_path.textChanged.connect(self._on_pmx_changed)
+        h_pmx_path.addWidget(self.le_pmx_path)
+
+        self.btn_sync_pmx = QPushButton("インポートタブから取得")
+        self.btn_sync_pmx.clicked.connect(self._sync_pmx_from_import_tab)
+        h_pmx_path.addWidget(self.btn_sync_pmx)
+
+        self.btn_browse_pmx = QPushButton("参照...")
+        self.btn_browse_pmx.setFixedWidth(75)
+        self.btn_browse_pmx.clicked.connect(self._browse_pmx)
+        h_pmx_path.addWidget(self.btn_browse_pmx)
+        pmx_layout.addLayout(h_pmx_path)
+        content_layout.addWidget(pmx_box)
+
+        default_dir = os.path.dirname(last_pmx) if last_pmx and os.path.exists(last_pmx) else mc.workspace(q=True, rootDirectory=True)
+
+        # VMDモーション参照情報
+        vmd_src_box = QGroupBox("VMD モーション情報 (ベイク元モーション)")
+        vmd_src_layout = QVBoxLayout(vmd_src_box)
+
+        h_vmd_src = QHBoxLayout()
+        self.le_vmd_source_path = QLineEdit()
+        self.le_vmd_source_path.setPlaceholderText("ベイク元となるVMDモーションのファイルパス")
+        last_vmd = mc.optionVar(q="MMDToolsForMaya_LastModelVmdPath") if mc.optionVar(exists="MMDToolsForMaya_LastModelVmdPath") else ""
+        if last_vmd and os.path.exists(last_vmd):
+            self.le_vmd_source_path.setText(last_vmd)
+        self.le_vmd_source_path.textChanged.connect(self._on_vmd_changed)
+        h_vmd_src.addWidget(self.le_vmd_source_path)
+
+        self.btn_sync_vmd = QPushButton("モーションタブから取得")
+        self.btn_sync_vmd.clicked.connect(self._sync_vmd_from_motion_tab)
+        h_vmd_src.addWidget(self.btn_sync_vmd)
+
+        self.btn_browse_vmd_src = QPushButton("参照...")
+        self.btn_browse_vmd_src.setFixedWidth(75)
+        self.btn_browse_vmd_src.clicked.connect(self._browse_source_vmd)
+        h_vmd_src.addWidget(self.btn_browse_vmd_src)
+        vmd_src_layout.addLayout(h_vmd_src)
+        content_layout.addWidget(vmd_src_box)
+
+        # リアルタイム物理ベイク (新3D物理ビューア連携)
+        stream_bake_box = QGroupBox("リアルタイム物理ベイク (新3D物理ビューア連携)")
+        stream_bake_layout = QVBoxLayout(stream_bake_box)
+
+        h_stream_model = QHBoxLayout()
+        h_stream_model.addWidget(QLabel("適用対象モデル:"))
+        self.cbb_stream_target_model = QComboBox()
+        self.cbb_stream_target_model.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        h_stream_model.addWidget(self.cbb_stream_target_model)
+
+        self.btn_refresh_stream_models = QPushButton("更新")
+        self.btn_refresh_stream_models.setFixedWidth(60)
+        self.btn_refresh_stream_models.clicked.connect(self._refresh_stream_target_models)
+        h_stream_model.addWidget(self.btn_refresh_stream_models)
+        stream_bake_layout.addLayout(h_stream_model)
+
+        # VMDファイル出力オプション
+        vmd_out_box = QGroupBox("物理ベイク済みモーションの書き出し設定")
+        vmd_out_layout = QVBoxLayout(vmd_out_box)
+
+        h_vmd_out_choice = QHBoxLayout()
+        self.rb_vmd_out_enable = QRadioButton("VMDファイルを出力する (推奨)")
+        self.rb_vmd_out_disable = QRadioButton("VMDファイルを出力しない (Mayaへの直接ベイクのみ)")
+        self.rb_vmd_out_enable.setChecked(True)
+        self.rb_vmd_out_enable.toggled.connect(self._on_vmd_output_toggled)
+
+        self.bg_vmd_output = QButtonGroup(self)
+        self.bg_vmd_output.addButton(self.rb_vmd_out_enable)
+        self.bg_vmd_output.addButton(self.rb_vmd_out_disable)
+
+        h_vmd_out_choice.addWidget(self.rb_vmd_out_enable)
+        h_vmd_out_choice.addWidget(self.rb_vmd_out_disable)
+        h_vmd_out_choice.addStretch()
+        vmd_out_layout.addLayout(h_vmd_out_choice)
+
+        h_vmd_out_path = QHBoxLayout()
+        h_vmd_out_path.addWidget(QLabel("保存先:"))
+        self.le_vmd_output_path = QLineEdit()
+        self.le_vmd_output_path.setPlaceholderText("出力先VMDファイルパス")
+        h_vmd_out_path.addWidget(self.le_vmd_output_path)
+
+        self.btn_browse_vmd_output = QPushButton("参照...")
+        self.btn_browse_vmd_output.setFixedWidth(75)
+        self.btn_browse_vmd_output.clicked.connect(self._browse_vmd_output)
+        h_vmd_out_path.addWidget(self.btn_browse_vmd_output)
+        vmd_out_layout.addLayout(h_vmd_out_path)
+
+        stream_bake_layout.addWidget(vmd_out_box)
+
+        # シミュレーション範囲設定 (ラジオボタン選択 & 入力欄)
+        h_stream_frame_mode = QHBoxLayout()
+        h_stream_frame_mode.addWidget(QLabel("シミュレーション範囲:"))
+        self.rb_stream_auto_frame = QRadioButton("タイムライン全体 (自動)")
+        self.rb_stream_auto_frame.setChecked(True)
+        self.rb_stream_custom_frame = QRadioButton("フレーム指定")
+        self.rb_stream_auto_frame.toggled.connect(self._on_stream_frame_mode_toggled)
+
+        self.bg_stream_frame_mode = QButtonGroup(self)
+        self.bg_stream_frame_mode.addButton(self.rb_stream_auto_frame)
+        self.bg_stream_frame_mode.addButton(self.rb_stream_custom_frame)
+
+        h_stream_frame_mode.addWidget(self.rb_stream_auto_frame)
+        h_stream_frame_mode.addWidget(self.rb_stream_custom_frame)
+        h_stream_frame_mode.addStretch()
+        stream_bake_layout.addLayout(h_stream_frame_mode)
+
+        # 一段下げたフレーム数値入力レイアウト
+        h_stream_custom_frame = QHBoxLayout()
+        h_stream_custom_frame.setContentsMargins(24, 0, 0, 0)
+        h_stream_custom_frame.addWidget(QLabel("開始フレーム:"))
+        self.le_stream_start_frame = QLineEdit()
+        self.le_stream_start_frame.setFixedWidth(70)
+        self.le_stream_start_frame.setEnabled(False)
+        h_stream_custom_frame.addWidget(self.le_stream_start_frame)
+
+        h_stream_custom_frame.addWidget(QLabel("終了フレーム:"))
+        self.le_stream_end_frame = QLineEdit()
+        self.le_stream_end_frame.setFixedWidth(70)
+        self.le_stream_end_frame.setEnabled(False)
+        h_stream_custom_frame.addWidget(self.le_stream_end_frame)
+        h_stream_custom_frame.addStretch()
+        stream_bake_layout.addLayout(h_stream_custom_frame)
+
+        # タイムライン初期値を設定
+        try:
+            min_t = int(mc.playbackOptions(query=True, minTime=True))
+            max_t = int(mc.playbackOptions(query=True, maxTime=True))
+            self.le_stream_start_frame.setText(str(min_t))
+            self.le_stream_end_frame.setText(str(max_t))
+        except Exception:
+            self.le_stream_start_frame.setText("0")
+            self.le_stream_end_frame.setText("100")
+
+        h_stream_params = QHBoxLayout()
+        h_stream_params.addWidget(QLabel("先行フレーム数:"))
+        init_lookahead = mc.optionVar(q="MMDToolsForMaya_StreamLookahead") if mc.optionVar(exists="MMDToolsForMaya_StreamLookahead") else "16"
+        self.le_stream_lookahead = QLineEdit(str(init_lookahead))
+        self.le_stream_lookahead.setFixedWidth(70)
+        self.le_stream_lookahead.setToolTip("ビューアが先行して物理計算を行うフレーム数です (ACK同期用)。")
+        self.le_stream_lookahead.textChanged.connect(lambda val: mc.optionVar(sv=("MMDToolsForMaya_StreamLookahead", val.strip())))
+        h_stream_params.addWidget(self.le_stream_lookahead)
+
+        h_stream_params.addWidget(QLabel("安定化時間(秒):"))
+        init_warmup = mc.optionVar(q="MMDToolsForMaya_StreamWarmup") if mc.optionVar(exists="MMDToolsForMaya_StreamWarmup") else "0.0"
+        self.le_stream_warmup = QLineEdit(str(init_warmup))
+        self.le_stream_warmup.setFixedWidth(70)
+        self.le_stream_warmup.setToolTip("ベイク開始前にフレーム0の姿勢で物理演算を先行実行し、スカートや髪の垂れ下がりを落ち着かせる時間(秒)です。タイミングの一致を優先する場合は0.0秒を設定します。")
+        self.le_stream_warmup.textChanged.connect(lambda val: mc.optionVar(sv=("MMDToolsForMaya_StreamWarmup", val.strip())))
+        h_stream_params.addWidget(self.le_stream_warmup)
+
+        h_stream_params.addWidget(QLabel("オフセット:"))
+        init_offset = mc.optionVar(q="MMDToolsForMaya_StreamOffset") if mc.optionVar(exists="MMDToolsForMaya_StreamOffset") else "0"
+        self.le_stream_offset = QLineEdit(str(init_offset))
+        self.le_stream_offset.setFixedWidth(70)
+        self.le_stream_offset.setToolTip("身体モーションや楽曲に対して物理ベイクの開始フレームを前後にずらす値です (例: -60 または 60)。")
+        self.le_stream_offset.textChanged.connect(lambda val: mc.optionVar(sv=("MMDToolsForMaya_StreamOffset", val.strip())))
+        h_stream_params.addWidget(self.le_stream_offset)
+
+        h_stream_params.addWidget(QLabel("スケール倍率:"))
+        init_scale = mc.optionVar(q="MMDToolsForMaya_StreamScale") if mc.optionVar(exists="MMDToolsForMaya_StreamScale") else "8.0"
+        self.le_stream_scale = QLineEdit(str(init_scale))
+        self.le_stream_scale.setFixedWidth(70)
+        self.le_stream_scale.textChanged.connect(lambda val: mc.optionVar(sv=("MMDToolsForMaya_StreamScale", val.strip())))
+        h_stream_params.addWidget(self.le_stream_scale)
+        h_stream_params.addStretch()
+        stream_bake_layout.addLayout(h_stream_params)
+
+        # ベイク完了後の補助ノード非表示設定
+        self.cb_stream_hide_helpers = QCheckBox("物理ベイク完了後に補助ノード (Apose_view_cnt / Apose_subetenoya / *_master / 剛体・ジョイント可視化メッシュ) を非表示にする")
+        self.cb_stream_hide_helpers.setChecked(True)
+        stream_bake_layout.addWidget(self.cb_stream_hide_helpers)
+
+        self.btn_stream_bake = QPushButton("リアルタイム物理ベイク実行")
+        self.btn_stream_bake.setFixedHeight(44)
+        self.btn_stream_bake.setStyleSheet(
+            "QPushButton { background-color: #2980b9; color: #fff; font-size: 13px; font-weight: bold; border-radius: 4px; }"
+            "QPushButton:hover { background-color: #3498db; }"
+        )
+        self.btn_stream_bake.setToolTip("新3D物理ビューアを起動し、揺れものボーン（スカート・髪等）の計算結果をリアルタイムにMayaへ同期・ベイクします。")
+        self.btn_stream_bake.clicked.connect(self._run_realtime_stream_bake)
+        stream_bake_layout.addWidget(self.btn_stream_bake)
+
+        content_layout.addWidget(stream_bake_box)
+
+        content_layout.addStretch()
+        scroll.setWidget(scroll_content)
+        layout.addWidget(scroll)
+
+        # 対象モデル一覧および状態の初期設定
+        self._refresh_stream_target_models()
+        self._update_default_vmd_output_path()
+        self._check_scene_import_status()
+
+    def _get_default_vmd_output_dir(self):
+        """プラグイン内の asset/vmd_bake_data フォルダパスを取得し、自動作成"""
+        plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        bake_dir = os.path.join(plugin_root, "asset", "vmd_bake_data")
+        try:
+            os.makedirs(bake_dir, exist_ok=True)
+        except Exception:
+            pass
+        return bake_dir
+
+    def _update_default_vmd_output_path(self):
+        """モデル名またはVMD名に基づいてデフォルトの出力先パスを設定"""
+        bake_dir = self._get_default_vmd_output_dir()
+        base_name = "physics_baked"
+        pmx_path = self.le_pmx_path.text().strip()
+        vmd_path = self.le_vmd_source_path.text().strip()
+        if vmd_path:
+            base_name = os.path.splitext(os.path.basename(vmd_path))[0] + "_physics_baked"
+        elif pmx_path:
+            base_name = os.path.splitext(os.path.basename(pmx_path))[0] + "_physics_baked"
+        self.le_vmd_output_path.setText(os.path.join(bake_dir, f"{base_name}.vmd").replace("\\", "/"))
+
+    def _on_pmx_changed(self, text=""):
+        """PMXファイルパス変更時の連動処理"""
+        self._update_default_vmd_output_path()
+        self._check_scene_import_status()
+
+    def _on_vmd_changed(self, text=""):
+        """VMDファイルパス変更時の連動処理"""
+        self._update_default_vmd_output_path()
+        self._check_scene_import_status()
+
+    def _on_vmd_output_toggled(self, checked):
+        """VMD出力ラジオボタンの切り替え"""
+        self.le_vmd_output_path.setEnabled(checked)
+        self.btn_browse_vmd_output.setEnabled(checked)
+
+    def _browse_vmd_output(self):
+        """VMD保存先ファイル選択ダイアログ"""
+        current_path = self.le_vmd_output_path.text().strip()
+        start_dir = os.path.dirname(current_path) if current_path else self._get_default_vmd_output_dir()
+        path, _ = QFileDialog.getSaveFileName(
+            self, "物理ベイクVMDファイルの保存先を指定", current_path or start_dir, "VMDファイル (*.vmd);;全てのファイル (*.*)"
+        )
+        if path:
+            self.le_vmd_output_path.setText(path.replace("\\", "/"))
+
+    def _check_scene_import_status(self):
+        """シーン内のPMXモデルおよびモーションのインポート状態を確認"""
+        # PMXモデル確認
+        try:
+            from ..converters import vmdpaimaya
+        except Exception:
+            try:
+                from converters import vmdpaimaya
+            except Exception:
+                import vmdpaimaya
+
+        models = []
+        try:
+            models = vmdpaimaya.get_available_mmd_models()
+        except Exception:
+            pass
+
+        if models:
+            model_names = [m[1] for m in models]
+            self.lbl_scene_pmx_status.setText(f"✔ PMXモデル: インポート済み ({len(models)} 体検出: {model_names[0]})")
+            self.lbl_scene_pmx_status.setStyleSheet("color: #2ecc71; font-weight: bold;")
+        else:
+            joints = mc.ls(type="joint") or []
+            if joints:
+                self.lbl_scene_pmx_status.setText(f"✔ PMXモデル: ジョイント検出済み (全 {len(joints)} 本)")
+                self.lbl_scene_pmx_status.setStyleSheet("color: #2ecc71; font-weight: bold;")
+            else:
+                self.lbl_scene_pmx_status.setText("✖ PMXモデル: 未インポート (「MMD → Maya」タブからインポートしてください)")
+                self.lbl_scene_pmx_status.setStyleSheet("color: #e67e22; font-weight: bold;")
+
+        # モーション確認
+        anim_curves = mc.ls(type=["animCurveTA", "animCurveTL", "animCurveTT", "animCurveTU"]) or []
+        if anim_curves:
+            try:
+                min_t = mc.playbackOptions(query=True, minTime=True)
+                max_t = mc.playbackOptions(query=True, maxTime=True)
+                self.lbl_scene_motion_status.setText(f"✔ モーション: インポート済み (タイムライン: {int(min_t)} ～ {int(max_t)} フレーム)")
+                self.lbl_scene_motion_status.setStyleSheet("color: #2ecc71; font-weight: bold;")
+            except Exception:
+                self.lbl_scene_motion_status.setText(f"✔ モーション: キーフレーム検出済み ({len(anim_curves)} カーブ)")
+                self.lbl_scene_motion_status.setStyleSheet("color: #2ecc71; font-weight: bold;")
+        else:
+            self.lbl_scene_motion_status.setText("✖ モーション: 未インポート (「モーション(VMD)」タブからインポートしてください)")
+            self.lbl_scene_motion_status.setStyleSheet("color: #e67e22; font-weight: bold;")
+
+    def _refresh_stream_target_models(self):
+        """リアルタイム物理ベイク用の対象MMDモデル一覧を更新"""
+        self.cbb_stream_target_model.clear()
+        self.cbb_stream_target_model.addItem("自動検出 (シーン内のMMDモデル)", "")
+        try:
+            from ..converters import vmdpaimaya
+        except Exception:
+            try:
+                from converters import vmdpaimaya
+            except Exception:
+                import vmdpaimaya
+        try:
+            models = vmdpaimaya.get_available_mmd_models()
+            for node, label in models:
+                self.cbb_stream_target_model.addItem(label, node)
+        except Exception:
+            pass
+
+    def _sync_pmx_from_import_tab(self, silent=False):
+        """インポートタブから現在設定されているPMXパスを取得"""
+        path = ""
+        if self.parent_window and hasattr(self.parent_window, "tab_import"):
+            path = self.parent_window.tab_import.le_file_path.text().strip()
+        if not path and mc.optionVar(exists="MMDToolsForMaya_LastPmxPath"):
+            path = mc.optionVar(q="MMDToolsForMaya_LastPmxPath")
+        if path:
+            if self.le_pmx_path.text().strip() != path:
+                self.le_pmx_path.setText(path)
+                self._update_default_paths(path)
+                self._update_default_vmd_output_path()
+            if not silent:
+                mc.inViewMessage(
+                    amg=f'<span style="color:#52b7ff;">MMD Tools for Maya:</span> PMXパスを取得しました: {os.path.basename(path)}',
+                    pos='topCenter',
+                    fade=True
+                )
+        elif not silent:
+            QMessageBox.information(self, "情報", "インポートタブにPMXパスが設定されていません。")
+
+    def _sync_vmd_from_motion_tab(self, silent=False):
+        """モーションタブから現在設定されているVMDパスを取得"""
+        path = ""
+        if self.parent_window and hasattr(self.parent_window, "tab_vmd"):
+            path = self.parent_window.tab_vmd.le_file_path.text().strip()
+        if not path and mc.optionVar(exists="MMDToolsForMaya_LastModelVmdPath"):
+            path = mc.optionVar(q="MMDToolsForMaya_LastModelVmdPath")
+        if path:
+            if self.le_vmd_source_path.text().strip() != path:
+                self.le_vmd_source_path.setText(path)
+                self._update_default_vmd_output_path()
+            if not silent:
+                mc.inViewMessage(
+                    amg=f'<span style="color:#52b7ff;">MMD Tools for Maya:</span> VMDモーションパスを取得しました: {os.path.basename(path)}',
+                    pos='topCenter',
+                    fade=True
+                )
+        elif not silent:
+            QMessageBox.information(self, "情報", "モーションタブにVMDパスが設定されていません。")
+
+    def refresh_all_tab_info(self):
+        """タブ選択時にシーン読み込み状態、PMXモデル情報、VMDモーション情報を即時更新"""
+        self._check_scene_import_status()
+        self._sync_pmx_from_import_tab(silent=True)
+        self._sync_vmd_from_motion_tab(silent=True)
+        self._refresh_stream_target_models()
+
+    def _browse_source_vmd(self):
+        """ベイク元VMDファイル選択ダイアログ"""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "ベイク元VMDモーションファイルを選択", self.le_vmd_source_path.text(), "VMDファイル (*.vmd);;全てのファイル (*.*)"
+        )
+        if path:
+            self.le_vmd_source_path.setText(path.replace("\\", "/"))
+            self._update_default_vmd_output_path()
+
+    def _on_stream_frame_mode_toggled(self, checked):
+        """シミュレーション範囲ラジオボタンの切り替え連動"""
+        is_custom = not checked
+        self.le_stream_start_frame.setEnabled(is_custom)
+        self.le_stream_end_frame.setEnabled(is_custom)
+
+    def _hide_helper_nodes_after_bake(self):
+        """ベイク完了後に補助ノード群を非表示化"""
+        if hasattr(self, 'cb_stream_hide_helpers') and not self.cb_stream_hide_helpers.isChecked():
+            return
+
+        # 剛体・Joint可視化ノードを非表示化
+        for node in mc.ls("MMD_Physics_RigidBodies*", "MMD_Physics_Joints*", "MMD_Physics_Locators*","MMD_RigidBody_Joint_Visualizers", type=["transform", "joint"]) or []:
+            try:
+                mc.setAttr(f"{node}.visibility", False)
+            except Exception:
+                pass
+
+        # 補助コントローラーを非表示化
+        target_names = [
+            "Apose_view_cnt",
+            "Apose_subetenoya",
+            "view_cnt",
+            "subetenoya",
+            "Apose_view_cnt_master",
+            "Apose_subetenoya_master"
+        ]
+        for name in target_names:
+            if mc.objExists(name):
+                try:
+                    mc.setAttr(f"{name}.visibility", False)
+                except Exception:
+                    pass
+
+        # ワイルドカード検索でマッチする補助ノードを非表示化 (カメラ・ライト・エイムは除外保護)
+        for pattern in ["*view_cnt*", "*subetenoya*", "*_master*"]:
+            matched = mc.ls(pattern, type=["transform", "joint"]) or []
+            for m in matched:
+                m_lower = m.lower()
+                if any(ex in m_lower for ex in ["light", "camera", "aim"]):
+                    continue
+                try:
+                    mc.setAttr(f"{m}.visibility", False)
+                except Exception:
+                    pass
+
+        restore_viewport_lighting()
+
+    def _run_realtime_stream_bake(self):
+        """新3D物理ビューアと同期しながらリアルタイム物理ベイクを実行"""
+        pmx_path = self.le_pmx_path.text().strip()
+        vmd_path = self.le_vmd_source_path.text().strip()
+
+        if not pmx_path or not os.path.exists(pmx_path):
+            QMessageBox.warning(self, "警告", "有効なPMXモデルファイルを指定してください。")
+            return
+
+        if not vmd_path or not os.path.exists(vmd_path):
+            QMessageBox.warning(self, "警告", "有効なベイク元VMDモーションファイルを指定してください。")
+            return
+
+        # シミュレーション範囲の取得
+        start_frame = None
+        end_frame = None
+        if not self.rb_stream_auto_frame.isChecked():
+            try:
+                start_frame = int(self.le_stream_start_frame.text().strip())
+                end_frame = int(self.le_stream_end_frame.text().strip())
+                mc.playbackOptions(minTime=start_frame, maxTime=end_frame, animationStartTime=start_frame, animationEndTime=end_frame)
+            except ValueError:
+                QMessageBox.warning(self, "エラー", "開始・終了フレーム番号を正しく入力してください。")
+                return
+
+        try:
+            scale = float(self.le_stream_scale.text().strip())
+        except ValueError:
+            scale = 8.0
+        mc.optionVar(sv=("MMDToolsForMaya_StreamScale", str(scale)))
+
+        try:
+            lookahead = int(self.le_stream_lookahead.text().strip())
+        except ValueError:
+            lookahead = 16
+        mc.optionVar(sv=("MMDToolsForMaya_StreamLookahead", str(lookahead)))
+
+        try:
+            warmup = float(self.le_stream_warmup.text().strip())
+        except ValueError:
+            warmup = 0.0
+        mc.optionVar(sv=("MMDToolsForMaya_StreamWarmup", str(warmup)))
+
+        try:
+            frame_offset = int(self.le_stream_offset.text().strip())
+        except ValueError:
+            frame_offset = 0
+        mc.optionVar(sv=("MMDToolsForMaya_StreamOffset", str(frame_offset)))
+
+        out_vmd = "none"
+        if self.rb_vmd_out_enable.isChecked():
+            out_vmd = self.le_vmd_output_path.text().strip()
+            if not out_vmd:
+                self._update_default_vmd_output_path()
+                out_vmd = self.le_vmd_output_path.text().strip()
+            out_dir = os.path.dirname(out_vmd)
+            if out_dir:
+                try:
+                    os.makedirs(out_dir, exist_ok=True)
+                except Exception:
+                    pass
+
+        target_model = self.cbb_stream_target_model.currentData() or None
+
+        try:
+            from ..converters import physics_stream
+        except Exception:
+            try:
+                from converters import physics_stream
+            except Exception:
+                import physics_stream
+
+        log_dialog = ExecutionLogDialog(
+            self.parent_window or self,
+            title="リアルタイム物理ベイク実行ログ (新3D物理ビューア連携)",
+            show_cancel=True
+        )
+
+        def run_task():
+            physics_stream.stream_bake_physics(
+                pmx_path=pmx_path,
+                vmd_path=vmd_path,
+                target_model=target_model,
+                scale=scale,
+                lookahead=lookahead,
+                warmup=warmup,
+                out_vmd=out_vmd,
+                frame_offset=frame_offset,
+                start_frame=start_frame,
+                end_frame=end_frame,
+                log_dialog=log_dialog
+            )
+            restore_viewport_lighting()
+
+        success = log_dialog.run_task(run_task)
+        if success and not log_dialog.is_cancelled:
+            self._hide_helper_nodes_after_bake()
+            self._check_scene_import_status()
+            mc.inViewMessage(
+                amg='<span style="color:#2ecc71;">MMD Tools for Maya:</span> リアルタイム物理ベイクが完了しました。',
+                pos='topCenter',
+                fade=True
+            )
+
+    def _update_default_paths(self, pmx_path):
+        """PMXパス設定時の補助処理"""
+        self._update_default_vmd_output_path()
+
+    def _browse_pmx(self):
+        """PMXファイル選択ダイアログ"""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "PMXモデルファイルを選択", "", "PMXファイル (*.pmx);;全てのファイル (*.*)"
+        )
+        if path:
+            self.le_pmx_path.setText(path)
+            self._update_default_paths(path)
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        """ドラッグ侵入時のファイル拡張子確認"""
+        if event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                ext = os.path.splitext(url.toLocalFile())[1].lower()
+                if ext in [".pmx", ".vmd"]:
+                    event.acceptProposedAction()
+                    return
+        event.ignore()
+
+    def dropEvent(self, event: QDropEvent):
+        """ドロップ時のファイルパス反映"""
+        for url in event.mimeData().urls():
+            file_path = url.toLocalFile()
+            ext = os.path.splitext(file_path)[1].lower()
+            if ext == ".pmx":
+                self.le_pmx_path.setText(file_path)
+                self._update_default_paths(file_path)
+                mc.inViewMessage(
+                    amg=f'<span style="color:#52b7ff;">MMD Tools for Maya:</span> PMXモデルを設定しました: {os.path.basename(file_path)}',
+                    pos='topCenter',
+                    fade=True
+                )
+                event.acceptProposedAction()
+                return
+            elif ext == ".vmd":
+                self.le_vmd_source_path.setText(file_path)
+                mc.inViewMessage(
+                    amg=f'<span style="color:#52b7ff;">MMD Tools for Maya:</span> ベイク元VMDを設定しました: {os.path.basename(file_path)}',
+                    pos='topCenter',
+                    fade=True
+                )
+                event.acceptProposedAction()
+                return
+        event.ignore()
+
+# ==============================================================================
 # MMD削除・クリーンアップタブ
 # ==============================================================================
 class CleanupTabWidget(QWidget):
-    """シーン内のMMD要素の一括削除およびアニメーション初期化を行うクリーンアップタブ"""
+    """シーン内のMMD要素の一括削除およびモーション初期化を行うクリーンアップタブ"""
     def __init__(self, parent=None):
         super(CleanupTabWidget, self).__init__(parent)
         self.parent_window = parent
@@ -2244,8 +3226,8 @@ class CleanupTabWidget(QWidget):
         act_layout = QVBoxLayout(act_box)
         act_layout.setSpacing(12)
 
-        # アニメーション初期化ボタン
-        self.btn_clear_anim = QPushButton("アニメーションのみ初期化 (モデル・リグは残して初期ポーズ復元)")
+        # モーション初期化ボタン
+        self.btn_clear_anim = QPushButton("モーションのみ初期化 (動作不安定)")
         self.btn_clear_anim.setFixedHeight(44)
         self.btn_clear_anim.setStyleSheet(
             "QPushButton { background-color: #3b3a28; color: #fff8cc; border: 1px solid #66633a; border-radius: 4px; font-weight: bold; font-size: 14px; }"
@@ -2256,7 +3238,7 @@ class CleanupTabWidget(QWidget):
         act_layout.addWidget(self.btn_clear_anim)
 
         # MMD全削除ボタン
-        self.btn_delete_all = QPushButton("MMD全削除を実行 (モデル / リグ / カメラ / マテリアル)")
+        self.btn_delete_all = QPushButton("MMDモデル一括削除 (モデル・リグ・カメラ・マテリアル類)")
         self.btn_delete_all.setFixedHeight(48)
         self.btn_delete_all.setStyleSheet(
             "QPushButton { background-color: #5d2525; color: #ffcccc; border: 1px solid #853333; border-radius: 4px; font-weight: bold; font-size: 15px; }"
@@ -2291,8 +3273,8 @@ class CleanupTabWidget(QWidget):
         target_label = self.cbb_target_model.currentText()
         res = QMessageBox.question(
             self,
-            "アニメーション初期化の確認",
-            f"対象 ({target_label}) のキーフレームをすべて削除し、初期ポーズへ復元しますか？\n（メッシュやスケルトンは削除されません）",
+            "モーション初期化の確認",
+            f"対象 ({target_label}) のキーフレームをすべて削除し、初期ポーズへ復元しますか？\n（メッシュやスケルトン、剛体・Jointは削除されません）",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No
         )
@@ -2302,12 +3284,12 @@ class CleanupTabWidget(QWidget):
         try:
             b_cnt, m_cnt = vmdpaimaya.clear_model_animation(target_model)
             mc.inViewMessage(
-                amg=f'<span style="color:#52b7ff;">MMD Tools for Maya:</span> アニメーションを初期化しました (ボーン: {b_cnt}, モーフ: {m_cnt})。',
+                amg=f'<span style="color:#52b7ff;">MMD Tools for Maya:</span> モーションを初期化しました (ボーン: {b_cnt}, モーフ: {m_cnt}, 剛体・Joint再吸着完了)。',
                 pos='topCenter',
                 fade=True
             )
         except Exception as e:
-            QMessageBox.critical(self, "エラー", f"アニメーション初期化中にエラーが発生しました:\n{e}")
+            QMessageBox.critical(self, "エラー", f"モーション初期化中にエラーが発生しました:\n{e}")
 
     def _execute_delete_all(self):
         target_model = self.cbb_target_model.currentData()
@@ -2327,7 +3309,7 @@ class CleanupTabWidget(QWidget):
         if delete_unused:
             items.append("未使用マテリアル (Delete Unused Nodes)")
 
-        msg = f"対象 ({target_label}) および以下の項目を完全に削除しますか？\n\n・" + "\n・".join(items) + "\n\n※この操作は取り消せません。"
+        msg = f"対象 ({target_label}) および以下の項目をきれいに削除しますか？\n\n・" + "\n・".join(items) + "\n\n※この操作は取り消せません。"
 
         res = QMessageBox.question(
             self,
@@ -2349,7 +3331,7 @@ class CleanupTabWidget(QWidget):
             )
 
             # 物理可視化ノードおよびBulletリグの一括クリーンアップ
-            for phys_grp in ["MMD_RigidBody_Visualizers", "MMD_Bullet_Physics_Rig", "MMD_BulletSolver"]:
+            for phys_grp in ["MMD_RigidBody_Joint_Visualizers", "MMD_RigidBody_Visualizers", "MMD_Bullet_Physics_Rig", "MMD_BulletSolver"]:
                 if mc.objExists(phys_grp):
                     try:
                         mc.delete(phys_grp)
@@ -2367,6 +3349,576 @@ class CleanupTabWidget(QWidget):
             QMessageBox.critical(self, "エラー", f"MMD全削除中にエラーが発生しました:\n{e}")
 
 # ==============================================================================
+# プラグイン管理タブ (各種プラグインの状態確認・再読み込み)
+# ==============================================================================
+class PluginTabWidget(QWidget):
+    """MMD Tools for Maya で使用する各種 C++ / 物理演算 / シェーダープラグインの管理タブ"""
+    def __init__(self, parent=None):
+        super(PluginTabWidget, self).__init__(parent)
+        self.parent_window = parent
+        self._init_ui()
+
+    def _init_ui(self):
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+
+        content_widget = QWidget()
+        layout = QVBoxLayout(content_widget)
+        layout.setSpacing(14)
+        layout.setContentsMargins(14, 14, 14, 14)
+
+        # モーション高速化プラグイン
+        motion_box = QGroupBox("C++ モーション高速化プラグイン (mmd_motion.mll)")
+        motion_layout = QVBoxLayout(motion_box)
+        motion_layout.setSpacing(8)
+
+        h_motion = QHBoxLayout()
+        self.lbl_motion_status = QLabel()
+        self.btn_reload_motion = QPushButton("プラグイン再読み込み")
+        self.btn_reload_motion.setFixedWidth(160)
+        self.btn_reload_motion.clicked.connect(self._reload_motion_plugin)
+        h_motion.addWidget(self.lbl_motion_status)
+        h_motion.addStretch()
+        h_motion.addWidget(self.btn_reload_motion)
+        motion_layout.addLayout(h_motion)
+
+        lbl_motion_info = QLabel("・Maya C++ APIによる超高速キーフレーム書き込みノード (mmdFastBakeBone) を提供します。")
+        lbl_motion_info.setStyleSheet("color: #999; font-size: 12px;")
+        motion_layout.addWidget(lbl_motion_info)
+        layout.addWidget(motion_box)
+
+        # 物理演算プラグイン (Bullet / XPBD)
+        physics_box = QGroupBox("物理演算プラグイン (Bullet / XPBD)")
+        physics_layout = QVBoxLayout(physics_box)
+        physics_layout.setSpacing(8)
+
+        h_bullet = QHBoxLayout()
+        self.lbl_bullet_status = QLabel()
+        h_bullet.addWidget(self.lbl_bullet_status)
+        h_bullet.addStretch()
+        physics_layout.addLayout(h_bullet)
+
+        h_xpbd = QHBoxLayout()
+        self.lbl_xpbd_status = QLabel()
+        h_xpbd.addWidget(self.lbl_xpbd_status)
+        h_xpbd.addStretch()
+        physics_layout.addLayout(h_xpbd)
+
+        h_viewer = QHBoxLayout()
+        self.lbl_viewer_status = QLabel()
+        h_viewer.addWidget(self.lbl_viewer_status)
+        h_viewer.addStretch()
+        physics_layout.addLayout(h_viewer)
+
+        h_phys_action = QHBoxLayout()
+        h_phys_action.addStretch()
+        self.btn_reload_physics = QPushButton("物理プラグイン再読み込み")
+        self.btn_reload_physics.setFixedWidth(180)
+        self.btn_reload_physics.clicked.connect(self._reload_physics_plugins)
+        h_phys_action.addWidget(self.btn_reload_physics)
+        physics_layout.addLayout(h_phys_action)
+
+        lbl_phys_info = QLabel(
+            "・Bullet Physics (mmd_bullet.dll): 本家MMD準拠の剛体シミュレーションを機能です。\n"
+            "・XPBD Physics (mmd_xpbd.dll): 位置ベース物理による高速かつ安定したソルバーを機能です。\n"
+            "・新3D物理ビューア (MmdPhysicsViewer.exe): WPF3Dによるリアルタイム物理シミュレーションで柔らかくしなやかな剛体挙動とMayaへの同期ベイク機能です。"
+        )
+        lbl_phys_info.setStyleSheet("color: #999; font-size: 12px; line-height: 1.4;")
+        physics_layout.addWidget(lbl_phys_info)
+        layout.addWidget(physics_box)
+
+        # MMDシェーダープラグイン
+        mat_box = QGroupBox("MMDシェーダープラグイン (mmd_material.mll)")
+        mat_layout = QVBoxLayout(mat_box)
+        mat_layout.setSpacing(8)
+
+        h_mat = QHBoxLayout()
+        self.lbl_mat_status = QLabel()
+        self.btn_reload_mat = QPushButton("プラグイン再読み込み")
+        self.btn_reload_mat.setFixedWidth(160)
+        self.btn_reload_mat.clicked.connect(self._reload_material_plugin)
+        h_mat.addWidget(self.lbl_mat_status)
+        h_mat.addStretch()
+        h_mat.addWidget(self.btn_reload_mat)
+        mat_layout.addLayout(h_mat)
+
+        lbl_mat_info = QLabel("・Viewport 2.0上でMMDのToon陰影・スフィアマップをリアルタイム描画するカスタムマテリアルノードです。")
+        lbl_mat_info.setStyleSheet("color: #999; font-size: 12px;")
+        mat_layout.addWidget(lbl_mat_info)
+        layout.addWidget(mat_box)
+
+        # 全プラグイン一括再読み込み
+        all_box = QGroupBox("全プラグイン一括管理")
+        all_layout = QVBoxLayout(all_box)
+        self.btn_reload_all = QPushButton("すべてのプラグインを一括再読み込み")
+        self.btn_reload_all.setFixedHeight(40)
+        self.btn_reload_all.setStyleSheet(
+            "QPushButton { background-color: #2b4c6f; color: #ffffff; border-radius: 4px; font-weight: bold; font-size: 13px; }"
+            "QPushButton:hover { background-color: #38618d; }"
+        )
+        self.btn_reload_all.clicked.connect(self._reload_all_plugins)
+        all_layout.addWidget(self.btn_reload_all)
+        layout.addWidget(all_box)
+
+        layout.addStretch()
+        scroll.setWidget(content_widget)
+        main_layout.addWidget(scroll)
+
+        self.refresh_all_status()
+
+    def refresh_all_status(self):
+        """全プラグインの状態表示を最新化"""
+        self._check_motion_status()
+        self._check_physics_status()
+        self._check_material_status()
+
+    def _check_motion_status(self):
+        loaded = False
+        try:
+            if hasattr(mc, "mmdFastBakeBone"):
+                loaded = True
+            elif hasattr(mel, "eval") and mel.eval('exists "mmdFastBakeBone"') == 1:
+                loaded = True
+            elif any("mmd_motion" in p.lower() for p in (mc.pluginInfo(query=True, listPlugins=True) or [])):
+                loaded = True
+            elif mc.pluginInfo("mmd_motion.mll", query=True, loaded=True) or mc.pluginInfo("mmd_motion", query=True, loaded=True):
+                loaded = True
+        except Exception:
+            pass
+
+        if loaded:
+            self.lbl_motion_status.setText("<span style='color:#55ff77; font-weight:bold;'>● プラグイン読み込み済み (mmd_motion.mll)</span>")
+        else:
+            self.lbl_motion_status.setText("<span style='color:#ff7777; font-weight:bold;'>○ プラグイン未読み込み (mmd_motion.mll)</span>")
+
+    def _check_physics_status(self):
+        # Bullet
+        bullet_ok = False
+        try:
+            plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            dll_path = os.path.join(plugin_root, "bullet_engine", "bin", "mmd_bullet.dll")
+            bullet_ok = os.path.exists(dll_path)
+        except Exception:
+            pass
+
+        if bullet_ok:
+            self.lbl_bullet_status.setText("<span style='color:#55ff77; font-weight:bold;'>● Bullet 物理エンジン: 利用可能 (mmd_bullet.dll)</span>")
+        else:
+            self.lbl_bullet_status.setText("<span style='color:#ffaa55; font-weight:bold;'>△ Bullet 物理エンジン: 未検出 (mmd_bullet.dll)</span>")
+
+        # XPBD
+        xpbd_ok = False
+        try:
+            plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            dll_path = os.path.join(plugin_root, "cpp_engine", "bin", "mmd_xpbd.dll")
+            xpbd_ok = os.path.exists(dll_path)
+        except Exception:
+            pass
+
+        if xpbd_ok:
+            self.lbl_xpbd_status.setText("<span style='color:#55ff77; font-weight:bold;'>● XPBD 物理エンジン: 利用可能 (mmd_xpbd.dll)</span>")
+        else:
+            self.lbl_xpbd_status.setText("<span style='color:#ffaa55; font-weight:bold;'>△ XPBD 物理エンジン: 未検出 (mmd_xpbd.dll)</span>")
+
+        # 新3D物理ビューア (MmdPhysicsViewer.exe)
+        viewer_ok = False
+        try:
+            from ..converters import physics_stream
+            viewer_exe = physics_stream.get_viewer_executable_path()
+            viewer_ok = os.path.exists(viewer_exe)
+        except Exception:
+            try:
+                from converters import physics_stream
+                viewer_exe = physics_stream.get_viewer_executable_path()
+                viewer_ok = os.path.exists(viewer_exe)
+            except Exception:
+                pass
+
+        if viewer_ok:
+            self.lbl_viewer_status.setText("<span style='color:#55ff77; font-weight:bold;'>● 新3D物理ビューア: 利用可能 (MmdPhysicsViewer.exe / .NET 8 WPF)</span>")
+        else:
+            self.lbl_viewer_status.setText("<span style='color:#ffaa55; font-weight:bold;'>△ 新3D物理ビューア: 未検出 (physics_bake_cs をビルドしてください)</span>")
+
+    def _check_material_status(self):
+        loaded = False
+        try:
+            if "mmdMaterial" in (mc.allNodeTypes() or []):
+                loaded = True
+            elif any("mmd_material" in p.lower() for p in (mc.pluginInfo(query=True, listPlugins=True) or [])):
+                loaded = True
+            elif mc.pluginInfo("mmd_material.mll", query=True, loaded=True) or mc.pluginInfo("mmd_material", query=True, loaded=True):
+                loaded = True
+        except Exception:
+            pass
+
+        if loaded:
+            self.lbl_mat_status.setText("<span style='color:#55ff77; font-weight:bold;'>● プラグイン読み込み済み (mmd_material.mll)</span>")
+        else:
+            self.lbl_mat_status.setText("<span style='color:#ff7777; font-weight:bold;'>○ プラグイン未読み込み (mmd_material.mll)</span>")
+
+    def _reload_motion_plugin(self):
+        try:
+            from ..bullet_engine import bullet_maya_bridge
+        except Exception:
+            try:
+                from bullet_engine import bullet_maya_bridge
+            except Exception:
+                bullet_maya_bridge = None
+        if bullet_maya_bridge:
+            bridge = bullet_maya_bridge.BulletMayaBridge.__new__(bullet_maya_bridge.BulletMayaBridge)
+            success = bridge._ensure_motion_plugin_loaded()
+            self._check_motion_status()
+            if success:
+                QMessageBox.information(self, "プラグイン", "MMDモーションプラグイン (mmd_motion.mll) が正常にロードされました。")
+            else:
+                QMessageBox.warning(self, "プラグイン", "MMDモーションプラグイン (mmd_motion.mll) のロードに失敗しました。")
+        else:
+            QMessageBox.warning(self, "エラー", "bullet_maya_bridge モジュールが見つかりません。")
+
+    def _reload_physics_plugins(self):
+        self._check_physics_status()
+        QMessageBox.information(self, "物理プラグイン", "物理演算ライブラリ (Bullet / XPBD) の状態を更新しました。")
+
+    def _reload_material_plugin(self):
+        if mmd_material_setup:
+            success = mmd_material_setup.ensure_plugin_loaded()
+            self._check_material_status()
+            if success:
+                QMessageBox.information(self, "プラグイン", "MMDシェーダープラグイン (mmd_material.mll) が正常にロードされました。")
+            else:
+                QMessageBox.warning(self, "プラグイン", "MMDシェーダープラグインのロードに失敗しました。")
+        else:
+            QMessageBox.warning(self, "エラー", "mmd_material_setup モジュールが見つかりません。")
+
+    def _reload_all_plugins(self):
+        try:
+            from ..bullet_engine import bullet_maya_bridge
+        except Exception:
+            try:
+                from bullet_engine import bullet_maya_bridge
+            except Exception:
+                bullet_maya_bridge = None
+        if bullet_maya_bridge:
+            bridge = bullet_maya_bridge.BulletMayaBridge.__new__(bullet_maya_bridge.BulletMayaBridge)
+            bridge._ensure_motion_plugin_loaded()
+
+        if mmd_material_setup:
+            mmd_material_setup.ensure_plugin_loaded()
+
+        self.refresh_all_status()
+        QMessageBox.information(self, "プラグイン一括再読み込み", "すべてのプラグインの再読み込み処理を完了しました。")
+
+# ==============================================================================
+# その他機能タブ
+# ==============================================================================
+class ExtraTabWidget(QWidget):
+    """PMXモデル詳細チェック・データ一括保存および表情操作を提供するユーティリティタブ"""
+    def __init__(self, parent=None):
+        super(ExtraTabWidget, self).__init__(parent)
+        self.parent_window = parent
+        self._init_ui()
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(14)
+        layout.setContentsMargins(14, 14, 14, 14)
+
+        # 対象PMXモデルファイル表示グループ (インポートタブと連動)
+        file_box = QGroupBox("対象PMXモデル (インポートタブ連動)")
+        file_layout = QVBoxLayout(file_box)
+        file_layout.setSpacing(10)
+
+        h_file = QHBoxLayout()
+        h_file.addWidget(QLabel("PMXファイル:"))
+        self.le_file_path = QLineEdit()
+        self.le_file_path.setReadOnly(True)
+        self.le_file_path.setPlaceholderText("[MMD → Maya (インポート)] タブで選択されたPMXファイルが自動的に反映されます...")
+        h_file.addWidget(self.le_file_path)
+
+        self.btn_sync = QPushButton("更新")
+        self.btn_sync.setFixedWidth(75)
+        self.btn_sync.setToolTip("インポートタブで現在選択されているモデルパスを再取得して反映します。")
+        self.btn_sync.clicked.connect(self._sync_pmx_path)
+        h_file.addWidget(self.btn_sync)
+        file_layout.addLayout(h_file)
+
+        lbl_file_info = QLabel("※[MMD → Maya (インポート)] タブで指定されたPMXモデルが解析および操作の対象となります。")
+        lbl_file_info.setStyleSheet("color: #999; font-size: 12px;")
+        file_layout.addWidget(lbl_file_info)
+        layout.addWidget(file_box)
+
+        # モデル解析・操作機能グループ
+        tool_box = QGroupBox("モデル解析・操作機能")
+        tool_layout = QVBoxLayout(tool_box)
+        tool_layout.setSpacing(12)
+
+        # PMXモデルチェック・データ一括保存ボタン
+        self.btn_analyze_model = QPushButton("PMXモデルチェック・データ一括保存 (材質/ボーン/モーフ/剛体/Joint)")
+        self.btn_analyze_model.setFixedHeight(42)
+        self.btn_analyze_model.setToolTip("インポートタブで指定されたPMXの構成要素（材質・ボーン・モーフ・剛体・Joint）をJSONに一括保存し、未登録漢字のユーザー辞書登録を行います。")
+        self.btn_analyze_model.setStyleSheet("QPushButton { background-color: #2b5b84; color: #fff; font-weight: bold; border-radius: 4px; } QPushButton:hover { background-color: #3872a4; }")
+        self.btn_analyze_model.clicked.connect(self._analyze_and_save_structure)
+        tool_layout.addWidget(self.btn_analyze_model)
+
+        # 表情操作 (モーフ) ボタン
+        self.btn_morph_ui = QPushButton("表情操作 (モーフ)")
+        self.btn_morph_ui.setFixedHeight(42)
+        self.btn_morph_ui.setToolTip("MMD本家風の表情操作パネルを開き、目・リップ・まゆ・その他のモーフを操作・登録します。")
+        self.btn_morph_ui.setStyleSheet("QPushButton { background-color: #3e6852; color: #fff; font-weight: bold; border-radius: 4px; } QPushButton:hover { background-color: #4e8267; }")
+        self.btn_morph_ui.clicked.connect(self._open_morph_window)
+        tool_layout.addWidget(self.btn_morph_ui)
+
+        # HumanIK管理ボタン
+        self.btn_hik_ui = QPushButton("HumanIK管理")
+        self.btn_hik_ui.setFixedHeight(42)
+        self.btn_hik_ui.setToolTip("HumanIK管理パネルを別ウィンドウで開き、キャラクター定義の作成やボーンマッピングを行います。")
+        self.btn_hik_ui.setStyleSheet("QPushButton { background-color: #2e607a; color: #fff; font-weight: bold; border-radius: 4px; } QPushButton:hover { background-color: #3b7696; }")
+        self.btn_hik_ui.clicked.connect(self._open_hik_window)
+        tool_layout.addWidget(self.btn_hik_ui)
+
+        # MMD Physics Brige - 3D物理ビューア起動ボタン (試験的機能)
+        self.btn_launch_viewer = QPushButton("MMD Physics Brige - 3D物理ビューア(試験的機能)")
+        self.btn_launch_viewer.setFixedHeight(42)
+        self.btn_launch_viewer.setToolTip("physics_bridge_cs フォルダー内の MMD Physics Brige を単体起動します。試験的機能のため注意ダイアログが表示されます。")
+        self.btn_launch_viewer.setStyleSheet("QPushButton { background-color: #5c3b7a; color: #fff; font-weight: bold; border-radius: 4px; } QPushButton:hover { background-color: #734a99; }")
+        self.btn_launch_viewer.clicked.connect(self._launch_standalone_viewer)
+        tool_layout.addWidget(self.btn_launch_viewer)
+
+        # マテリアル保護・Toon除外設定ボタン
+        self.btn_material_protect = QPushButton("マテリアル保護・Toon除外設定")
+        self.btn_material_protect.setFixedHeight(42)
+        self.btn_material_protect.setToolTip("顔・肌のテカリ（スペキュラ）除去、瞳ハイライトのToon除外キーワードを設定します。")
+        self.btn_material_protect.setStyleSheet("QPushButton { background-color: #3b5f7a; color: #fff; font-weight: bold; border-radius: 4px; } QPushButton:hover { background-color: #4b7496; }")
+        self.btn_material_protect.clicked.connect(self._open_material_protect_window)
+        tool_layout.addWidget(self.btn_material_protect)
+
+        # ユーザー辞書・対応表設定ボタン
+        self.btn_user_dict = QPushButton("ユーザー辞書・対応表設定 (ボーン/HumanIK/名称)")
+        self.btn_user_dict.setFixedHeight(42)
+        self.btn_user_dict.setToolTip("ボーン日英辞書、HumanIK対応表、日本語ローマ字変換辞書の対応表（JSON）を設定・編集します。")
+        self.btn_user_dict.setStyleSheet("QPushButton { background-color: #4d5b7a; color: #fff; font-weight: bold; border-radius: 4px; } QPushButton:hover { background-color: #5d6f96; }")
+        self.btn_user_dict.clicked.connect(self._open_user_dict_window)
+        tool_layout.addWidget(self.btn_user_dict)
+
+        # ボーン状態JSONエクスポートボタン
+        self.btn_export_bone_states = QPushButton("ボーン状態JSONエクスポート (指定フレーム範囲)")
+        self.btn_export_bone_states.setFixedHeight(42)
+        self.btn_export_bone_states.setToolTip("指定したフレーム範囲のすべてのボーンの移動・回転状態（ローカルおよびワールド）をJSONファイルとして書き出します。")
+        self.btn_export_bone_states.setStyleSheet("QPushButton { background-color: #2e6b52; color: #fff; font-weight: bold; border-radius: 4px; } QPushButton:hover { background-color: #3b8767; }")
+        self.btn_export_bone_states.clicked.connect(self._open_bone_state_export_window)
+        tool_layout.addWidget(self.btn_export_bone_states)
+
+        layout.addWidget(tool_box)
+        layout.addStretch()
+
+    def _open_bone_state_export_window(self):
+        """ボーン状態JSONエクスポートダイアログを開く"""
+        try:
+            from .bone_state_export_dialog import show_bone_state_export_dialog
+        except Exception:
+            try:
+                from ui.bone_state_export_dialog import show_bone_state_export_dialog
+            except Exception:
+                import bone_state_export_dialog
+                show_bone_state_export_dialog = bone_state_export_dialog.show_bone_state_export_dialog
+        show_bone_state_export_dialog()
+
+    def _open_material_protect_window(self):
+        """マテリアル保護・Toon除外設定ダイアログを開く"""
+        try:
+            from .material_protect_dialog import show_material_protect_dialog
+        except Exception:
+            try:
+                from ui.material_protect_dialog import show_material_protect_dialog
+            except Exception:
+                import material_protect_dialog
+                show_material_protect_dialog = material_protect_dialog.show_material_protect_dialog
+        show_material_protect_dialog()
+
+    def _open_user_dict_window(self):
+        """ユーザー辞書・対応表設定ダイアログを開く"""
+        try:
+            from .user_dict_dialog import show_user_dict_dialog
+        except Exception:
+            try:
+                from ui.user_dict_dialog import show_user_dict_dialog
+            except Exception:
+                import user_dict_dialog
+                show_user_dict_dialog = user_dict_dialog.show_user_dict_dialog
+        show_user_dict_dialog()
+
+    def _launch_standalone_viewer(self):
+        """physics_bridge_cs フォルダー内の MMD Physics Brige を単体起動する (試験的機能の確認ダイアログ付き)"""
+        warning_msg = (
+            "【注意・試験的機能】\n\n"
+            "本機能は physics_bridge_cs フォルダー内の MMD Physics Brige を起動します。\n"
+            "本ツールは試験的に作成された機能であり、動作中にエラー、フリーズ、強制終了などが発生する可能性や、"
+            "今後メンテナンスされない可能性があります。\n\n"
+            "起動を続行しますか？"
+        )
+        reply = QMessageBox.warning(
+            self,
+            "MMD Physics Brige - 3D物理ビューア(試験的機能)",
+            warning_msg,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        # physics_bridge_cs フォルダー内の実行ファイルパスを取得
+        plugin_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        bridge_candidates = [
+            os.path.join(plugin_dir, "physics_bridge_cs", "bin", "Release", "net8.0-windows", "MmdPhysicsBridge.exe"),
+            os.path.join(plugin_dir, "physics_bridge_cs", "bin", "Debug", "net8.0-windows", "MmdPhysicsBridge.exe"),
+        ]
+        exe_path = ""
+        for cand in bridge_candidates:
+            if os.path.isfile(cand):
+                exe_path = cand
+                break
+        if not exe_path:
+            exe_path = bridge_candidates[0]
+
+        if not os.path.isfile(exe_path):
+            QMessageBox.critical(
+                self,
+                "エラー",
+                f"physics_bridge_cs フォルダー内に MMD Physics Brige の実行ファイルが見つかりません:\n{exe_path}\n\n事前にビルドされているか確認してください。"
+            )
+            return
+
+        # PMXファイルパスとVMDファイルパスの取得 (選択されていれば引数として渡す)
+        pmx_path = self._get_target_pmx_path()
+        vmd_path = ""
+        if hasattr(self.parent_window, "tab_vmd"):
+            vmd_path = self.parent_window.tab_vmd.le_file_path.text().strip()
+
+        args = []
+        if pmx_path and os.path.isfile(pmx_path):
+            args.extend(["--pmx", pmx_path])
+        if vmd_path and os.path.isfile(vmd_path):
+            args.extend(["--vmd", vmd_path])
+
+        try:
+            # 独立プロセスとして起動
+            import subprocess
+            cmd = [exe_path] + args
+            subprocess.Popen(cmd)
+        except Exception as e:
+            QMessageBox.critical(self, "起動エラー", f"ビューアの起動に失敗しました:\n{e}")
+
+    def _get_target_pmx_path(self):
+        """インポートタブで指定されているPMXモデルのパスを取得"""
+        path = ""
+        if hasattr(self.parent_window, "tab_import"):
+            path = self.parent_window.tab_import.le_file_path.text().strip()
+        if not path and hasattr(self, "le_file_path"):
+            path = self.le_file_path.text().strip()
+        return path
+
+    def _sync_pmx_path(self):
+        """インポートタブのモデルパスを取得して表示を更新"""
+        path = self._get_target_pmx_path()
+        self.le_file_path.setText(path)
+        return path
+
+    def _analyze_and_save_structure(self):
+        """インポートタブで指定されたモデルの材質、ボーン、モーフ、剛体、Jointを一括保存し、未登録ボーン辞書チェックを実行"""
+        file_path = self._sync_pmx_path()
+        if not file_path or not os.path.exists(file_path):
+            QMessageBox.warning(
+                self,
+                "エラー",
+                "有効なPMXモデルファイルが指定されていません。\n\n"
+                "[MMD → Maya (インポート)] タブでPMXモデルファイルを指定してください。"
+            )
+            return
+
+        if not file_path.lower().endswith('.pmx'):
+            QMessageBox.information(self, "案内", "詳細解析および辞書照合はPMXモデル形式 (.pmx) のみ対応しています。")
+            return
+
+        try:
+            if check_and_prompt_user_dict:
+                check_and_prompt_user_dict(self.parent_window or self, file_path)
+
+            if export_pmx_structure:
+                saved_path, data = export_pmx_structure(file_path)
+                QMessageBox.information(
+                    self,
+                    "PMXモデル解析完了",
+                    f"モデル構造の一括保存が完了しました！\n\n"
+                    f"保存先:\n{saved_path}\n\n"
+                    f"・材質: {len(data['materials'])} 件\n"
+                    f"・ボーン: {len(data['bones'])} 件\n"
+                    f"・モーフ: {len(data['morphs'])} 件\n"
+                    f"・剛体: {len(data['rigid_bodies'])} 件\n"
+                    f"・Joint: {len(data['joints'])} 件"
+                )
+        except Exception as e:
+            QMessageBox.warning(self, "解析エラー", f"PMXモデルの解析中にエラーが発生しました:\n{e}")
+
+    def _open_morph_window(self):
+        """MMD本家風の表情操作ウィンドウを開く（ボーン・モーフ・ブレンドシェイプ事前検証付き）"""
+        # 1. ボーン(Joint)存在確認
+        joints = mc.ls(type="joint") if mc else []
+
+        # 2. BlendShapeノード存在確認
+        bs_nodes = mc.ls(type="blendShape") if mc else []
+
+        # 3. ターゲット/モーフ存在確認
+        has_targets = False
+        if bs_nodes and mc:
+            for bs in bs_nodes:
+                try:
+                    aliases = mc.listAttr(f"{bs}.w", multi=True) or []
+                    targets = mc.blendShape(bs, query=True, target=True) or []
+                    if aliases or targets:
+                        has_targets = True
+                        break
+                except Exception:
+                    pass
+
+        # 必要な要素が揃っていない場合は再インポートを案内
+        if not joints or not bs_nodes or not has_targets:
+            missing_items = []
+            if not joints:
+                missing_items.append("・ボーン (Joint)")
+            if not bs_nodes or not has_targets:
+                missing_items.append("・ブレンドシェイプ / モーフ (blendShape)")
+
+            missing_str = "\n".join(missing_items)
+            QMessageBox.warning(
+                self,
+                "表情操作の準備ができていません",
+                f"モデル（ボーン・モーフ・ブレンドシェイプ）がインポートされていないか、必要な要素が不足しています。\n\n"
+                f"不足している要素:\n{missing_str}\n\n"
+                f"[MMD → Maya (インポート)] タブからモデルをインポートし直してください。\n"
+                f"（※インポート設定で「ボーン生成」「ブレンドシェイプ生成」にチェックが入っていることをご確認ください）"
+            )
+            return
+
+        try:
+            from .morph_window import show_morph_window
+        except Exception:
+            try:
+                from morph_window import show_morph_window
+            except Exception as e:
+                QMessageBox.warning(self, "エラー", f"表情操作モジュールの読み込みに失敗しました:\n{e}")
+                return
+
+        show_morph_window(parent=get_maya_main_window())
+
+    def _open_hik_window(self):
+        """HumanIK管理ウィンドウを別ウィンドウで開く"""
+        show_hik_window(parent=get_maya_main_window())
+
+# ==============================================================================
 # シェーダー設定タブ (mmdMaterial 管理)
 # ==============================================================================
 class MaterialTabWidget(QWidget):
@@ -2380,7 +3932,7 @@ class MaterialTabWidget(QWidget):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
 
-        # スクロールエリア（小画面でも見切れを完全に防止）
+        # スクロールエリア（小画面でも見切れを防止）
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -2390,19 +3942,7 @@ class MaterialTabWidget(QWidget):
         layout.setSpacing(12)
         layout.setContentsMargins(14, 14, 14, 14)
 
-        # 1. プラグイン状態グループ
-        plugin_box = QGroupBox("MMDシェーダープラグイン状態")
-        plugin_layout = QHBoxLayout(plugin_box)
-        self.lbl_plugin_status = QLabel()
-        self.btn_reload_plugin = QPushButton("プラグイン再読み込み")
-        self.btn_reload_plugin.setFixedWidth(160)
-        self.btn_reload_plugin.clicked.connect(self._reload_plugin)
-        plugin_layout.addWidget(self.lbl_plugin_status)
-        plugin_layout.addStretch()
-        plugin_layout.addWidget(self.btn_reload_plugin)
-        layout.addWidget(plugin_box)
-
-        # 2. 対象モデル・メッシュ指定グループ
+        # 対象モデル・メッシュ指定グループ
         target_box = QGroupBox("アサイン対象モデル / メッシュの選択")
         target_layout = QVBoxLayout(target_box)
         target_layout.setSpacing(8)
@@ -2490,30 +4030,8 @@ class MaterialTabWidget(QWidget):
         self._refresh_targets()
 
     def _check_plugin_status(self):
-        """プラグインのロード状況を確認しラベルを更新"""
-        loaded = False
-        try:
-            if mc.pluginInfo("mmd_material.mll", query=True, loaded=True):
-                loaded = True
-        except Exception:
-            pass
-
-        if loaded:
-            self.lbl_plugin_status.setText("<span style='color:#55ff77; font-weight:bold;'>● プラグイン読み込み済み (mmd_material.mll)</span>")
-        else:
-            self.lbl_plugin_status.setText("<span style='color:#ff7777; font-weight:bold;'>○ プラグイン未読み込み</span>")
-
-    def _reload_plugin(self):
-        """プラグインを強制リロード"""
-        if mmd_material_setup:
-            success = mmd_material_setup.ensure_plugin_loaded()
-            self._check_plugin_status()
-            if success:
-                QMessageBox.information(self, "プラグイン", "MMDシェーダープラグインが正常にロードされました。")
-            else:
-                QMessageBox.warning(self, "プラグイン", "MMDシェーダープラグインのロードに失敗しました。")
-        else:
-            QMessageBox.warning(self, "エラー", "mmd_material_setup モジュールが見つかりません。")
+        """プラグインのロード状況を確認（互換性のためのスタブ）"""
+        pass
 
     def _refresh_targets(self):
         """対象モデル一覧コンボボックスを更新"""
@@ -2549,7 +4067,7 @@ class MaterialTabWidget(QWidget):
                     QMessageBox.information(
                         self,
                         "ライティング",
-                        "MMD標準ライティングを作成・適用しました。\nビューポートのライティングが最適化されました。"
+                        "MMD標準ライティングを作成・適用しました。\n白飛び防止パラメータが適用され、ビューポートのライティングが適正化されました。"
                     )
                 else:
                     QMessageBox.warning(self, "ライティング", "ライティングの作成に失敗しました。")
@@ -2611,7 +4129,7 @@ class MmdMayaMainWindow(QWidget):
             parent = get_maya_main_window()
         super(MmdMayaMainWindow, self).__init__(parent)
         
-        self.setWindowTitle("MMD Tools for Maya v1.0.2")
+        self.setWindowTitle("MMD Tools for Maya v1.0.3")
         self.setObjectName("MmdToolsForMayaMainWindow")
 
         # メインウィンドウサイズ設定 (視認性向上・ボタン文字見切れ防止のワイドレイアウト)
@@ -2626,29 +4144,62 @@ class MmdMayaMainWindow(QWidget):
 
         # タブコンテナ
         self.tabs = QTabWidget()
+        self.tab_plugin = PluginTabWidget(self)
         self.tab_import = ImportTabWidget(self)
-        self.tab_material = MaterialTabWidget(self)
         self.tab_vmd = VmdImportTabWidget(self)
         self.tab_physics = PhysicsTabWidget(self)
+        self.tab_physics_gui = PhysicsGuiTabWidget(self)
+        self.tab_extra = ExtraTabWidget(self)
+        self.tab_material = MaterialTabWidget(self)
         self.tab_export = ExportTabWidget(self)
-        self.tab_hik = HikTabWidget(self)
         self.tab_cleanup = CleanupTabWidget(self)
 
+        # タブ登録 (プラグイン管理を先頭、物理演算GUIを物理演算の次へ配置)
+        self.tabs.addTab(self.tab_plugin, "プラグイン管理")
         self.tabs.addTab(self.tab_import, "MMD → Maya (インポート)")
-        self.tabs.addTab(self.tab_material, "MMDシェーダー")
         self.tabs.addTab(self.tab_vmd, "モーション (VMD)")
-        self.tabs.addTab(self.tab_physics, "物理演算")
+        self.tabs.addTab(self.tab_physics, "物理演算ベイク")
+        self.tabs.addTab(self.tab_physics_gui, "物理演算ベイクGUI")
+        self.tabs.addTab(self.tab_extra, "その他機能")
+        self.tabs.addTab(self.tab_material, "MMDシェーダー")
         self.tabs.addTab(self.tab_export, "Maya → MMD (エクスポート)")
-        self.tabs.addTab(self.tab_hik, "HumanIK 管理")
         self.tabs.addTab(self.tab_cleanup, "MMD削除 (クリーンアップ)")
 
+        self.tabs.currentChanged.connect(self._on_tab_changed)
         main_layout.addWidget(self.tabs)
 
         # フッタークレジット
-        footer = QLabel("MMD Tools for Maya v1.0.2 | Developer: Hina33")
+        footer = QLabel("MMD Tools for Maya v1.0.3 | Developer: Hina33")
         footer.setAlignment(Qt.AlignCenter)
         footer.setStyleSheet("color: #777; font-size: 13px; padding: 4px;")
         main_layout.addWidget(footer)
+
+    def _on_tab_changed(self, index):
+        """タブ切り替え時にプラグイン状態を再確認およびパス同期"""
+        if hasattr(self, "tab_plugin"):
+            self.tab_plugin.refresh_all_status()
+        if hasattr(self, "tab_material"):
+            self.tab_material._check_plugin_status()
+        if hasattr(self, "tab_physics"):
+            self.tab_physics._refresh_bullet_status()
+        if hasattr(self, "tab_physics_gui") and self.tabs.currentWidget() == self.tab_physics_gui:
+            self.tab_physics_gui.refresh_all_tab_info()
+        if hasattr(self, "tab_extra"):
+            self.tab_extra._sync_pmx_path()
+
+    def showEvent(self, e):
+        """ウィンドウ表示時にプラグイン状態を最新化およびパス同期"""
+        super().showEvent(e)
+        if hasattr(self, "tab_plugin"):
+            self.tab_plugin.refresh_all_status()
+        if hasattr(self, "tab_material"):
+            self.tab_material._check_plugin_status()
+        if hasattr(self, "tab_physics"):
+            self.tab_physics._refresh_bullet_status()
+        if hasattr(self, "tab_physics_gui") and self.tabs.currentWidget() == self.tab_physics_gui:
+            self.tab_physics_gui.refresh_all_tab_info()
+        if hasattr(self, "tab_extra"):
+            self.tab_extra._sync_pmx_path()
 
     def keyPressEvent(self, e):
         if e.key() == Qt.Key_Escape:
@@ -2677,6 +4228,22 @@ def show_ui():
     # 既存ウィンドウを検索して安全に破棄（多重起動防止）
     close_existing_ui()
     _main_window_instance = None
+
+    # プラグインの自動ロード試行
+    try:
+        if mmd_material_setup:
+            mmd_material_setup.ensure_plugin_loaded()
+    except Exception:
+        pass
+    try:
+        try:
+            from ..bullet_engine import bullet_maya_bridge
+        except Exception:
+            from bullet_engine import bullet_maya_bridge
+        bridge = bullet_maya_bridge.BulletMayaBridge.__new__(bullet_maya_bridge.BulletMayaBridge)
+        bridge._ensure_motion_plugin_loaded()
+    except Exception:
+        pass
 
     _main_window_instance = MmdMayaMainWindow()
     _main_window_instance.show()

@@ -12,9 +12,24 @@ import maya.mel as mel
 PLUGIN_NAME = "mmd_material.mll"
 
 def get_plugin_path():
-    """プラグインバイナリの絶対パスを取得"""
+    """実行中のMayaバージョンに応じたプラグインバイナリの絶対パスを取得"""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     plugin_dir = os.path.abspath(os.path.join(script_dir, "..", "bin"))
+
+    # 実行中のMayaバージョン（例: 2025, 2026）を取得して対応バイナリを優先
+    try:
+        ver_str = str(cmds.about(version=True))
+        import re
+        m = re.search(r"20\d{2}", ver_str)
+        if m:
+            ver_year = m.group(0)
+            ver_path = os.path.join(plugin_dir, ver_year, PLUGIN_NAME)
+            if os.path.exists(ver_path):
+                return ver_path
+    except Exception:
+        pass
+
+    # バージョン別バイナリがない場合は直下のデフォルトをフォールバック
     return os.path.join(plugin_dir, PLUGIN_NAME)
 
 def setup_hypershade_callbacks():
@@ -515,7 +530,7 @@ def ensure_mmd_lighting(shadow_mode=1):
 
     # フォールバック: 直接 Maya コマンドで MMD 標準ライトを作成
     try:
-        dir_shape = cmds.directionalLight(name="mmd_directional_lightShape", intensity=1.0)
+        dir_shape = cmds.directionalLight(name="mmd_directional_lightShape", intensity=0.85)
         dir_transform = cmds.listRelatives(dir_shape, parent=True)[0]
         cmds.rename(dir_transform, "mmd_directional_light")
         dir_light = "mmd_directional_light"
@@ -523,20 +538,27 @@ def ensure_mmd_lighting(shadow_mode=1):
         cmds.setAttr(dir_light + ".color", 0.6039, 0.6039, 0.6039, type="double3")
 
         # アンビエントライト
-        amb_shape = cmds.ambientLight(name="mmd_ambient_lightShape", intensity=0.55)
+        amb_shape = cmds.ambientLight(name="mmd_ambient_lightShape", intensity=0.35)
         amb_transform = cmds.listRelatives(amb_shape, parent=True)[0]
         cmds.rename(amb_transform, "mmd_ambient_light")
         amb_light = "mmd_ambient_light"
-        cmds.setAttr(amb_light + ".ambientShade", 0.0)
+        cmds.setAttr(amb_light + ".ambientShade", 0.15)
         cmds.setAttr(amb_light + ".color", 0.50, 0.50, 0.50, type="double3")
 
         light_grp = cmds.group(dir_light, amb_light, name="mmd_lighting_grp")
 
-        # ビューポートのライト表示を有効化
+        # ビューポートのテクスチャ表示・ライティング・アンチエイリアシングを有効化
         try:
+            if cmds.objExists('hardwareRenderingGlobals'):
+                if cmds.attributeQuery('multiSampleEnable', node='hardwareRenderingGlobals', exists=True):
+                    cmds.setAttr('hardwareRenderingGlobals.multiSampleEnable', 1)
+                if cmds.attributeQuery('multiSampleCount', node='hardwareRenderingGlobals', exists=True):
+                    cmds.setAttr('hardwareRenderingGlobals.multiSampleCount', 8)
+                if cmds.attributeQuery('antiAliasingEnable', node='hardwareRenderingGlobals', exists=True):
+                    cmds.setAttr('hardwareRenderingGlobals.antiAliasingEnable', 1)
             panels = cmds.getPanel(type="modelPanel") or []
             for p in panels:
-                cmds.modelEditor(p, edit=True, displayLights="all")
+                cmds.modelEditor(p, edit=True, displayLights="all", displayTextures=True)
         except Exception:
             pass
 

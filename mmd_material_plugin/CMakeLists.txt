@@ -9,6 +9,9 @@ if(MSVC)
 endif()
 
 # Maya devkitの環境変数を自動補完
+if(DEFINED DEVKIT_LOCATION)
+    set(ENV{DEVKIT_LOCATION} "${DEVKIT_LOCATION}")
+endif()
 if(NOT DEFINED ENV{DEVKIT_LOCATION})
     if(DEFINED ENV{USERPROFILE})
         file(TO_CMAKE_PATH "$ENV{USERPROFILE}/devkitBase" DEVKIT_PATH)

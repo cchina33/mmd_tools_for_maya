@@ -92,7 +92,8 @@ class BulletEngineWrapper:
             c_float, c_float, c_float,
             c_float, c_float, c_float,
             c_float, c_float, c_float,
-            c_float, c_float, c_float
+            c_float, c_float, c_float,
+            c_int
         ]
 
         self._dll.bullet_step_simulation.restype = None
@@ -108,6 +109,9 @@ class BulletEngineWrapper:
 
         self._dll.bullet_relax_penetration.restype = None
         self._dll.bullet_relax_penetration.argtypes = [c_void_p, c_int, c_float]
+
+        self._dll.bullet_set_floor_plane.restype = None
+        self._dll.bullet_set_floor_plane.argtypes = [c_void_p, c_int, c_float, c_float, c_float]
 
     def __del__(self):
         if hasattr(self, '_engine') and self._engine and hasattr(self, '_dll'):
@@ -175,7 +179,7 @@ class BulletEngineWrapper:
 
     def add_joint(self, rb_a_idx, rb_b_idx, pos, rot_euler,
                   pos_min, pos_max, rot_min, rot_max,
-                  spring_pos, spring_rot):
+                  spring_pos, spring_rot, joint_type=0):
         return self._dll.bullet_add_joint(
             self._engine, int(rb_a_idx), int(rb_b_idx),
             float(pos[0]), float(pos[1]), float(pos[2]),
@@ -185,7 +189,8 @@ class BulletEngineWrapper:
             float(rot_min[0]), float(rot_min[1]), float(rot_min[2]),
             float(rot_max[0]), float(rot_max[1]), float(rot_max[2]),
             float(spring_pos[0]), float(spring_pos[1]), float(spring_pos[2]),
-            float(spring_rot[0]), float(spring_rot[1]), float(spring_rot[2])
+            float(spring_rot[0]), float(spring_rot[1]), float(spring_rot[2]),
+            int(joint_type)
         )
 
     def step_simulation(self, dt=1.0/30.0, max_sub_steps=10, fixed_time_step=1.0/180.0):
@@ -207,4 +212,18 @@ class BulletEngineWrapper:
         外力なし・高ダンピング下で接触反発のみを解き、初速0のまま太もも外側へ自然に押し出す
         """
         self._dll.bullet_relax_penetration(self._engine, int(steps), float(damping))
+
+    def set_floor_plane(self, enable=True, y_height=0.0, friction=0.5, restitution=0.0):
+        """
+        床判定 (地面無限平面 Y=0) を有効化/無効化
+        ひも・髪・スカートなどの剛体が地面より下に落下・沈み込むのを防止します。
+        """
+        self._dll.bullet_set_floor_plane(
+            self._engine,
+            1 if enable else 0,
+            float(y_height),
+            float(friction),
+            float(restitution)
+        )
+
 

@@ -2,10 +2,16 @@
 
 #include "btBulletDynamicsCommon.h"
 #include "BulletDynamics/ConstraintSolver/btGeneric6DofSpringConstraint.h"
+#include "BulletDynamics/ConstraintSolver/btGeneric6DofConstraint.h"
+#include "BulletDynamics/ConstraintSolver/btPoint2PointConstraint.h"
+#include "BulletDynamics/ConstraintSolver/btConeTwistConstraint.h"
+#include "BulletDynamics/ConstraintSolver/btSliderConstraint.h"
+#include "BulletDynamics/ConstraintSolver/btHingeConstraint.h"
 
 #include <vector>
 #include <cmath>
 #include <iostream>
+#include <algorithm>
 
 namespace {
 
@@ -29,7 +35,9 @@ struct RigidBodyEntry {
 };
 
 struct JointEntry {
-    btGeneric6DofSpringConstraint* spring;
+    int jointType;
+    btTypedConstraint* constraint;
+    btGeneric6DofSpringConstraint* spring; // 6DOFスプリング型キャッシュ
 };
 
 } // namespace
@@ -43,6 +51,10 @@ struct BulletEngine {
 
     std::vector<RigidBodyEntry> rigidBodies;
     std::vector<JointEntry> joints;
+
+    btCollisionShape* floorShape = nullptr;
+    btDefaultMotionState* floorMotionState = nullptr;
+    btRigidBody* floorBody = nullptr;
 
     btVector3 gravity = btVector3(0.0f, -98.0f, 0.0f); // MMD標準重力 (約 -9.8 m/s^2 * 10)
 
@@ -69,8 +81,37 @@ struct BulletEngine {
         world->getSolverInfo().m_numIterations = 10;
     }
 
+    void clearFloor() {
+        if (floorBody && world) {
+            world->removeRigidBody(floorBody);
+        }
+        if (floorBody) { delete floorBody; floorBody = nullptr; }
+        if (floorMotionState) { delete floorMotionState; floorMotionState = nullptr; }
+        if (floorShape) { delete floorShape; floorShape = nullptr; }
+    }
+
+    void setFloorPlane(bool enable, float yHeight, float friction = 0.5f, float restitution = 0.0f) {
+        clearFloor();
+        if (!enable || !world) return;
+
+        // Y軸上向きの無限平面法線 (0, 1, 0)、高さ yHeight
+        floorShape = new btStaticPlaneShape(btVector3(0.0f, 1.0f, 0.0f), yHeight);
+        btTransform floorTrans;
+        floorTrans.setIdentity();
+        floorMotionState = new btDefaultMotionState(floorTrans);
+
+        btRigidBody::btRigidBodyConstructionInfo rbInfo(0.0f, floorMotionState, floorShape, btVector3(0.0f, 0.0f, 0.0f));
+        rbInfo.m_friction = friction;
+        rbInfo.m_restitution = restitution;
+        floorBody = new btRigidBody(rbInfo);
+
+        // 全グループと衝突するように追加 (MMD地面剛体相当)
+        world->addRigidBody(floorBody, 0xFFFF, 0xFFFF);
+    }
+
     void cleanup() {
         clear();
+        clearFloor();
         if (world) { delete world; world = nullptr; }
         if (solver) { delete solver; solver = nullptr; }
         if (broadphase) { delete broadphase; broadphase = nullptr; }
@@ -83,9 +124,9 @@ struct BulletEngine {
 
         // ジョイント拘束の解放
         for (auto& je : joints) {
-            if (je.spring) {
-                world->removeConstraint(je.spring);
-                delete je.spring;
+            if (je.constraint) {
+                world->removeConstraint(je.constraint);
+                delete je.constraint;
             }
         }
         joints.clear();
@@ -104,6 +145,7 @@ struct BulletEngine {
             }
         }
         rigidBodies.clear();
+        clearFloor();
     }
 
     void reset() {
@@ -113,8 +155,12 @@ struct BulletEngine {
             if (re.motionState) {
                 re.motionState->setWorldTransform(re.initialTransform);
             }
+            // Bullet公式初期化手順: 補間トランスフォームおよび速度バッファの完全ゼロクリア
+            re.body->setInterpolationWorldTransform(re.initialTransform);
             re.body->setLinearVelocity(btVector3(0, 0, 0));
             re.body->setAngularVelocity(btVector3(0, 0, 0));
+            re.body->setInterpolationLinearVelocity(btVector3(0, 0, 0));
+            re.body->setInterpolationAngularVelocity(btVector3(0, 0, 0));
             re.body->clearForces();
             re.body->activate(true);
         }
@@ -211,9 +257,20 @@ BULLET_MMD_API int bullet_add_rigidbody(
         body->setActivationState(DISABLE_DEACTIVATION);
     }
 
-    // ワールドへ追加 (PMXのcollision_maskは衝突を許可するグループのビットフラグそのもの)
+    // 床や他剛体のすり抜け防止 (CCD: Continuous Collision Detection)
+    if (physicsMode != 0 && actualMass > 0.0f) {
+        float minRadius = sizeX;
+        body->setCcdMotionThreshold(minRadius * 0.5f);
+        body->setCcdSweptSphereRadius(minRadius * 0.2f);
+    }
+
+    // ワールドへ追加 (PMXバイナリのcollision_maskは衝突許可フラグのため、反転せずそのまま渡す)
     short groupBit = static_cast<short>(1 << group);
     short maskBit = static_cast<short>(collisionMask);
+    // 全グループ非衝突に設定されている場合でも環境(床)との衝突を維持
+    if (maskBit == 0) {
+        maskBit = static_cast<short>(0x0001);
+    }
     engine->world->addRigidBody(body, groupBit, maskBit);
 
     // 登録
@@ -250,6 +307,10 @@ BULLET_MMD_API void bullet_set_rigidbody_transform(
     if (re.motionState) {
         re.motionState->setWorldTransform(tr);
     }
+    // 補間トランスフォームと速度のゼロ化により急激な移動補間バグを防止
+    re.body->setInterpolationWorldTransform(tr);
+    re.body->setInterpolationLinearVelocity(btVector3(0, 0, 0));
+    re.body->setInterpolationAngularVelocity(btVector3(0, 0, 0));
 }
 
 BULLET_MMD_API void bullet_set_target_transform(
@@ -318,7 +379,8 @@ BULLET_MMD_API int bullet_add_joint(
     float rotMinX, float rotMinY, float rotMinZ,
     float rotMaxX, float rotMaxY, float rotMaxZ,
     float springPosX, float springPosY, float springPosZ,
-    float springRotX, float springRotY, float springRotZ
+    float springRotX, float springRotY, float springRotZ,
+    int jointType
 ) {
     if (!engine || !engine->world) return -1;
     if (rbAIndex < 0 || rbAIndex >= static_cast<int>(engine->rigidBodies.size())) return -1;
@@ -338,36 +400,109 @@ BULLET_MMD_API int bullet_add_joint(
     btTransform frameInA = rbA->getWorldTransform().inverse() * jointWorld;
     btTransform frameInB = rbB->getWorldTransform().inverse() * jointWorld;
 
-    // MMD標準 6DOF スプリングコンストレイントの生成
-    btGeneric6DofSpringConstraint* spring = new btGeneric6DofSpringConstraint(*rbA, *rbB, frameInA, frameInB, true);
+    // PMX共通仕様に基づく制限値の正規化:
+    // A < B : 範囲で制限 (lower = A, upper = B)
+    // A == B : 指定値でロック (lower = A, upper = A)
+    // A > B : 制限なし・フリー (Bullet公式仕様: lower > upper でフリー解放)
+    btVector3 linLower, linUpper;
+    linLower.setX((posMinX > posMaxX) ? 1.0f : posMinX);
+    linUpper.setX((posMinX > posMaxX) ? 0.0f : posMaxX);
+    linLower.setY((posMinY > posMaxY) ? 1.0f : posMinY);
+    linUpper.setY((posMinY > posMaxY) ? 0.0f : posMaxY);
+    linLower.setZ((posMinZ > posMaxZ) ? 1.0f : posMinZ);
+    linUpper.setZ((posMinZ > posMaxZ) ? 0.0f : posMaxZ);
 
-    // 平行移動リミット
-    spring->setLinearLowerLimit(btVector3(posMinX, posMinY, posMinZ));
-    spring->setLinearUpperLimit(btVector3(posMaxX, posMaxY, posMaxZ));
+    btVector3 angLower, angUpper;
+    angLower.setX((rotMinX > rotMaxX) ? 1.0f : rotMinX);
+    angUpper.setX((rotMinX > rotMaxX) ? -1.0f : rotMaxX);
+    angLower.setY((rotMinY > rotMaxY) ? 1.0f : rotMinY);
+    angUpper.setY((rotMinY > rotMaxY) ? -1.0f : rotMaxY);
+    angLower.setZ((rotMinZ > rotMaxZ) ? 1.0f : rotMinZ);
+    angUpper.setZ((rotMinZ > rotMaxZ) ? -1.0f : rotMaxZ);
 
-    // 回転リミット
-    spring->setAngularLowerLimit(btVector3(rotMinX, rotMinY, rotMinZ));
-    spring->setAngularUpperLimit(btVector3(rotMaxX, rotMaxY, rotMaxZ));
+    btTypedConstraint* constraint = nullptr;
+    btGeneric6DofSpringConstraint* springConstraint = nullptr;
 
-    // ばね定数設定 (0,1,2: 平行移動, 3,4,5: 回転)
-    float springParams[6] = {
-        springPosX, springPosY, springPosZ,
-        springRotX, springRotY, springRotZ
-    };
-
-    for (int i = 0; i < 6; ++i) {
-        if (springParams[i] != 0.0f) {
-            spring->enableSpring(i, true);
-            spring->setStiffness(i, springParams[i]);
-            spring->setDamping(i, 1.0f);
+    // PMX 2.1 拡張ジョイントタイプマッピング
+    if (jointType == 1) {
+        // タイプ1: 6DOF (バネなし)
+        btGeneric6DofConstraint* dof = new btGeneric6DofConstraint(*rbA, *rbB, frameInA, frameInB, true);
+        dof->setLinearLowerLimit(linLower);
+        dof->setLinearUpperLimit(linUpper);
+        dof->setAngularLowerLimit(angLower);
+        dof->setAngularUpperLimit(angUpper);
+        constraint = dof;
+    } else if (jointType == 2) {
+        // タイプ2: Point to Point (P2P ボールジョイント)
+        btPoint2PointConstraint* p2p = new btPoint2PointConstraint(*rbA, *rbB, frameInA.getOrigin(), frameInB.getOrigin());
+        constraint = p2p;
+    } else if (jointType == 3) {
+        // タイプ3: ConeTwist (円錐・ねじれスパン制限)
+        btConeTwistConstraint* cone = new btConeTwistConstraint(*rbA, *rbB, frameInA, frameInB);
+        float swingSpan1 = (rotMinY > rotMaxY) ? SIMD_PI : std::max(std::abs(rotMinY), std::abs(rotMaxY));
+        float swingSpan2 = (rotMinZ > rotMaxZ) ? SIMD_PI : std::max(std::abs(rotMinZ), std::abs(rotMaxZ));
+        float twistSpan  = (rotMinX > rotMaxX) ? SIMD_PI : std::max(std::abs(rotMinX), std::abs(rotMaxX));
+        cone->setLimit(swingSpan1, swingSpan2, twistSpan, 1.0f, 0.3f, 1.0f);
+        constraint = cone;
+    } else if (jointType == 5) {
+        // タイプ5: Slider (スライダー)
+        btSliderConstraint* slider = new btSliderConstraint(*rbA, *rbB, frameInA, frameInB, true);
+        if (posMinX > posMaxX) {
+            slider->setLowerLinLimit(1.0f);
+            slider->setUpperLinLimit(0.0f);
+        } else {
+            slider->setLowerLinLimit(posMinX);
+            slider->setUpperLinLimit(posMaxX);
         }
-    }
-    spring->setEquilibriumPoint();
+        if (rotMinX > rotMaxX) {
+            slider->setLowerAngLimit(1.0f);
+            slider->setUpperAngLimit(-1.0f);
+        } else {
+            slider->setLowerAngLimit(rotMinX);
+            slider->setUpperAngLimit(rotMaxX);
+        }
+        constraint = slider;
+    } else if (jointType == 6) {
+        // タイプ6: Hinge (1軸回転ヒンジ)
+        btHingeConstraint* hinge = new btHingeConstraint(*rbA, *rbB, frameInA, frameInB, true);
+        if (rotMinZ > rotMaxZ) {
+            hinge->setLimit(1.0f, -1.0f); // フリー
+        } else {
+            hinge->setLimit(rotMinZ, rotMaxZ, 0.9f, 0.3f, 1.0f);
+        }
+        constraint = hinge;
+    } else {
+        // タイプ0 (デフォルト) およびタイプ4: 6DOF スプリングコンストレイント
+        btGeneric6DofSpringConstraint* spring = new btGeneric6DofSpringConstraint(*rbA, *rbB, frameInA, frameInB, true);
+        spring->setLinearLowerLimit(linLower);
+        spring->setLinearUpperLimit(linUpper);
+        spring->setAngularLowerLimit(angLower);
+        spring->setAngularUpperLimit(angUpper);
 
-    engine->world->addConstraint(spring, true);
+        float springParams[6] = {
+            springPosX, springPosY, springPosZ,
+            springRotX, springRotY, springRotZ
+        };
+
+        for (int i = 0; i < 6; ++i) {
+            if (springParams[i] != 0.0f) {
+                spring->enableSpring(i, true);
+                spring->setStiffness(i, springParams[i]);
+                spring->setDamping(i, 1.0f);
+            }
+        }
+        spring->setEquilibriumPoint();
+        constraint = spring;
+        springConstraint = spring;
+    }
+
+    engine->world->addConstraint(constraint, true);
 
     JointEntry entry;
-    entry.spring = spring;
+    entry.jointType = jointType;
+    entry.constraint = constraint;
+    entry.spring = springConstraint;
+
     int jointIdx = static_cast<int>(engine->joints.size());
     engine->joints.push_back(entry);
     return jointIdx;
@@ -418,16 +553,15 @@ BULLET_MMD_API void bullet_reset_velocities(BulletEngine* engine) {
         if (!re.body) continue;
         re.body->setLinearVelocity(btVector3(0.0f, 0.0f, 0.0f));
         re.body->setAngularVelocity(btVector3(0.0f, 0.0f, 0.0f));
+        re.body->setInterpolationLinearVelocity(btVector3(0.0f, 0.0f, 0.0f));
+        re.body->setInterpolationAngularVelocity(btVector3(0.0f, 0.0f, 0.0f));
         re.body->clearForces();
     }
 }
 
 BULLET_MMD_API void bullet_reset_constraints(BulletEngine* engine) {
     if (!engine || !engine->world) return;
-    for (auto& je : engine->joints) {
-        if (!je.spring) continue;
-        je.spring->setEquilibriumPoint();
-    }
+    // PMX設計時の平衡点を保護するため、動的姿勢での平衡点再設定は行わない
 }
 
 BULLET_MMD_API void bullet_relax_penetration(
@@ -498,10 +632,16 @@ BULLET_MMD_API void bullet_relax_penetration(
         re.body->clearForces();
     }
     engine->world->setGravity(originalGravity);
-
-    // 押し出し後の安定姿勢でジョイントの平衡点を再初期化
-    for (auto& je : engine->joints) {
-        if (!je.spring) continue;
-        je.spring->setEquilibriumPoint();
-    }
 }
+
+BULLET_MMD_API void bullet_set_floor_plane(
+    BulletEngine* engine,
+    int enable,
+    float yHeight,
+    float friction,
+    float restitution
+) {
+    if (!engine) return;
+    engine->setFloorPlane(enable != 0, yHeight, friction, restitution);
+}
+

@@ -12,19 +12,26 @@ wav/
 *.pmd
 *.x
 tes_model/
+tests/
 
 # バックアップおよびスクラッチ作業領域
 _old/
 scratch/
+*_old_*.dll
+dist/
 
-# キャッシュ・自動生成構造データ・ユーザー解析データ
+# キャッシュ・自動生成構造データ・ユーザー解析・ベイクデータ
 asset/last_imported_structure.json
 last_imported_structure.json
 asset/User_pmx_data/
+asset/vmd_bake_data/
+asset/bone_motion_export.json
 
-# ローカル設定ファイル
+# ローカル設定・ログファイル
 asset/khatangton.txt
 asset/*.txt
+*.log
+*.bak
 
 # Python キャッシュファイル
 __pycache__/
@@ -42,21 +49,61 @@ __pycache__/
 Thumbs.db
 desktop.ini
 
-# Visual Studio / IDE 一時ファイル
+# Visual Studio / VSCode / IDE 設定・一時ファイル
 .vs/
+.vscode/
+.idea/
 *.VC.db
 *.sln.docstates
+*.suo
+*.user
+*.userprefs
 
-# C++ ビルド中間生成物・旧バックアップ (※同梱DLL bin/mmd_xpbd.dll, mmd_material.mll は除外しない)
+# C# (.NET) 中間ファイル・デバッグ生成物
+[Oo]bj/
+**/[Oo]bj/
+**/bin/Debug/
+*.sourcelink.json
+*.FileListAbsolute.txt
+
+# C++ / CMake ビルド中間生成物・残骸
 build/
 **/build/
-mmd_material_plugin/build/
+build_*/
+**/build_*/
+CMakeFiles/
+**/CMakeFiles/
+CMakeCache.txt
+**/CMakeCache.txt
+cmake_install.cmake
+**/cmake_install.cmake
 x64/
-Debug/
-Release/
-*_old_*.dll
 *.obj
 *.lib
 *.exp
-*.pdb
 *.ilk
+*.ninja
+.ninja_*
+*.vcxproj*
+*.sln
+*.tlog
+*.recipe
+*.pdb
+
+# 配布およびプラグイン実行に必要なバイナリの保護例外設定
+!physics_bake_cs/bin/Release/**
+!physics_bridge_cs/bin/Release/**
+!bullet_engine/bin/*.dll
+!cpp_engine/bin/*.dll
+!mmd_material_plugin/bin/**
+!mmd_motion_plugin/bin/**
+
+# ただしデバッグシンボル・バックアップ等は保護対象内でも除外
+*.pdb
+*_old_*.dll
+*.FileListAbsolute.txt
+*.sourcelink.json
+
+# 外部ツール
+_maya_mmd_tools-main/
+_boneDynamicsNode-0.5.0/

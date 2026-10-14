@@ -14,7 +14,10 @@ from ..mmd_core import pmx
 from ..asset.jaka import safe_node_name
 from ..asset.bone_dict import get_english_bone_name, get_japanese_bone_name
 
-VIS_GROUP_NAME = "MMD_RigidBody_Visualizers"
+ROOT_VIS_GROUP_NAME = "MMD_RigidBody_Joint_Visualizers"
+RB_VIS_GROUP_NAME = "MMD_RigidBody_Visualizers"
+JOINT_VIS_GROUP_NAME = "MMD_Joint_Visualizers"
+VIS_GROUP_NAME = ROOT_VIS_GROUP_NAME
 
 def quat_from_euler_xyz(rx_deg, ry_deg, rz_deg):
     """XYZオイラー角から四元数を算出"""
@@ -49,11 +52,31 @@ def quat_to_euler_xyz(q):
     e = mq.asEulerRotation()
     return (math.degrees(e.x), math.degrees(e.y), math.degrees(e.z))
 
+def create_capsule_visualizer(radius, height, name):
+    """PMXViewと同等の円柱＋両端半球を持つカプセルワイヤーフレームメッシュを生成"""
+    r = max(0.01, float(radius))
+    h = max(0.01, float(height))
+    half_h = h * 0.5
+    try:
+        cyl = mc.polyCylinder(radius=r, height=h, subdivisionsX=12, subdivisionsY=1, subdivisionsCaps=0, constructionHistory=False)[0]
+        sph_top = mc.polySphere(radius=r, subdivisionsX=12, subdivisionsY=8, constructionHistory=False)[0]
+        mc.xform(sph_top, translation=(0.0, half_h, 0.0))
+        sph_bottom = mc.polySphere(radius=r, subdivisionsX=12, subdivisionsY=8, constructionHistory=False)[0]
+        mc.xform(sph_bottom, translation=(0.0, -half_h, 0.0))
+        capsule = mc.polyUnite(cyl, sph_top, sph_bottom, constructionHistory=False, name=name)[0]
+        return capsule
+    except Exception:
+        return mc.polyCylinder(radius=r, height=h, subdivisionsX=12, subdivisionsY=1, name=name, constructionHistory=False)[0]
+
 def remove_visualizers():
     """既存の剛体・ジョイント可視化ノードを削除"""
-    if mc.objExists(VIS_GROUP_NAME):
-        mc.delete(VIS_GROUP_NAME)
-        print(f"[Visualizer] 既存の可視化グループ '{VIS_GROUP_NAME}' を削除しました。")
+    for grp in [ROOT_VIS_GROUP_NAME, RB_VIS_GROUP_NAME, "MMD_RigidBody_Visualizers"]:
+        if mc.objExists(grp):
+            try:
+                mc.delete(grp)
+                print(f"[Visualizer] 既存の可視化グループ '{grp}' を削除しました。")
+            except Exception:
+                pass
 
 def mute_dynamic_constraints(mute=True):
     """
@@ -62,7 +85,7 @@ def mute_dynamic_constraints(mute=True):
     mute=True: コンストレイントをPassThrough（無効）に設定
     mute=False: 通常の追従状態に戻す
     """
-    if not mc.objExists(VIS_GROUP_NAME):
+    if not mc.objExists(ROOT_VIS_GROUP_NAME) and not mc.objExists(RB_VIS_GROUP_NAME):
         return
 
     constraints = mc.ls(type="parentConstraint") or []
@@ -97,14 +120,27 @@ def map_pmx_bones_to_maya(pmx_bones, all_joints=None):
 
     bone_to_joint = {}
 
-    # キャッシュファイル (last_imported_structure.json) の読み込み
+    # キャッシュファイル (last_imported_structure.json) の読み込み (新スキーマ2.0対応)
     cached_bones = {}
     cache_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'asset', 'last_imported_structure.json')
     if os.path.isfile(cache_path):
         try:
             with open(cache_path, 'r', encoding='utf-8') as f:
                 cdata = json.load(f)
-                cached_bones = cdata.get('bones', {})
+                raw_b = cdata.get('bones')
+                if isinstance(raw_b, dict):
+                    cached_bones = raw_b
+                elif isinstance(raw_b, list):
+                    for b in raw_b:
+                        if isinstance(b, dict):
+                            node = b.get('maya_node') or b.get('node')
+                            if node:
+                                if b.get('name_jp'):
+                                    cached_bones[b['name_jp']] = node
+                                if b.get('name_en'):
+                                    cached_bones[b['name_en']] = node
+                if not cached_bones and isinstance(cdata.get('legacy_compatibility', {}).get('bones'), dict):
+                    cached_bones = cdata['legacy_compatibility']['bones']
         except Exception:
             pass
 
@@ -169,13 +205,26 @@ def map_pmx_bones_to_maya(pmx_bones, all_joints=None):
                     matched_j = info['node']
                     break
 
-        # 優先度4: スカートボーン等 (q_ -> Skirt_) 特殊変換一致
-        if not matched_j and b_name.startswith("q_"):
-            skirt_suffix = b_name.replace("q_", "Skirt_")
-            for info in joint_info:
-                if info['short'].endswith(skirt_suffix) or info['stripped'] == skirt_suffix or info['short'].endswith(f"_{skirt_suffix}"):
-                    matched_j = info['node']
-                    break
+        # 優先度4: スカートボーン等 (半角カタカナ ｽｶｰﾄ_、全角 スカート_、Skirt_、q_)
+        if not matched_j:
+            skirt_key = None
+            if b_name.startswith("ｽｶｰﾄ_") or b_name.startswith("スカート_"):
+                parts = b_name.split("_")
+                if len(parts) >= 3:
+                    skirt_key = f"Skirt_{parts[1]}_{parts[2]}"
+            elif b_name.startswith("q_"):
+                skirt_key = b_name.replace("q_", "Skirt_")
+            elif b_name.startswith("Skirt_"):
+                skirt_key = b_name
+            elif b_name_e and b_name_e.startswith("Skirt_"):
+                skirt_key = b_name_e
+
+            if skirt_key:
+                for info in joint_info:
+                    s_name = info['short']
+                    if s_name == skirt_key or s_name.startswith(f"{skirt_key}_") or info['stripped'] == skirt_key or info['stripped'].startswith(f"{skirt_key}_"):
+                        matched_j = info['node']
+                        break
 
         if matched_j:
             bone_to_joint[b_idx] = matched_j
@@ -201,8 +250,10 @@ def create_rigidbody_visualizers(pmx_path, scale=8.0):
         print("[Visualizer] 剛体・ジョイントデータが存在しません。")
         return []
 
-    # メイングローバルグループ
-    main_grp = mc.group(empty=True, name=VIS_GROUP_NAME)
+    # 最上位親グループと子グループ（剛体・Joint）を作成
+    main_grp = mc.group(empty=True, name=ROOT_VIS_GROUP_NAME)
+    rb_grp = mc.group(empty=True, name=RB_VIS_GROUP_NAME, parent=main_grp)
+    joint_grp = mc.group(empty=True, name=JOINT_VIS_GROUP_NAME, parent=main_grp)
 
     # ボーン名からMayaジョイントへの高精度マッピング
     all_joints = mc.ls(type="joint", long=True) or []
@@ -220,9 +271,9 @@ def create_rigidbody_visualizers(pmx_path, scale=8.0):
             rb.position[1] * scale,
             -rb.position[2] * scale
         )
-        deg_x = math.degrees(rb.rotation[0])
-        deg_y = math.degrees(rb.rotation[1])
-        deg_z = -math.degrees(rb.rotation[2])
+        deg_x = -math.degrees(rb.rotation[0])
+        deg_y = -math.degrees(rb.rotation[1])
+        deg_z = math.degrees(rb.rotation[2])
         rb_bind_q = quat_from_euler_xyz(deg_x, deg_y, deg_z)
 
         b_idx = rb.bone_index
@@ -233,7 +284,7 @@ def create_rigidbody_visualizers(pmx_path, scale=8.0):
         rot = (deg_x, deg_y, deg_z)
         rb_world_trans[idx] = (pos, rb_bind_q)
 
-        safe_name = rb.name.replace(" ", "_").replace("|", "_").replace(":", "_")
+        safe_name = safe_node_name(rb.name)
         node_name = f"rb_vis_{idx:03d}_{safe_name}"
 
         # 既存ノードとの重複を避けてRequested name警告を抑制
@@ -244,49 +295,50 @@ def create_rigidbody_visualizers(pmx_path, scale=8.0):
                 pass
 
         mesh_node = None
-        # 形状別のワイヤーフレームジオメトリ生成 (余分なヒストリと重複警告を防止)
+        # 形状別のワイヤーフレームジオメトリ生成 (PMXエディタ基準のサイズ・形状)
         if rb.shape_type == 0:
-            # 球 (Sphere)
+            # 球 (Sphere: 半径 size.x)
             r = rb.size[0] * scale
             mesh = mc.polySphere(radius=max(0.1, r), subdivisionsX=12, subdivisionsY=8, name=node_name, constructionHistory=False)[0]
             mesh_node = mesh
         elif rb.shape_type == 1:
-            # 直方体 (Box: PMXのsizeは半サイズ)
+            # 直方体 (Box: PMXのsizeは半サイズ -> 全幅 2*size)
             w = rb.size[0] * 2.0 * scale
             h = rb.size[1] * 2.0 * scale
             d = rb.size[2] * 2.0 * scale
             mesh = mc.polyCube(width=max(0.1, w), height=max(0.1, h), depth=max(0.1, d), name=node_name, constructionHistory=False)[0]
             mesh_node = mesh
         elif rb.shape_type == 2:
-            # カプセル (Capsule: 半径 size.x, 高さ size.y)
+            # カプセル (Capsule: 半径 size.x, 高さ size.y / PMXView同等の丸みを持つ形状)
             r = rb.size[0] * scale
             h = rb.size[1] * scale
-            mesh = mc.polyCylinder(radius=max(0.1, r), height=max(0.1, h), subdivisionsX=12, subdivisionsY=1, name=node_name, constructionHistory=False)[0]
+            mesh = create_capsule_visualizer(radius=r, height=h, name=node_name)
             mesh_node = mesh
 
         if not mesh_node:
             continue
 
-        # 親グループに先に格納 (コンストレイント後の階層変更によるオフセット破壊を防止)
-        mc.parent(mesh_node, main_grp)
+        # 剛体用グループに格納
+        mc.parent(mesh_node, rb_grp)
 
         # 初期姿勢の設定 (PMXエディタと寸分違わず整然と並ぶ設計姿勢)
         mc.xform(mesh_node, worldSpace=True, translation=pos)
         mc.xform(mesh_node, worldSpace=True, rotation=rot)
 
         # ワイヤーフレーム表示設定
-        shape = mc.listRelatives(mesh_node, shapes=True)[0]
-        mc.setAttr(f"{shape}.overrideEnabled", 1)
-        mc.setAttr(f"{shape}.overrideShading", 0) # シェーディングOFF (ワイヤー表示)
+        shapes = mc.listRelatives(mesh_node, shapes=True) or []
+        for shape in shapes:
+            mc.setAttr(f"{shape}.overrideEnabled", 1)
+            mc.setAttr(f"{shape}.overrideShading", 0) # シェーディングOFF (ワイヤー表示)
 
-        # 剛体タイプ別のカラーコード (Kinematic: 青, Dynamic: 緑, Aligned: 黄)
-        if rb.physics_mode == 0:
-            color_idx = 6  # 青
-        elif rb.physics_mode == 1:
-            color_idx = 14 # 緑
-        else:
-            color_idx = 17 # 黄
-        mc.setAttr(f"{shape}.overrideColor", color_idx)
+            # 剛体タイプ別のカラーコード (Kinematic: 青, Dynamic: 緑, Aligned: 黄)
+            if rb.physics_mode == 0:
+                color_idx = 6  # 青
+            elif rb.physics_mode == 1:
+                color_idx = 14 # 緑
+            else:
+                color_idx = 17 # 黄
+            mc.setAttr(f"{shape}.overrideColor", color_idx)
 
         # 識別用カスタムアトリビュート
         mc.addAttr(mesh_node, longName="rbIndex", attributeType="short", defaultValue=idx)
@@ -307,9 +359,8 @@ def create_rigidbody_visualizers(pmx_path, scale=8.0):
         created_nodes[idx] = mesh_node
 
     # MMD Joint（スプリング関節）の可視化ノード生成 (PMXエディタと同仕様の四角い立方体キューブ)
-    joint_grp = mc.group(empty=True, name="MMD_Joint_Visualizers", parent=main_grp)
     for j_idx, j in enumerate(model.joints):
-        j_safe_name = j.name.replace(" ", "_").replace("|", "_").replace(":", "_")
+        j_safe_name = safe_node_name(j.name)
         j_node_name = f"joint_vis_{j_idx:03d}_{j_safe_name}"
 
         if mc.objExists(j_node_name):
@@ -324,15 +375,15 @@ def create_rigidbody_visualizers(pmx_path, scale=8.0):
             j.position[1] * scale,
             -j.position[2] * scale
         )
-        j_deg_x = math.degrees(j.rotation[0])
-        j_deg_y = math.degrees(j.rotation[1])
-        j_deg_z = -math.degrees(j.rotation[2])
+        j_deg_x = -math.degrees(j.rotation[0])
+        j_deg_y = -math.degrees(j.rotation[1])
+        j_deg_z = math.degrees(j.rotation[2])
 
         # PMXエディタと同仕様の四角い立方体 (キューブ) ワイヤーフレームを生成
-        cube_size = max(0.6, 0.22 * scale)
+        cube_size = max(0.4, 0.15 * scale)
         cube = mc.polyCube(width=cube_size, height=cube_size, depth=cube_size, name=j_node_name, constructionHistory=False)[0]
 
-        # 先に親グループへ格納
+        # ジョイント用グループへ格納
         mc.parent(cube, joint_grp)
 
         # PMXバインド姿勢のワールド座標・回転を設定 (剛体間に整然と配置)
@@ -351,9 +402,9 @@ def create_rigidbody_visualizers(pmx_path, scale=8.0):
         if 0 <= j.rigid_body_a < len(model.rigid_bodies):
             rb_a = model.rigid_bodies[j.rigid_body_a]
             rb_a_bind_p = (rb_a.position[0] * scale, rb_a.position[1] * scale, -rb_a.position[2] * scale)
-            deg_ax = math.degrees(rb_a.rotation[0])
-            deg_ay = math.degrees(rb_a.rotation[1])
-            deg_az = -math.degrees(rb_a.rotation[2])
+            deg_ax = -math.degrees(rb_a.rotation[0])
+            deg_ay = -math.degrees(rb_a.rotation[1])
+            deg_az = math.degrees(rb_a.rotation[2])
             rb_a_bind_q = quat_from_euler_xyz(deg_ax, deg_ay, deg_az)
 
             inv_ra_q = quat_inverse(rb_a_bind_q)
@@ -409,7 +460,8 @@ def sync_visualizer_transforms(rb_transforms, frame=None):
         return
 
     # 剛体メッシュの同期
-    children = mc.listRelatives(VIS_GROUP_NAME, children=True, fullPath=True) or []
+    rb_target_grp = RB_VIS_GROUP_NAME if mc.objExists(RB_VIS_GROUP_NAME) else VIS_GROUP_NAME
+    children = mc.listRelatives(rb_target_grp, children=True, fullPath=True) or []
     idx_to_node = {}
     for node in children:
         if mc.attributeQuery("rbIndex", node=node, exists=True):
@@ -426,9 +478,9 @@ def sync_visualizer_transforms(rb_transforms, frame=None):
                 mc.setKeyframe(node, attribute=['translateX', 'translateY', 'translateZ', 'rotateX', 'rotateY', 'rotateZ'], time=frame)
 
     # Jointキューブの同期 (剛体Aの現在姿勢からジョイントのワールド姿勢を算出して追従)
-    joint_grp_name = f"{VIS_GROUP_NAME}|MMD_Joint_Visualizers"
-    if mc.objExists(joint_grp_name):
-        joint_nodes = mc.listRelatives(joint_grp_name, children=True, fullPath=True) or []
+    joint_target_grp = JOINT_VIS_GROUP_NAME if mc.objExists(JOINT_VIS_GROUP_NAME) else f"{VIS_GROUP_NAME}|MMD_Joint_Visualizers"
+    if mc.objExists(joint_target_grp):
+        joint_nodes = mc.listRelatives(joint_target_grp, children=True, fullPath=True) or []
         for j_node in joint_nodes:
             if not mc.attributeQuery("rbAIndex", node=j_node, exists=True):
                 continue

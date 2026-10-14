@@ -75,6 +75,27 @@ dic_hik = {
     93: ['右小指先', 'migikoyubi.*saki']
 }
 
+def reload_hik_dict():
+    """hik_dict.json から最新のHumanIK対応表を再読み込みします"""
+    global dic_hik
+    try:
+        import os, json
+        json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hik_dict.json")
+        if os.path.exists(json_path):
+            with open(json_path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+                new_dict = {}
+                for k, v in raw.items():
+                    item_id = int(v.get("id", k))
+                    new_dict[item_id] = [v.get("label", ""), v.get("pattern", "")]
+                if new_dict:
+                    dic_hik = new_dict
+    except Exception:
+        pass
+
+# 初期化時にJSONが存在すれば読み込み
+reload_hik_dict()
+
 def normalize_bone_name(name):
     """
     ボーン名の全角/半角、ひらがな/漢字の表記揺れを統一正規化します。

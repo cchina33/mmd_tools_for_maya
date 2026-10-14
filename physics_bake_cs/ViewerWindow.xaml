@@ -1,0 +1,104 @@
+<Window x:Class="MmdPhysicsViewer.ViewerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="MMD 3D Physics Viewer (Streaming Bake)"
+        Height="720" Width="960"
+        Background="#18181c"
+        WindowStartupLocation="CenterScreen"
+        Topmost="True">
+    <Grid>
+        <!-- 3D ビューポート -->
+        <Border x:Name="ViewportContainer"
+                Background="#202025"
+                ClipToBounds="True"
+                Focusable="True"
+                MouseDown="Viewport_MouseDown"
+                MouseMove="Viewport_MouseMove"
+                MouseUp="Viewport_MouseUp"
+                MouseLeave="Viewport_MouseLeave"
+                MouseWheel="Viewport_MouseWheel">
+            <Viewport3D x:Name="MainViewport">
+                <Viewport3D.Camera>
+                    <PerspectiveCamera x:Name="ViewportCamera"
+                                       Position="0,15,45"
+                                       LookDirection="0,-5,-45"
+                                       UpDirection="0,1,0"
+                                       FieldOfView="45" />
+                </Viewport3D.Camera>
+
+                <!-- 環境ライティング -->
+                <ModelVisual3D>
+                    <ModelVisual3D.Content>
+                        <Model3DGroup>
+                            <AmbientLight Color="#606060" />
+                            <DirectionalLight Color="#ffffff" Direction="-1,-2,-3" />
+                            <DirectionalLight Color="#505060" Direction="1,1,2" />
+                        </Model3DGroup>
+                    </ModelVisual3D.Content>
+                </ModelVisual3D>
+
+                <!-- 地面グリッド -->
+                <ModelVisual3D x:Name="GridContainer" />
+
+                <!-- モデルメッシュ -->
+                <ModelVisual3D x:Name="MeshContainer" />
+
+                <!-- ボーン骨格ライン -->
+                <ModelVisual3D x:Name="BoneContainer" />
+
+                <!-- 剛体コライダー -->
+                <ModelVisual3D x:Name="RigidbodyContainer" />
+
+                <!-- 物理拘束ジョイント -->
+                <ModelVisual3D x:Name="JointContainer" />
+            </Viewport3D>
+        </Border>
+
+        <!-- 進捗オーバーレイ表示（右上に配置） -->
+        <Border HorizontalAlignment="Right"
+                VerticalAlignment="Top"
+                Margin="16"
+                Background="#cc18181f"
+                BorderBrush="#3d3d4d"
+                BorderThickness="1"
+                CornerRadius="8"
+                Padding="16,12"
+                IsHitTestVisible="True">
+            <StackPanel MinWidth="260">
+                <TextBlock Text="リアルタイム物理ベイク中"
+                           Foreground="#52b7ff"
+                           FontSize="14"
+                           FontWeight="Bold"
+                           Margin="0,0,0,6" />
+                <TextBlock x:Name="TxtProgress"
+                           Text="フレーム: 0 / 0 (0.0%)"
+                           Foreground="#ffffff"
+                           FontSize="13"
+                           Margin="0,0,0,4" />
+                <TextBlock x:Name="TxtEta"
+                           Text="推定残り時間: 計算中..."
+                           Foreground="#cccccc"
+                           FontSize="12"
+                           Margin="0,0,0,8" />
+                <ProgressBar x:Name="ProgressBar"
+                             Height="6"
+                             Minimum="0"
+                             Maximum="100"
+                             Value="0"
+                             Foreground="#2ecc71"
+                             Background="#33333d"
+                             BorderThickness="0" />
+                <Button x:Name="BtnStopBake"
+                        Content="ベイク終了 / ウィンドウを閉じる"
+                        Height="28"
+                        Margin="0,10,0,0"
+                        Background="#c0392b"
+                        Foreground="#ffffff"
+                        FontWeight="Bold"
+                        BorderThickness="0"
+                        Cursor="Hand"
+                        Click="BtnStopBake_Click" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>

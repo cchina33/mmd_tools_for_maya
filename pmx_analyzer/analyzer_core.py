@@ -245,3 +245,93 @@ def find_unregistered_kanji_in_bones(pmx_path_or_model):
         })
 
     return results
+
+def find_unregistered_morphs(pmx_path_or_model):
+    """
+    モデル内のモーフ名を走査し、標準辞書およびユーザー辞書に未登録のモーフ名および未登録漢字を抽出します。
+
+    戻り値:
+        list of dict: [
+            {
+                "name": "困惑",
+                "panel": 1,
+                "unregistered_kanji": ["惑"],
+                "suggested_en": "konwaku"
+            },
+            ...
+        ]
+    """
+    if isinstance(pmx_path_or_model, str):
+        if not os.path.exists(pmx_path_or_model):
+            return []
+        model = mmd_core.pmx.load(pmx_path_or_model)
+    else:
+        model = pmx_path_or_model
+
+    # 登録済み辞書の収集
+    registered_words = get_registered_kanji_words()
+    sorted_words = sorted(registered_words, key=len, reverse=True)
+
+    morph_dict = {}
+    custom_morph_dict = {}
+    try:
+        user_settings = user_dict_manager.load_user_settings()
+        custom_morph_dict = user_settings.get("custom_morph_dict", {})
+    except Exception:
+        pass
+
+    try:
+        if hasattr(user_dict_manager, 'load_morph_dict_json'):
+            morph_dict = user_dict_manager.load_morph_dict_json()
+    except Exception:
+        pass
+
+    results = []
+    seen_names = set()
+
+    for morph in getattr(model, 'morphs', []):
+        name = morph.name
+        if not name or name in seen_names:
+            continue
+        seen_names.add(name)
+
+        # モデル側で有効な英名が設定されている場合は解決済み
+        name_e = getattr(morph, 'name_e', '')
+        if name_e and re.match(r'^[a-zA-Z0-9_\-\s]+$', str(name_e).strip()):
+            continue
+
+        # モーフ辞書またはユーザー辞書に登録済みの場合は解決済み
+        if name in custom_morph_dict or name in morph_dict or name in registered_words:
+            continue
+
+        norm_name = unicodedata.normalize('NFKC', name)
+
+        # 登録済みの語句を取り除く
+        temp_name = norm_name
+        for word in sorted_words:
+            if word in temp_name:
+                temp_name = temp_name.replace(word, " ")
+
+        # 残った文字列から漢字文字を抽出
+        found_kanji = list(dict.fromkeys(KANJI_PATTERN.findall(temp_name)))
+
+        # 推定されるローマ字名
+        suggested = ""
+        try:
+            suggested = jaka.romaji(name)
+        except Exception:
+            suggested = name
+
+        # 未登録漢字が含まれているか、または辞書に未登録のモーフ名である場合に検出
+        # （純粋な英数字記号のみのモーフ名は除外）
+        is_pure_ascii = bool(re.match(r'^[a-zA-Z0-9_\-\s\.\#]+$', name))
+        if not is_pure_ascii and (found_kanji or name not in morph_dict):
+            results.append({
+                "name": name,
+                "panel": getattr(morph, 'panel', 0),
+                "unregistered_kanji": found_kanji,
+                "suggested_en": suggested
+            })
+
+    return results
+
