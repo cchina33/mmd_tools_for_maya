@@ -103,7 +103,3 @@ x64/
 *_old_*.dll
 *.FileListAbsolute.txt
 *.sourcelink.json
-
-# 外部ツール
-_maya_mmd_tools-main/
-_boneDynamicsNode-0.5.0/
