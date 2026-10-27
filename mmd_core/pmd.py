@@ -4,7 +4,7 @@ mmd_core.pmd - PMD (Polygon Model Data) バイナリパーサー
 
 旧規格である MMD PMD モデルファイルをバイナリ解析し、
 PMX 互換の Model オブジェクトに変換して読み込みます。
-IK（インバースキネマティクス）やモーフ（表情）を含む完全オリジナル実装です。
+IK（インバースキネマティクス）やモーフ（表情）を含む高精度な独自実装です。
 """
 
 import struct
@@ -91,6 +91,9 @@ def load2pmx(file_path):
 
         for mat_idx in range(mat_count):
             diff = list(struct.unpack('<4f', f.read(16)))
+            # PMDモデル特有のアルファ値異常値 (例: 99.0 や 100.0) を0.0〜1.0へ正規化
+            if diff[3] > 1.0:
+                diff[3] = min(1.0, max(0.0, diff[3] / 100.0))
             spec_pow = struct.unpack('<f', f.read(4))[0]
             spec = list(struct.unpack('<3f', f.read(12))) + [spec_pow]
             amb = list(struct.unpack('<3f', f.read(12)))
@@ -123,6 +126,21 @@ def load2pmx(file_path):
                     tex_path_map[clean_tex] = len(model.textures)
                     model.textures.append(pmx.Texture(clean_tex))
                 mat.texture = tex_path_map[clean_tex]
+
+            if len(tex_parts) > 1:
+                sphere_tex = tex_parts[1].strip()
+                if sphere_tex:
+                    clean_sph = sphere_tex.replace('\\\\', '/').replace('\\', '/')
+                    if clean_sph not in tex_path_map:
+                        tex_path_map[clean_sph] = len(model.textures)
+                        model.textures.append(pmx.Texture(clean_sph))
+                    mat.sphere_texture = tex_path_map[clean_sph]
+                    if clean_sph.lower().endswith('.spa'):
+                        mat.sphere_texture_mode = 2
+                    elif clean_sph.lower().endswith('.sph'):
+                        mat.sphere_texture_mode = 1
+                    else:
+                        mat.sphere_texture_mode = 1
 
             model.materials.append(mat)
 
@@ -208,5 +226,120 @@ def load2pmx(file_path):
                     real_idx = base_morph_indices[b_idx] if b_idx < len(base_morph_indices) else b_idx
                     morph.offsets.append(pmx.VertexMorphOffset(real_idx, v_off))
                 model.morphs.append(morph)
+
+        # 表情枠データのスキップ
+        face_frame_buf = f.read(1)
+        if len(face_frame_buf) == 1:
+            face_frame_count = struct.unpack('<B', face_frame_buf)[0]
+            f.read(face_frame_count * 2)
+
+        # ボーン枠名リストのスキップ
+        bone_frame_name_buf = f.read(1)
+        bone_frame_name_count = 0
+        if len(bone_frame_name_buf) == 1:
+            bone_frame_name_count = struct.unpack('<B', bone_frame_name_buf)[0]
+            f.read(bone_frame_name_count * 50)
+
+        # ボーン枠要素リストのスキップ
+        bone_frame_buf = f.read(4)
+        if len(bone_frame_buf) == 4:
+            bone_frame_count = struct.unpack('<I', bone_frame_buf)[0]
+            f.read(bone_frame_count * 3)
+
+        # 英語拡張ブロック
+        english_flag_buf = f.read(1)
+        if len(english_flag_buf) == 1 and struct.unpack('<B', english_flag_buf)[0] == 1:
+            eng_name = _decode_cjk(f.read(20))
+            if eng_name:
+                model.name_e = eng_name
+            eng_comment = _decode_cjk(f.read(256))
+            if eng_comment:
+                model.comment_e = eng_comment
+            for b in model.bones:
+                eng_b_name = _decode_cjk(f.read(20))
+                if eng_b_name:
+                    b.name_e = eng_b_name
+            for m in model.morphs:
+                eng_m_name = _decode_cjk(f.read(20))
+                if eng_m_name:
+                    m.name_e = eng_m_name
+            f.read(bone_frame_name_count * 50)
+
+        # Toonテクスチャ名リストのスキップ (10個 x 100バイト)
+        f.read(1000)
+
+        # 剛体データ (RigidBody)
+        rigid_count_buf = f.read(4)
+        if len(rigid_count_buf) == 4:
+            rigid_count = struct.unpack('<I', rigid_count_buf)[0]
+            for _ in range(rigid_count):
+                rb_raw = f.read(83)
+                if len(rb_raw) < 83:
+                    break
+                rb_name = _decode_cjk(rb_raw[:20])
+                rel_bone, group_id, no_coll_mask, shape_type = struct.unpack('<HBHB', rb_raw[20:26])
+                shape_size = list(struct.unpack('<3f', rb_raw[26:38]))
+                shape_pos = list(struct.unpack('<3f', rb_raw[38:50]))
+                shape_rot = list(struct.unpack('<3f', rb_raw[50:62]))
+                mass, lin_damp, ang_damp, restitution, friction = struct.unpack('<5f', rb_raw[62:82])
+                physics_mode = struct.unpack('<B', rb_raw[82:83])[0]
+
+                rb = pmx.RigidBody()
+                rb.name = rb_name
+                rb.name_e = rb_name
+                rb.bone_index = rel_bone if rel_bone != 65535 else -1
+                rb.group = group_id
+                rb.collision_mask = no_coll_mask
+                rb.shape_type = shape_type
+                rb.size = shape_size
+                # PMD剛体位置は関連ボーンからの相対オフセット(ローカル座標)のため、
+                # PMX規格準拠のワールド絶対座標に変換
+                if rel_bone != 65535 and rel_bone < len(model.bones):
+                    b_loc = model.bones[rel_bone].location
+                    rb.position = [b_loc[0] + shape_pos[0], b_loc[1] + shape_pos[1], b_loc[2] + shape_pos[2]]
+                else:
+                    rb.position = shape_pos
+                rb.rotation = shape_rot
+                rb.mass = mass
+                rb.linear_damping = lin_damp
+                rb.angular_damping = ang_damp
+                rb.restitution = restitution
+                rb.friction = friction
+                rb.physics_mode = physics_mode
+                model.rigid_bodies.append(rb)
+
+        # ジョイントデータ (Joint)
+        joint_count_buf = f.read(4)
+        if len(joint_count_buf) == 4:
+            joint_count = struct.unpack('<I', joint_count_buf)[0]
+            for _ in range(joint_count):
+                j_raw = f.read(124)
+                if len(j_raw) < 124:
+                    break
+                j_name = _decode_cjk(j_raw[:20])
+                rb_a, rb_b = struct.unpack('<2I', j_raw[20:28])
+                j_pos = list(struct.unpack('<3f', j_raw[28:40]))
+                j_rot = list(struct.unpack('<3f', j_raw[40:52]))
+                lin_min = list(struct.unpack('<3f', j_raw[52:64]))
+                lin_max = list(struct.unpack('<3f', j_raw[64:76]))
+                ang_min = list(struct.unpack('<3f', j_raw[76:88]))
+                ang_max = list(struct.unpack('<3f', j_raw[88:100]))
+                spring_lin = list(struct.unpack('<3f', j_raw[100:112]))
+                spring_ang = list(struct.unpack('<3f', j_raw[112:124]))
+
+                joint = pmx.Joint()
+                joint.name = j_name
+                joint.name_e = j_name
+                joint.rigid_body_a = rb_a
+                joint.rigid_body_b = rb_b
+                joint.position = j_pos
+                joint.rotation = j_rot
+                joint.linear_limit_min = lin_min
+                joint.linear_limit_max = lin_max
+                joint.angular_limit_min = ang_min
+                joint.angular_limit_max = ang_max
+                joint.linear_spring = spring_lin
+                joint.angular_spring = spring_ang
+                model.joints.append(joint)
 
     return model

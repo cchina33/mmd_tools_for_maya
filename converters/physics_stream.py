@@ -2,7 +2,7 @@
 """
 MMD Tools for Maya - リアルタイム3D物理ビューア同期ストリーミングモジュール
 
-新3D物理ビューア (MmdPhysicsViewer.exe) とプロセス間通信 (標準入出力 JSON Lines) を行い、
+新3D物理ビューア (PhysicsSimulationBakeViewer.exe) とプロセス間通信 (標準入出力 JSON Lines) を行い、
 物理演算結果の揺れもの回転モーションをMayaへリアルタイムに同期・ベイクします。
 """
 
@@ -28,24 +28,88 @@ except Exception:
     import vmdpaimaya
 
 
-def get_viewer_executable_path():
-    """新3D物理ビューアの実行ファイルパスを取得"""
-    plugin_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    candidates = [
-        os.path.join(plugin_dir, "physics_bake_cs", "bin", "Release", "net8.0-windows", "MmdPhysicsViewer.exe"),
-        os.path.join(plugin_dir, "physics_bake_cs", "bin", "Debug", "net8.0-windows", "MmdPhysicsViewer.exe"),
+import shutil
+
+
+def unblock_file(filepath):
+    """WindowsのZone.Identifier代替データストリームを解除してセキュリティソフトの警告を防止"""
+    if sys.platform == 'win32' and filepath and os.path.exists(filepath):
+        zone_stream = filepath + ":Zone.Identifier"
+        try:
+            if os.path.exists(zone_stream):
+                os.remove(zone_stream)
+        except Exception:
+            pass
+
+
+def get_dotnet_executable():
+    """システム上の dotnet コマンドパスを取得"""
+    dotnet_path = shutil.which("dotnet")
+    if dotnet_path:
+        return dotnet_path
+    common_paths = [
+        os.path.expandvars(r"%ProgramFiles%\dotnet\dotnet.exe"),
+        os.path.expandvars(r"%ProgramFiles(x86)%\dotnet\dotnet.exe"),
     ]
-    for p in candidates:
+    for p in common_paths:
         if os.path.isfile(p):
             return p
-    return candidates[0]
+    return None
+
+
+def get_viewer_executable_path(bullet_version="2.75"):
+    """新3D物理ビューアの実行ファイルパスを取得 (バージョン別exe対応)"""
+    plugin_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    b_ver = str(bullet_version) if bullet_version else "2.75"
+    if "2.83" in b_ver:
+        target_names = [
+            "PhysicsSimulationBakeViewer_283.exe",
+            "PhysicsSimulationBakeViewer.exe",
+        ]
+    else:
+        target_names = [
+            "PhysicsSimulationBakeViewer_275.exe",
+            "PhysicsSimulationBakeViewer.exe",
+        ]
+
+    for name in target_names:
+        for cfg in ["Release", "Debug"]:
+            candidate = os.path.join(plugin_dir, "physics_bake_cs", "bin", cfg, "net8.0-windows", name)
+            if os.path.isfile(candidate):
+                return candidate
+
+    return os.path.join(plugin_dir, "physics_bake_cs", "bin", "Release", "net8.0-windows", target_names[0])
+
+
+def get_viewer_assembly_path(bullet_version="2.75"):
+    """新3D物理ビューアのDLLアセンブリパスを取得 (バージョン別dll対応)"""
+    plugin_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    b_ver = str(bullet_version) if bullet_version else "2.75"
+    if "2.83" in b_ver:
+        target_names = [
+            "PhysicsSimulationBakeViewer_283.dll",
+            "PhysicsSimulationBakeViewer.dll",
+        ]
+    else:
+        target_names = [
+            "PhysicsSimulationBakeViewer_275.dll",
+            "PhysicsSimulationBakeViewer.dll",
+        ]
+
+    for name in target_names:
+        for cfg in ["Release", "Debug"]:
+            candidate = os.path.join(plugin_dir, "physics_bake_cs", "bin", cfg, "net8.0-windows", name)
+            if os.path.isfile(candidate):
+                return candidate
+
+    return os.path.join(plugin_dir, "physics_bake_cs", "bin", "Release", "net8.0-windows", target_names[0])
 
 
 class PhysicsStreamingBaker(QObject):
     """
     3D物理ビューアとリアルタイム同期しながらMayaにキーフレームを書き込むクラス
     """
-    def __init__(self, pmx_path, vmd_path, target_model=None, scale=8.0, lookahead=16, warmup=0.0, out_vmd=None, frame_offset=0, start_frame=None, end_frame=None, log_dialog=None):
+    def __init__(self, pmx_path, vmd_path, target_model=None, scale=8.0, lookahead=16, warmup=0.0, out_vmd=None, frame_offset=0, start_frame=None, end_frame=None, substep=120, bullet_version="2.75", log_dialog=None):
         super(PhysicsStreamingBaker, self).__init__()
         self.pmx_path = pmx_path
         self.vmd_path = vmd_path
@@ -57,6 +121,8 @@ class PhysicsStreamingBaker(QObject):
         self.frame_offset = int(frame_offset)
         self.start_frame = int(start_frame) if start_frame is not None else None
         self.end_frame = int(end_frame) if end_frame is not None else None
+        self.substep = int(substep) if substep is not None else 120
+        self.bullet_version = str(bullet_version) if bullet_version else "2.75"
         self.log_dialog = log_dialog
 
         self.process = None
@@ -74,7 +140,7 @@ class PhysicsStreamingBaker(QObject):
 
     def run(self):
         """ストリーミングベイク処理の実行"""
-        exe_path = get_viewer_executable_path()
+        exe_path = get_viewer_executable_path(self.bullet_version)
         if not os.path.isfile(exe_path):
             msg = f"物理ビューアの実行ファイルが見つかりません:\n{exe_path}\n\n先に physics_bake_cs をビルドしてください。"
             if self.log_dialog:
@@ -103,6 +169,7 @@ class PhysicsStreamingBaker(QObject):
             self.log_dialog.append_log(f"PMXファイル: {self.pmx_path}\n")
             self.log_dialog.append_log(f"VMDファイル: {self.vmd_path}\n")
             self.log_dialog.append_log(f"対象モデル: {self.target_model or 'シーン内全域'}\n")
+            self.log_dialog.append_log(f"Bulletバージョン: {self.bullet_version}\n")
             self.log_dialog.append_log(f"先行フレーム数: {self.lookahead}\n")
             self.log_dialog.append_log(f"初期安定化時間: {self.warmup} 秒\n")
             if self.frame_offset != 0:
@@ -123,7 +190,12 @@ class PhysicsStreamingBaker(QObject):
     def _execute_stream(self, exe_path):
         """プロセス起動および通信イベントループ"""
         self.process = QProcess()
+        working_dir = os.path.dirname(os.path.abspath(exe_path))
+        self.process.setWorkingDirectory(working_dir)
+
         env = QProcessEnvironment.systemEnvironment()
+        curr_path = env.value("PATH", "")
+        env.insert("PATH", f"{working_dir};{curr_path}")
         self.process.setProcessEnvironment(env)
 
         args = [
@@ -138,11 +210,35 @@ class PhysicsStreamingBaker(QObject):
             args.extend(["--end-frame", str(self.end_frame)])
         if self.out_vmd:
             args.extend(["--out-vmd", str(self.out_vmd)])
+        if self.substep:
+            args.extend(["--substep", str(self.substep)])
 
-        if self.log_dialog:
-            self.log_dialog.append_log("新3D物理ビューアを起動中...\n")
+        # 実行ファイルのブロック解除
+        unblock_file(exe_path)
+        dll_path = get_viewer_assembly_path(self.bullet_version)
+        if os.path.isfile(dll_path):
+            unblock_file(dll_path)
 
-        self.process.start(exe_path, args)
+        # WPF GUIウィンドウを最前面かつ正常に生成するため、ネイティブexeの直接起動を最優先
+        if os.path.isfile(exe_path):
+            launch_program = exe_path
+            launch_args = args
+            if self.log_dialog:
+                self.log_dialog.append_log(f"新3D物理ビューアを起動中: {os.path.basename(exe_path)} (作業フォルダ: {working_dir})...\n")
+        else:
+            dotnet_exe = get_dotnet_executable()
+            if dotnet_exe and os.path.isfile(dll_path):
+                launch_program = dotnet_exe
+                launch_args = [dll_path] + args
+                if self.log_dialog:
+                    self.log_dialog.append_log("新3D物理ビューアを起動中 (dotnetホスト経由)...\n")
+            else:
+                launch_program = exe_path
+                launch_args = args
+                if self.log_dialog:
+                    self.log_dialog.append_log("新3D物理ビューアを起動中...\n")
+
+        self.process.start(launch_program, launch_args)
         if not self.process.waitForStarted(8000):
             err = self.process.errorString()
             if self.log_dialog:
@@ -152,12 +248,17 @@ class PhysicsStreamingBaker(QObject):
         if self.log_dialog:
             self.log_dialog.append_log("新3D物理ビューアが起動しました。物理ストリーミング受信中...\n\n")
 
-        # イベントループで標準出力を取得
+        # イベントループで標準出力および標準エラー出力を取得
         line_buffer = ""
         while self.process.state() == QProcess.Running or self.process.bytesAvailable() > 0:
             if self.log_dialog and self.log_dialog.check_cancelled():
                 self._cancel_and_terminate()
                 return False
+
+            # 標準エラー出力のリアルタイム監視
+            err_data = self.process.readAllStandardError().data().decode("utf-8", errors="replace")
+            if err_data.strip() and self.log_dialog:
+                self.log_dialog.append_log(f"[ビューア出力] {err_data.strip()}\n")
 
             has_data = False
             while self.process.bytesAvailable() > 0:
@@ -178,18 +279,44 @@ class PhysicsStreamingBaker(QObject):
 
             QApplication.processEvents()
 
-        # 残りのバッファを処理
+        # 残りの標準出力・エラー出力を処理
+        remaining_err = self.process.readAllStandardError().data().decode("utf-8", errors="replace")
+        if remaining_err.strip() and self.log_dialog:
+            self.log_dialog.append_log(f"[ビューア出力] {remaining_err.strip()}\n")
+
         if line_buffer.strip():
             self._handle_message(line_buffer.strip())
 
-        # アニメーションカーブの補間をスプラインに設定
+        if not self.is_finished and not self.is_aborted:
+            exit_code = self.process.exitCode()
+            if exit_code != 0:
+                if self.log_dialog:
+                    self.log_dialog.append_log(f"\n[警告] ビューアプロセスがコード {exit_code} で終了しました。\n")
+
+        # アニメーションカーブの補間をautoに設定（オーバーシュートを抑えた滑らかな補間）
         for j_node in self.valid_joints.values():
             try:
-                mc.keyTangent(j_node, edit=True, inTangentType='spline', outTangentType='spline')
+                mc.keyTangent(j_node, edit=True, inTangentType='auto', outTangentType='auto')
             except Exception:
                 pass
 
-        if self.log_dialog:
+        # 物理演算終了時に剛体・ジョイント可視化グループを非表示化
+        vis_patterns = [
+            "*_RigidBody_Joint_Visualizers*",
+            "*_RigidBody_Visualizers*",
+            "*_Joint_Visualizers*",
+            "MMD_RigidBody_Joint_Visualizers*",
+            "MMD_RigidBody_Visualizers*",
+            "MMD_Joint_Visualizers*"
+        ]
+        for pat in vis_patterns:
+            for v_node in mc.ls(pat, type=["transform", "joint"]) or []:
+                try:
+                    mc.setAttr(f"{v_node}.visibility", False)
+                except Exception:
+                    pass
+
+        if self.log_dialog and self.is_finished:
             self.log_dialog.append_log("\nリアルタイム物理ベイクが正常に完了しました。\n")
 
         return True
@@ -368,7 +495,7 @@ class PhysicsStreamingBaker(QObject):
                 self.process.kill()
 
 
-def stream_bake_physics(pmx_path, vmd_path, target_model=None, scale=8.0, lookahead=16, warmup=0.0, out_vmd=None, frame_offset=0, start_frame=None, end_frame=None, log_dialog=None):
+def stream_bake_physics(pmx_path, vmd_path, target_model=None, scale=8.0, lookahead=16, warmup=0.0, out_vmd=None, frame_offset=0, start_frame=None, end_frame=None, substep=120, bullet_version="2.75", log_dialog=None):
     """
     外部から呼び出し可能なエントリーポイント関数
     """
@@ -383,6 +510,8 @@ def stream_bake_physics(pmx_path, vmd_path, target_model=None, scale=8.0, lookah
         frame_offset=frame_offset,
         start_frame=start_frame,
         end_frame=end_frame,
+        substep=substep,
+        bullet_version=bullet_version,
         log_dialog=log_dialog
     )
     return baker.run()

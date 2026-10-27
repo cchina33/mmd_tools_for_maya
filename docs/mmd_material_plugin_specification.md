@@ -1,5 +1,8 @@
 # MMDオリジナルマテリアルプラグイン (mmd_material) 技術仕様書
 
+> [!NOTE]
+> 本詳細技術仕様書は、AI によって作成・整理されたドキュメントです。内容はソースコードおよび開発記録をもとに記述していますが、実際の動作と細部が異なる場合があります。
+
 ## 概要
 
 `mmd_material_plugin` は、Autodesk Maya の **Viewport 2.0**（DirectX 11 / OpenGL）環境下において、MikuMikuDance (MMD) 本家のシェーディングモデルおよび質感表現をリアルタイムに再現するための C++ ネイティブプラグイン（`mmd_material.mll`）です。
@@ -39,7 +42,7 @@ mmd_material_plugin/
   - 分類 (Classification): `drawdb/shader/surface/mmdMaterial:shader/surface:rendernode/MmdMat/Material`
   - ハイパーシェード上で標準サーフェスシェーダーとして認識され、シェーディンググループ（`shadingEngine`）の `surfaceShader` アトリビュートへ直接接続可能です。
   - **Hypershade ノード作成分類**:
-    `rendernode/MmdMat/Material` を指定することで、Pencil+ 4 等の商用プラグインと同様に Hypershade のノード作成 (Create) パネルに独自セクション `MmdMat` > `Material` が自動生成され、ユーザーが手動で一覧から `mmdMaterial` を作成・配線できます。
+    `rendernode/MmdMat/Material` を指定することで、商用プラグインと同様に Hypershade のノード作成 (Create) パネルに独自セクション `MmdMat` > `Material` が自動生成され、ユーザーが手動で一覧から `mmdMaterial` を作成・配線できます。
 
 - **`MMDShaderOverride` (`MHWRender::MPxSurfaceShadingNodeOverride`)**:
   - Viewport 2.0 のシェーディングパイプラインとノードアトリビュートを直結するオーバーライドクラス。
@@ -52,36 +55,36 @@ mmd_material_plugin/
 
 `mmdMaterial` ノードが保持するアトリビュート一覧です。MMDのPMXマテリアル仕様と1対1で対応しています。
 
-| アトリビュート名 | 内部型 | デフォルト値 | MMD対応パラメータ | 役割・機能説明 |
-| :--- | :--- | :--- | :--- | :--- |
-| `color` | Float3 (Color) | (0.8, 0.8, 0.8) | Diffuse (RGB) | 基本表面色。Maya標準の `file.outColor` と直接接続可能。 |
-| `transparency` | Float3 (Color) | (0.0, 0.0, 0.0) | 1.0 - Alpha | 透過度。Maya標準仕様に準拠（黒=不透明、白=完全透明）。 |
-| `diffuse` | Float | 0.8 | - | 拡散反射係数。 |
-| `diffuseColor` | Float3 (Color) | (0.8, 0.8, 0.8) | Diffuse (RGB) | PMX固有の拡散反射色データ保持用。 |
-| `diffuseAlpha` | Float | 1.0 | Alpha | PMX固有の不透明度（0.0〜1.0）。 |
-| `specularColor` | Float3 (Color) | (0.0, 0.0, 0.0) | Specular (RGB) | 鏡面反射色（ハイライト色）。 |
-| `cosinePower` | Float | 5.0 | Specular Power | ハイライトの鋭さ（Blinn-Phong係数）。 |
-| `specularPower` | Float | 5.0 | Specular Power | PMX固有の光沢強度データ保持用。 |
-| `ambientColor` | Float3 (Color) | (0.4, 0.4, 0.4) | Ambient (RGB) | 環境光（影部分の底上げ色）。 |
-| `incandescence` | Float3 (Color) | (0.0, 0.0, 0.0) | - | 自己発光（エミッシブ）。暗所での自発光表現用。 |
-| `normalCamera` | Float3 (Vector) | (0.0, 0.0, 1.0) | - | カメラ空間法線。バンプマップや法線テクスチャ接続用。 |
-| `sphereMode` | Enum | 0 (None) | Sphere Mode | スフィアマップの適用方法。<br>・0: 無効 (None)<br>・1: 乗算 (Multiply / .sph)<br>・2: 加算 (Additive / .spa)<br>・3: サブテクスチャ (SubTexture) |
-| `toonMode` | Enum | 1 (MMD Standard) | Toon Mode | セル影（Toon）の描画モード。<br>・0: 無効 (None)<br>・1: MMD標準セル影 (Standard)<br>・2: 高精細セル影 (Smooth) |
-| `edgeEnable` | Boolean | True | Edge Flag | 輪郭線（エッジ）の描画フラグ。 |
-| `edgeColor` | Float4 (Color) | (0.0, 0.0, 0.0, 1.0) | Edge Color (RGBA)| 輪郭線の描画色および不透明度。 |
-| `edgeSize` | Float | 1.0 | Edge Size | 輪郭線の太さ係数。 |
-| `outColor` | Float3 (Color) | - | - | シェーディング結果の出力カラー。 |
-| `outTransparency` | Float3 (Color) | - | - | シェーディング結果の出力透過度。 |
+| アトリビュート名  | 内部型          | デフォルト値         | MMD対応パラメータ | 役割・機能説明                                                                                                                                   |
+| :---------------- | :-------------- | :------------------- | :---------------- | :----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `color`           | Float3 (Color)  | (0.8, 0.8, 0.8)      | Diffuse (RGB)     | 基本表面色。Maya標準の `file.outColor` と直接接続可能。                                                                                          |
+| `transparency`    | Float3 (Color)  | (0.0, 0.0, 0.0)      | 1.0 - Alpha       | 透過度。Maya標準仕様に準拠（黒=不透明、白=透明）。                                                                                               |
+| `diffuse`         | Float           | 0.8                  | -                 | 拡散反射係数。                                                                                                                                   |
+| `diffuseColor`    | Float3 (Color)  | (0.8, 0.8, 0.8)      | Diffuse (RGB)     | PMX固有の拡散反射色データ保持用。                                                                                                                |
+| `diffuseAlpha`    | Float           | 1.0                  | Alpha             | PMX固有の不透明度（0.0〜1.0）。                                                                                                                  |
+| `specularColor`   | Float3 (Color)  | (0.0, 0.0, 0.0)      | Specular (RGB)    | 鏡面反射色（ハイライト色）。                                                                                                                     |
+| `cosinePower`     | Float           | 5.0                  | Specular Power    | ハイライトの鋭さ（Blinn-Phong係数）。                                                                                                            |
+| `specularPower`   | Float           | 5.0                  | Specular Power    | PMX固有の光沢強度データ保持用。                                                                                                                  |
+| `ambientColor`    | Float3 (Color)  | (0.4, 0.4, 0.4)      | Ambient (RGB)     | 環境光（影部分の底上げ色）。                                                                                                                     |
+| `incandescence`   | Float3 (Color)  | (0.0, 0.0, 0.0)      | -                 | 自己発光（エミッシブ）。暗所での自発光表現用。                                                                                                   |
+| `normalCamera`    | Float3 (Vector) | (0.0, 0.0, 1.0)      | -                 | カメラ空間法線。バンプマップや法線テクスチャ接続用。                                                                                             |
+| `sphereMode`      | Enum            | 0 (None)             | Sphere Mode       | スフィアマップの適用方法。<br>・0: 無効 (None)<br>・1: 乗算 (Multiply / .sph)<br>・2: 加算 (Additive / .spa)<br>・3: サブテクスチャ (SubTexture) |
+| `toonMode`        | Enum            | 1 (MMD Standard)     | Toon Mode         | セル影（Toon）の描画モード。<br>・0: 無効 (None)<br>・1: MMD標準セル影 (Standard)<br>・2: 高精細セル影 (Smooth)                                  |
+| `edgeEnable`      | Boolean         | True                 | Edge Flag         | 輪郭線（エッジ）の描画フラグ。                                                                                                                   |
+| `edgeColor`       | Float4 (Color)  | (0.0, 0.0, 0.0, 1.0) | Edge Color (RGBA) | 輪郭線の描画色および不透明度。                                                                                                                   |
+| `edgeSize`        | Float           | 1.0                  | Edge Size         | 輪郭線の太さ係数。                                                                                                                               |
+| `outColor`        | Float3 (Color)  | -                    | -                 | シェーディング結果の出力カラー。                                                                                                                 |
+| `outTransparency` | Float3 (Color)  | -                    | -                 | シェーディング結果の出力透過度。                                                                                                                 |
 
 ---
 
 ## Viewport 2.0 連携とテクスチャ処理設計
 
-### 日本語ファイルパスおよび文字化けの完全防止
+### 日本語ファイルパスおよび文字化けの防止
 
-過去のカスタムシェーダープラグインでは、C++ 内部で独自にテクスチャファイルを読み込む構造に起因して、日本語パス（例: `古明地こいし/tex/...`）を含むモデルでテクスチャが白色にフォールバックする問題が発生していました。
+過去のカスタムシェーダープラグインでは、C++ 内部で独自にテクスチャファイルを読み込む構造に起因して、日本語パス（例: `モデル/tex/...`）を含むモデルでテクスチャが白色にフォールバックする問題が発生していました。
 
-本プラグインでは、テクスチャのロードとデコードを **Maya 標準の `file` ノード** に完全に委譲するアーキテクチャを採用しています。
+本プラグインでは、テクスチャのロードとデコードを **Maya 標準の `file` ノード** に全面的に委譲するアーキテクチャを採用しています。
 
 - Maya 標準のテクスチャキャッシュ機構（OIIO / Maya Texture Cache）を経由してGPUへテクスチャが転送されます。
 - 日本語・中国語・マルチバイト文字を含むフォルダパスでも文字化けやファイル脱落が一切発生せず、極めて高速かつ堅牢な描画を実現しています。
@@ -93,12 +96,41 @@ MMD特有の金属・光沢・ハイライト表現であるスフィアマッ�
 $$
 u = 0.5 + 0.5 \times N_x
 $$
+
 $$
 v = 0.5 - 0.5 \times N_y
 $$
 
 - **乗算スフィア (`.sph` / Mode 1)**: 基本テクスチャカラーに対してスフィアテクスチャ色を乗算（服の陰影や環境遮蔽表現）。
 - **加算スフィア (`.spa` / Mode 2)**: 基本テクスチャカラーに対してスフィアテクスチャ色を加算（髪の天使の輪や金属の反射ハイライト）。
+
+---
+
+## トゥーン受光・ライティング動的連動と地面影
+
+### トゥーン受光のライト動的追従ネットワーク
+
+従来の固定ライトベクトル方式では、シーンのライトを回転・移動させてもモデル表面のセル影境界が静止したままになる課題がありました。
+本システムでは、平行光源（`directionalLight`）のワールド行列（`worldMatrix[0]`）から前方方向ベクトルを動的に抽出し、`vectorProduct` ノードを介して法線ベクトルとのリアルタイム内積計算を行うネットワークを構築しています。
+
+- シーン内のライトを旋回させた際、MMD本家と同様に陰影境界がリアルタイムに滑らかに追従します。
+- ライトノードが存在しない場合は、標準の初期到来ベクトル（$[0.35, 0.75, 0.55]$）へ自動的にフォールバックします。
+
+### 2重受光による黒沈み防止
+
+Mayaのサーフェスシェーダー標準の受光計算と Toon テクスチャによる乗算が重複すると、明部・中間調が過剰に暗く沈む問題が生じます。
+これを解消するため、拡散反射係数（`diffuse`）を `0.65`、基本カラー強度を `0.85` 付近にバランス調整し、MMD特有の「明るく濁りのないアニメ調発色」を損なわずにセル境界の陰影コントラストを維持します。
+
+### MMD標準地面影（シャドウキャッチャー平面）仕様
+
+MMD本家の足元影を再現するため、モデル直下に専用の地面影プレーン（`mmd_ground_shadow_grp` / `mmd_ground_shadow_mesh`）を自動生成します。
+
+- **片面描画（Single Sided）とバックフェイスカリング**:
+  地面影メッシュのアトリビュート `doubleSided` をオフ（`False`）に設定し、上面からのカメラアングル時のみ影を描画します。
+- **煽りアングル（下からの見上げ）透過対応**:
+  カメラが地面の下からモデルを見上げるローアングル・煽り構図において、影平面が手前を遮蔽してモデルが見えなくなる現象を防止します。下側からの視点ではポリゴンがカリングされ、モデルの足元・全身がクリアに視認できます。
+- **一括クリーンアップ連動**:
+  シーンの全削除実行時には、`mmd_ground_shadow_grp` ノードも検出・削除対象に含まれ、シーン内に孤立した影プレーンが残留しません。
 
 ---
 

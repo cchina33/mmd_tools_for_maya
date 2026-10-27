@@ -530,20 +530,31 @@ def ensure_mmd_lighting(shadow_mode=1):
 
     # フォールバック: 直接 Maya コマンドで MMD 標準ライトを作成
     try:
-        dir_shape = cmds.directionalLight(name="mmd_directional_lightShape", intensity=0.85)
-        dir_transform = cmds.listRelatives(dir_shape, parent=True)[0]
-        cmds.rename(dir_transform, "mmd_directional_light")
-        dir_light = "mmd_directional_light"
-        cmds.setAttr(dir_light + ".rotate", -54.74, 45.0, 0.0, type="double3")
-        cmds.setAttr(dir_light + ".color", 0.6039, 0.6039, 0.6039, type="double3")
+        dir_shape_raw = cmds.directionalLight(intensity=1.0)
+        dir_transform_nodes = cmds.listRelatives(dir_shape_raw, parent=True, fullPath=True) or [dir_shape_raw]
+        dir_light = cmds.rename(dir_transform_nodes[0], "mmd_directional_light")
+        actual_dir_shapes = cmds.listRelatives(dir_light, shapes=True, fullPath=True) or []
+        dir_shape = actual_dir_shapes[0] if actual_dir_shapes else dir_shape_raw
 
-        # アンビエントライト
-        amb_shape = cmds.ambientLight(name="mmd_ambient_lightShape", intensity=0.35)
-        amb_transform = cmds.listRelatives(amb_shape, parent=True)[0]
-        cmds.rename(amb_transform, "mmd_ambient_light")
-        amb_light = "mmd_ambient_light"
-        cmds.setAttr(amb_light + ".ambientShade", 0.15)
-        cmds.setAttr(amb_light + ".color", 0.50, 0.50, 0.50, type="double3")
+        # MMD公式仕様準拠: 正面をふんわり照らし、床影を左奥へ伸ばす自然な角度 [-30.0, 30.0, 0.0]
+        cmds.setAttr(f"{dir_light}.rotate", -30.0, 30.0, 0.0, type="double3")
+        cmds.setAttr(f"{dir_shape}.color", 0.6039, 0.6039, 0.6039, type="double3")
+        cmds.setAttr(f"{dir_shape}.intensity", 1.0)
+        cmds.setAttr(f"{dir_light}.translateY", 200.0)
+        cmds.setAttr(f"{dir_light}.scale", 5.0, 5.0, 5.0)
+
+        # アンビエントライト (MMD材質Ambient=0.7準拠: 強度0.65、Color 0.70に設定して黒沈みを解消)
+        amb_shape_raw = cmds.ambientLight(intensity=0.65)
+        amb_transform_nodes = cmds.listRelatives(amb_shape_raw, parent=True, fullPath=True) or [amb_shape_raw]
+        amb_light = cmds.rename(amb_transform_nodes[0], "mmd_ambient_light")
+        actual_amb_shapes = cmds.listRelatives(amb_light, shapes=True, fullPath=True) or []
+        amb_shape = actual_amb_shapes[0] if actual_amb_shapes else amb_shape_raw
+
+        cmds.setAttr(f"{amb_shape}.ambientShade", 0.05)
+        cmds.setAttr(f"{amb_shape}.color", 0.70, 0.70, 0.70, type="double3")
+        cmds.setAttr(f"{amb_shape}.intensity", 0.65)
+        cmds.setAttr(f"{amb_light}.translateY", 200.0)
+        cmds.setAttr(f"{amb_light}.scale", 5.0, 5.0, 5.0)
 
         light_grp = cmds.group(dir_light, amb_light, name="mmd_lighting_grp")
 

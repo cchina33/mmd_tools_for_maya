@@ -1,6 +1,6 @@
 # MMDオリジナルマテリアル プラグイン (.mll)
 
-Maya Viewport 2.0 (DirectX 11) 上で、MikuMikuDance (MMD) 本家のシェーディングモデルを完全再現するカスタムマテリアルプラグインです。
+Maya Viewport 2.0 (DirectX 11) 上で、MikuMikuDance (MMD) 本家のシェーディングモデルを忠実再現するカスタムマテリアルプラグインです。
 
 ---
 

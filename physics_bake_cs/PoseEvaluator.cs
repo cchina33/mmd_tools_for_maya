@@ -5,7 +5,7 @@ using BulletSharp.Math;
 using Matrix = BulletSharp.Math.Matrix;
 using MmdPhysicsBridge;
 
-namespace MmdPhysicsViewer
+namespace PhysicsSimulationBakeViewer
 {
     // 各ボーンのFK・付与親・足IKおよび物理結果の評価とクォータニオン逆算を行うクラス
     public class PoseEvaluator
@@ -18,6 +18,7 @@ namespace MmdPhysicsViewer
         private readonly List<Matrix> _cachedLocalMatrices;
         private readonly List<int>[] _children;
         private readonly HashSet<int> _physicsBoneIndices;
+        private readonly string?[] _boneToVmdTrackName;
 
         public IReadOnlyList<Matrix> BoneWorldMatrices => _boneWorldMatrices;
         public IReadOnlySet<int> PhysicsBoneIndices => _physicsBoneIndices;
@@ -32,12 +33,14 @@ namespace MmdPhysicsViewer
             _boneWorldMatrices = new List<Matrix>(n);
             _cachedLocalMatrices = new List<Matrix>(n);
             _children = new List<int>[n];
+            _boneToVmdTrackName = new string?[n];
 
             for (int i = 0; i < n; i++)
             {
                 _boneWorldMatrices.Add(Matrix.Identity);
                 _cachedLocalMatrices.Add(Matrix.Identity);
                 _children[i] = new List<int>();
+                _boneToVmdTrackName[i] = ResolveVmdTrackName(_pmx.Bones[i]);
             }
 
             for (int i = 0; i < n; i++)
@@ -98,7 +101,8 @@ namespace MmdPhysicsViewer
 
             for (int i = 0; i < n; i++)
             {
-                var (trans, quat) = _vmd.SampleBone(bones[i].Name, frame);
+                string trackName = _boneToVmdTrackName[i] ?? bones[i].Name;
+                var (trans, quat) = _vmd.SampleBone(trackName, frame);
                 Matrix r = Matrix.RotationQuaternion(new BulletSharp.Math.Quaternion(quat[0], quat[1], quat[2], quat[3]));
                 r.Origin = new Vector3(0, 0, 0);
                 ownRot[i] = r;
@@ -178,19 +182,50 @@ namespace MmdPhysicsViewer
             for (int i = 0; i < n; i++) ComputeLocal(i);
             for (int i = 0; i < n; i++) ComputeWorld(i);
 
-            // 主足IKの計算 (VMDで有効な場合)
+            // IKボーンの分類抽出（足IK、つま先IK、その他IK: 日英中対応）
+            var legIkIndices = new List<int>();
+            var toeIkIndices = new List<int>();
+            var otherIkIndices = new List<int>();
+
             for (int i = 0; i < n; i++)
             {
-                var ikBone = bones[i];
-                if (ikBone.Name != "左足ＩＫ" && ikBone.Name != "右足ＩＫ") continue;
-                if (!_vmd.IsIkEnabled(ikBone.Name, frame)) continue;
+                var b = bones[i];
+                if ((b.Flags & 0x0020) == 0 && b.IkData == null) continue;
+                string nameRaw = ((b.Name ?? "") + " " + (b.NameEnglish ?? "")).ToLowerInvariant().Replace('ｉ', 'i').Replace('ｋ', 'k');
+
+                bool isToe = nameRaw.Contains("つま先")
+                    || nameRaw.Contains("toe")
+                    || nameRaw.Contains("趾")
+                    || nameRaw.Contains("足尖");
+
+                bool isLeg = (nameRaw.Contains("足") || nameRaw.Contains("腿") || nameRaw.Contains("脚") || nameRaw.Contains("leg")) && !isToe;
+
+                if (isToe)
+                {
+                    toeIkIndices.Add(i);
+                }
+                else if (isLeg)
+                {
+                    legIkIndices.Add(i);
+                }
+                else
+                {
+                    otherIkIndices.Add(i);
+                }
+            }
+
+            void SolveIk(int ikBoneIdx)
+            {
+                var ikBone = bones[ikBoneIdx];
+                string vmdIkName = _boneToVmdTrackName[ikBoneIdx] ?? ikBone.Name;
+                if (!_vmd.IsIkEnabled(vmdIkName, frame) && !_vmd.IsIkEnabled(ikBone.Name, frame)) return;
 
                 var ik = ikBone.IkData;
-                if (ik == null || ik.Links.Count == 0) continue;
+                if (ik == null || ik.Links.Count == 0) return;
                 int targetIdx = ik.TargetBoneIndex;
-                if (targetIdx < 0 || targetIdx >= n) continue;
+                if (targetIdx < 0 || targetIdx >= n) return;
 
-                Vector3 targetPos = _boneWorldMatrices[i].Origin;
+                Vector3 targetPos = _boneWorldMatrices[ikBoneIdx].Origin;
                 float unitAngle = ik.LimitAngle > 0 ? ik.LimitAngle : MathF.PI;
                 int loops = Math.Clamp(ik.LoopCount, 1, 64);
 
@@ -217,7 +252,7 @@ namespace MmdPhysicsViewer
                             float cross = le.Y * lt.Z - le.Z * lt.Y;
                             float dot = le.Y * lt.Y + le.Z * lt.Z;
                             float delta = Math.Clamp(MathF.Atan2(cross, dot), -unitAngle, unitAngle);
-                            float cur = MathF.Atan2(localRot[li].M23, localRot[li].M22);
+                            float cur = MathF.Atan2(localRot[li].M23, localRot[li].M33);
                             float lo = Math.Min(link.MinAngle[0], link.MaxAngle[0]);
                             float hi = Math.Max(link.MinAngle[0], link.MaxAngle[0]);
                             localRot[li] = RotX(Math.Clamp(cur + delta, lo, hi));
@@ -253,6 +288,24 @@ namespace MmdPhysicsViewer
                 }
             }
 
+            // 足IKの解法（ひざ・大腿の関節回転を解いて足首位置を合致）
+            foreach (int i in legIkIndices)
+            {
+                SolveIk(i);
+            }
+
+            // つま先IKの解法
+            foreach (int i in toeIkIndices)
+            {
+                SolveIk(i);
+            }
+
+            // その他IKの解法
+            foreach (int i in otherIkIndices)
+            {
+                SolveIk(i);
+            }
+
             Array.Clear(localDone);
             Array.Clear(worldDone);
             for (int i = 0; i < n; i++) ComputeLocal(i);
@@ -281,6 +334,25 @@ namespace MmdPhysicsViewer
                 _physics.UpdateKinematicBodies(boneWorldPositions, boneWorldRotations, bones);
             }
         }
+
+#if BULLET_275
+        // MMD本家仕様: 指定フレームのFKボーン姿勢へ動的剛体を再配置(Reseat)
+        public void ReseatDynamicBodiesToFk(int frame)
+        {
+            EvaluateFkAndSyncBodies(frame, resetAllBodies: false);
+            var bones = _pmx.Bones;
+            var boneWorldPositions = new Dictionary<string, float[]>(bones.Count);
+            var boneWorldRotations = new Dictionary<string, Matrix>(bones.Count);
+            for (int i = 0; i < bones.Count; i++)
+            {
+                var bone = bones[i];
+                var wp = _boneWorldMatrices[i].Origin;
+                boneWorldPositions[bone.Name] = new float[] { wp.X, wp.Y, wp.Z };
+                boneWorldRotations[bone.Name] = _boneWorldMatrices[i];
+            }
+            _physics.ReseatDynamicBodies(boneWorldPositions, boneWorldRotations, bones);
+        }
+#endif
 
         // 物理エンジンの計算結果をボーンへ書き戻す
         public void ApplyPhysicsToBones()
@@ -489,6 +561,115 @@ namespace MmdPhysicsViewer
         {
             float c = MathF.Cos(a), s = MathF.Sin(a);
             return MakeRot(c, s, 0, -s, c, 0, 0, 0, 1);
+        }
+
+        // ボーン名解決（日英中の同義語および全角半角正規化による照合）
+        private string? ResolveVmdTrackName(PmxBone bone)
+        {
+            if (_vmd.BoneTracks.Count == 0) return bone.Name;
+
+            // ローカル名での直接照合
+            if (!string.IsNullOrEmpty(bone.Name) && _vmd.BoneTracks.ContainsKey(bone.Name))
+            {
+                return bone.Name;
+            }
+
+            // 英語名での直接照合
+            if (!string.IsNullOrEmpty(bone.NameEnglish) && _vmd.BoneTracks.ContainsKey(bone.NameEnglish))
+            {
+                return bone.NameEnglish;
+            }
+
+            // 日英中の同義語エイリアス照合
+            var aliases = GetBoneAliases(bone.Name, bone.NameEnglish);
+            foreach (var alias in aliases)
+            {
+                if (_vmd.BoneTracks.ContainsKey(alias))
+                {
+                    return alias;
+                }
+            }
+
+            // 全角半角・大文字小文字を正規化した柔軟照合
+            string normLocal = NormalizeBoneName(bone.Name);
+            string normEn = NormalizeBoneName(bone.NameEnglish);
+            foreach (var trackKey in _vmd.BoneTracks.Keys)
+            {
+                string normTrack = NormalizeBoneName(trackKey);
+                if (normTrack == normLocal || (!string.IsNullOrEmpty(normEn) && normTrack == normEn))
+                {
+                    return trackKey;
+                }
+            }
+
+            return bone.Name;
+        }
+
+        private static string NormalizeBoneName(string? name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return "";
+            return name.Trim().ToLowerInvariant()
+                .Replace('ｉ', 'i')
+                .Replace('ｋ', 'k')
+                .Replace('＿', '_')
+                .Replace('　', ' ')
+                .Replace(" ", "");
+        }
+
+        private static readonly string[][] CommonBoneAliasGroups = new[]
+        {
+            new[] { "全ての親", "すべての親", "Root", "root", "master", "Parent of all", "所有父", "所有亲", "母骨", "全部亲", "根骨" },
+            new[] { "センター", "Center", "center", "中心" },
+            new[] { "グルーブ", "Groove", "groove", "凹槽" },
+            new[] { "上半身", "Upper Body", "upper body", "upper_body", "上半身" },
+            new[] { "上半身2", "Upper Body 2", "upper body 2", "upper_body_2", "上半身2" },
+            new[] { "下半身", "Lower Body", "lower body", "lower_body", "下半身" },
+            new[] { "首", "Neck", "neck", "颈", "脖子" },
+            new[] { "頭", "Head", "head", "头" },
+            new[] { "左肩", "Shoulder_L", "shoulder_l", "Left shoulder", "左肩" },
+            new[] { "右肩", "Shoulder_R", "shoulder_r", "Right shoulder", "右肩" },
+            new[] { "左腕", "Arm_L", "arm_l", "Left arm", "左臂", "左上臂" },
+            new[] { "右腕", "Arm_R", "arm_r", "Right arm", "右臂", "右上臂" },
+            new[] { "左ひじ", "左肘", "Elbow_L", "elbow_l", "Left elbow", "左手肘", "左小臂" },
+            new[] { "右ひじ", "右肘", "Elbow_R", "elbow_r", "Right elbow", "右手肘", "右小臂" },
+            new[] { "左手首", "Wrist_L", "wrist_l", "Left wrist", "左手腕", "左手" },
+            new[] { "右手首", "Wrist_R", "wrist_r", "Right wrist", "右手腕", "右手" },
+            new[] { "左足", "Leg_L", "leg_l", "Left leg", "左大腿", "左腿" },
+            new[] { "右足", "Leg_R", "leg_r", "Right leg", "右大腿", "右腿" },
+            new[] { "左ひざ", "左膝", "Knee_L", "knee_l", "Left knee", "左小腿", "左膝" },
+            new[] { "右ひざ", "右膝", "Knee_R", "knee_r", "Right knee", "右小腿", "右膝" },
+            new[] { "左足首", "Ankle_L", "ankle_l", "Left ankle", "左踝" },
+            new[] { "右足首", "Ankle_R", "ankle_r", "Right ankle", "右踝" },
+            new[] { "左足ＩＫ", "左足IK", "Leg_IK_L", "leg_ik_l", "Left leg IK", "左腿IK", "左脚IK" },
+            new[] { "右足ＩＫ", "右足IK", "Leg_IK_R", "leg_ik_r", "Right leg IK", "右腿IK", "右脚IK" },
+            new[] { "左つま先ＩＫ", "左つま先IK", "Toe_IK_L", "toe_ik_l", "Left toe IK", "左脚趾IK", "左足尖IK" },
+            new[] { "右つま先ＩＫ", "右つま先IK", "Toe_IK_R", "toe_ik_r", "Right toe IK", "右脚趾IK", "右足尖IK" },
+            new[] { "両目", "Eyes", "eyes", "双眼" },
+            new[] { "左目", "Eye_L", "eye_l", "Left eye", "左眼" },
+            new[] { "右目", "Eye_R", "eye_r", "Right eye", "右眼" },
+        };
+
+        private static IEnumerable<string> GetBoneAliases(string? name, string? nameEn)
+        {
+            string n1 = NormalizeBoneName(name);
+            string n2 = NormalizeBoneName(nameEn);
+
+            foreach (var group in CommonBoneAliasGroups)
+            {
+                bool matches = group.Any(g =>
+                {
+                    string ng = NormalizeBoneName(g);
+                    return ng == n1 || (!string.IsNullOrEmpty(n2) && ng == n2);
+                });
+
+                if (matches)
+                {
+                    foreach (var alias in group)
+                    {
+                        yield return alias;
+                    }
+                }
+            }
         }
     }
 }

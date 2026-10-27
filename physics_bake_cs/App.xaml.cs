@@ -2,13 +2,38 @@ using System;
 using System.IO;
 using System.Windows;
 
-namespace MmdPhysicsViewer
+namespace PhysicsSimulationBakeViewer
 {
     public partial class App : Application
     {
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
+
+            // カレントディレクトリを自身の実行ファイル配置フォルダに明示設定 (ネイティブDLLの探索を安定化)
+            try
+            {
+                Directory.SetCurrentDirectory(AppContext.BaseDirectory);
+            }
+            catch
+            {
+                // 設定失敗時は続行
+            }
+
+            // 未処理例外を標準エラー出力へ通知し、Maya側のログで捕捉可能にする
+            DispatcherUnhandledException += (s, args) =>
+            {
+                Console.Error.WriteLine($"[WPF UIスレッド例外] {args.Exception.Message}\n{args.Exception.StackTrace}");
+                Console.Error.Flush();
+            };
+            AppDomain.CurrentDomain.UnhandledException += (s, args) =>
+            {
+                if (args.ExceptionObject is Exception ex)
+                {
+                    Console.Error.WriteLine($"[未処理例外] {ex.Message}\n{ex.StackTrace}");
+                    Console.Error.Flush();
+                }
+            };
 
             string pmxPath = "";
             string vmdPath = "";
@@ -17,6 +42,7 @@ namespace MmdPhysicsViewer
             double warmupSeconds = 2.0;
             int? startFrame = null;
             int? endFrame = null;
+            int substepHz = 120;
 
             var args = e.Args;
             for (int i = 0; i < args.Length; i++)
@@ -62,6 +88,13 @@ namespace MmdPhysicsViewer
                         endFrame = ef;
                     }
                 }
+                else if ((a.Equals("--substep", StringComparison.OrdinalIgnoreCase) || a.Equals("--substep-hz", StringComparison.OrdinalIgnoreCase)) && i + 1 < args.Length)
+                {
+                    if (int.TryParse(args[++i], out int sh))
+                    {
+                        substepHz = Math.Clamp(sh, 60, 480);
+                    }
+                }
             }
 
             // 引数が指定されていない場合のファイル選択ダイアログ対応 (単体起動時)
@@ -83,21 +116,29 @@ namespace MmdPhysicsViewer
                 }
             }
 
-            // VMDモーションが指定されていない場合は任意選択、キャンセル時は空モーションでプレビュー
-            if (string.IsNullOrWhiteSpace(vmdPath) || !File.Exists(vmdPath))
+            // VMDモーションが指定されていない場合の対応 (CLI連携モード時はダイアログを出さず初期ポーズで進行)
+            if (string.Equals(vmdPath, "none", StringComparison.OrdinalIgnoreCase))
             {
-                var ofdVmd = new Microsoft.Win32.OpenFileDialog
+                vmdPath = "";
+            }
+            else if (string.IsNullOrWhiteSpace(vmdPath) || !File.Exists(vmdPath))
+            {
+                bool isCliMode = args.Any(a => a.Equals("--pmx", StringComparison.OrdinalIgnoreCase));
+                if (!isCliMode)
                 {
-                    Title = "適用するVMDモーションファイルを選択してください (キャンセルで初期ポーズ物理)",
-                    Filter = "VMDモーション (*.vmd)|*.vmd|全てのファイル (*.*)|*.*"
-                };
-                if (ofdVmd.ShowDialog() == true)
-                {
-                    vmdPath = ofdVmd.FileName;
+                    var ofdVmd = new Microsoft.Win32.OpenFileDialog
+                    {
+                        Title = "適用するVMDモーションファイルを選択してください (キャンセルで初期ポーズ物理)",
+                        Filter = "VMDモーション (*.vmd)|*.vmd|全てのファイル (*.*)|*.*"
+                    };
+                    if (ofdVmd.ShowDialog() == true)
+                    {
+                        vmdPath = ofdVmd.FileName;
+                    }
                 }
             }
 
-            var wnd = new ViewerWindow(pmxPath, vmdPath, outVmdPath, lookahead, warmupSeconds, startFrame, endFrame);
+            var wnd = new ViewerWindow(pmxPath, vmdPath, outVmdPath, lookahead, warmupSeconds, startFrame, endFrame, substepHz);
             wnd.Show();
         }
     }

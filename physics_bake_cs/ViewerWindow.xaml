@@ -1,7 +1,7 @@
-<Window x:Class="MmdPhysicsViewer.ViewerWindow"
+<Window x:Class="PhysicsSimulationBakeViewer.ViewerWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="MMD 3D Physics Viewer (Streaming Bake)"
+        Title="Physics Simulation Bake Viewer (Streaming Bake)"
         Height="720" Width="960"
         Background="#18181c"
         WindowStartupLocation="CenterScreen"
@@ -20,8 +20,8 @@
             <Viewport3D x:Name="MainViewport">
                 <Viewport3D.Camera>
                     <PerspectiveCamera x:Name="ViewportCamera"
-                                       Position="0,15,45"
-                                       LookDirection="0,-5,-45"
+                                       Position="0,15,-35"
+                                       LookDirection="0,-5,35"
                                        UpDirection="0,1,0"
                                        FieldOfView="45" />
                 </Viewport3D.Camera>
@@ -31,8 +31,8 @@
                     <ModelVisual3D.Content>
                         <Model3DGroup>
                             <AmbientLight Color="#606060" />
-                            <DirectionalLight Color="#ffffff" Direction="-1,-2,-3" />
-                            <DirectionalLight Color="#505060" Direction="1,1,2" />
+                            <DirectionalLight Color="#ffffff" Direction="-1,-2,3" />
+                            <DirectionalLight Color="#505060" Direction="1,1,-2" />
                         </Model3DGroup>
                     </ModelVisual3D.Content>
                 </ModelVisual3D>

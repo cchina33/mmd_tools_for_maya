@@ -12,15 +12,33 @@ class BulletEngineWrapper:
     """
     MMD Bullet物理エンジンの ctypes インターフェースラッパークラス
     """
-    def __init__(self, dll_path=None):
+    def __init__(self, dll_path=None, bullet_version="2.75"):
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        bin_dir = os.path.join(current_dir, "bin")
+
+        self.bullet_version = str(bullet_version) if bullet_version else "2.75"
+
         if dll_path is None:
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            dll_path = os.path.join(current_dir, "bin", "mmd_bullet.dll")
+            # 指定バージョンに応じたDLLファイルを優先探索
+            if "2.75" in self.bullet_version:
+                target_dll = os.path.join(bin_dir, "mmd_bullet_275.dll")
+            elif "2.83" in self.bullet_version:
+                target_dll = os.path.join(bin_dir, "mmd_bullet_283.dll")
+            else:
+                target_dll = os.path.join(bin_dir, "mmd_bullet.dll")
+
+            # バージョン別DLLが存在しない場合は共通DLLへフォールバック
+            if os.path.exists(target_dll):
+                dll_path = target_dll
+            else:
+                dll_path = os.path.join(bin_dir, "mmd_bullet.dll")
 
         if not os.path.exists(dll_path):
             raise FileNotFoundError(f"Bullet DLLが見つかりません: {dll_path}")
 
+        self.dll_path = dll_path
         self._dll = ctypes.CDLL(dll_path)
+        print(f"[Bullet] エンジンDLLをロードしました: {os.path.basename(dll_path)} (要求バージョン: {self.bullet_version})")
         self._setup_function_signatures()
 
         self._engine = self._dll.bullet_create()

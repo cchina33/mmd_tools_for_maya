@@ -1,0 +1,8 @@
+<Project>
+  <PropertyGroup>
+    <!-- プロジェクト名ごとに中間生成物フォルダを分離し、XAMLコンパイルリソースの衝突を防止 -->
+    <BaseIntermediateOutputPath>obj\$(MSBuildProjectName)\</BaseIntermediateOutputPath>
+    <!-- objフォルダ以下の全サブディレクトリをソースコードの自動収集対象から除外 (重複コンパイル防止) -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);obj\**</DefaultItemExcludes>
+  </PropertyGroup>
+</Project>

@@ -191,6 +191,21 @@ def setup_mmd_ik(model_node=None, bone_map=None):
         leg_ik_j = _find_j(f"{side_jp}足ＩＫ") or _find_j(f"{side_jp}足IK")
         toe_ik_j = _find_j(f"{side_jp}つま先ＩＫ") or _find_j(f"{side_jp}つま先IK")
 
+        # 足首ジョイントの既存orientConstraintおよび古いノードの安全なクリーンアップ
+        toe_h_name = f"ikHandle_toe_{side_en}_{model_node}" if model_node else f"ikHandle_toe_{side_en}"
+        if mc.objExists(toe_h_name):
+            try:
+                mc.delete(toe_h_name)
+            except Exception:
+                pass
+        if ankle_j and mc.objExists(ankle_j):
+            try:
+                old_ankle_ocs = mc.listConnections(ankle_j, type="orientConstraint") or []
+                if old_ankle_ocs:
+                    mc.delete(old_ankle_ocs)
+            except Exception:
+                pass
+
         # 足IK (大腿からひざを経由して足首へ)
         if leg_j and ankle_j and leg_ik_j:
             if mc.objExists(leg_j) and mc.objExists(ankle_j) and mc.objExists(leg_ik_j):
@@ -215,9 +230,20 @@ def setup_mmd_ik(model_node=None, bone_map=None):
                         except Exception:
                             pass
 
+                    # 脚IKハンドル（大腿〜ひざ〜足首）の構築
                     h_leg, _ = mc.ikHandle(startJoint=leg_j, endEffector=ankle_j, solver='ikRPsolver', name=h_name)
                     mc.pointConstraint(leg_ik_j, h_leg, maintainOffset=False)
-                    mc.orientConstraint(leg_ik_j, ankle_j, maintainOffset=True)
+
+                    # 足首の回転を足IKに追従させる（MMD仕様準拠）
+                    # maintainOffset=False により、足IKの回転キー（Y回転等）を純粋に足首へそのまま伝達
+                    oc_leg = mc.orientConstraint(leg_ik_j, ankle_j, maintainOffset=False)
+                    if oc_leg:
+                        try:
+                            # 最短角度補間 (Shortest) を設定し、180度境界での反転フリップを抑制
+                            mc.setAttr(f"{oc_leg[0]}.interpType", 2)
+                        except Exception:
+                            pass
+
                     mc.setAttr(f"{h_leg}.visibility", False)
                     created_handles.append(h_leg)
 
@@ -251,22 +277,22 @@ def setup_mmd_ik(model_node=None, bone_map=None):
                 except Exception as e:
                     print(f"  [警告] 足IK ({side_jp}) の構築をスキップしました: {e}")
 
-        # つま先IK (足首からつま先へ)
-        if ankle_j and toe_j and toe_ik_j:
-            if mc.objExists(ankle_j) and mc.objExists(toe_j) and mc.objExists(toe_ik_j):
-                h_name = f"ikHandle_toe_{side_en}_{model_node}" if model_node else f"ikHandle_toe_{side_en}"
-                if mc.objExists(h_name):
+        # つま先IKの処理
+        # 足首ジョイントをstartJointとするikHandleは足首の回転を奪ってねじれ破綻させるため作成しない
+        # つま先ジョイントへのつま先IK回転連動（つま先立ち・屈曲の反映）
+        if toe_j and toe_ik_j and mc.objExists(toe_j) and mc.objExists(toe_ik_j):
+            try:
+                old_toe_ocs = mc.listConnections(toe_j, type="orientConstraint") or []
+                if old_toe_ocs:
+                    mc.delete(old_toe_ocs)
+                oc_toe = mc.orientConstraint(toe_ik_j, toe_j, maintainOffset=False)
+                if oc_toe:
                     try:
-                        mc.delete(h_name)
+                        mc.setAttr(f"{oc_toe[0]}.interpType", 2)
                     except Exception:
                         pass
-                try:
-                    h_toe, _ = mc.ikHandle(startJoint=ankle_j, endEffector=toe_j, solver='ikSCsolver', name=h_name)
-                    mc.pointConstraint(toe_ik_j, h_toe, maintainOffset=False)
-                    mc.setAttr(f"{h_toe}.visibility", False)
-                    created_handles.append(h_toe)
-                except Exception as e:
-                    print(f"  [警告] つま先IK ({side_jp}) の構築をスキップしました: {e}")
+            except Exception as e:
+                print(f"  [警告] つま先連動 ({side_jp}) の設定をスキップしました: {e}")
 
         # 準標準 足Dボーン群（Tda式モデル等の並列スキニング階層）への回転追従連動
         leg_d_j = _find_j(f"{side_jp}足D")
@@ -284,7 +310,231 @@ def setup_mmd_ik(model_node=None, bone_map=None):
 
     return created_handles
 
-def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes=True, create_joints=True, material_type=1, create_light=True, set_untone_mapped=True, enable_toon=True, shadow_mode=1, show_completion_message=True):
+def _quat_from_euler_xyz(rx_deg, ry_deg, rz_deg):
+    """XYZオイラー角から四元数を算出"""
+    e = om.MEulerRotation(math.radians(rx_deg), math.radians(ry_deg), math.radians(rz_deg), om.MEulerRotation.kXYZ)
+    q = e.asQuaternion()
+    return (q.x, q.y, q.z, q.w)
+
+def _create_capsule_visualizer(radius, height, name):
+    """円柱と両端半球を持つカプセルワイヤーフレームメッシュを生成"""
+    r = max(0.01, float(radius))
+    h = max(0.01, float(height))
+    half_h = h * 0.5
+    try:
+        cyl = mc.polyCylinder(radius=r, height=h, subdivisionsX=12, subdivisionsY=1, subdivisionsCaps=0, constructionHistory=False)[0]
+        sph_top = mc.polySphere(radius=r, subdivisionsX=12, subdivisionsY=8, constructionHistory=False)[0]
+        mc.xform(sph_top, translation=(0.0, half_h, 0.0))
+        sph_bottom = mc.polySphere(radius=r, subdivisionsX=12, subdivisionsY=8, constructionHistory=False)[0]
+        mc.xform(sph_bottom, translation=(0.0, -half_h, 0.0))
+        capsule = mc.polyUnite(cyl, sph_top, sph_bottom, constructionHistory=False, name=name)[0]
+        return capsule
+    except Exception:
+        return mc.polyCylinder(radius=r, height=h, subdivisionsX=12, subdivisionsY=1, name=name, constructionHistory=False)[0]
+
+def create_rigidbody_and_joint_nodes(pmx_model, model_mesh_node, joint_node_names, scale=8.0):
+    """
+    PMX剛体（球・箱・カプセル）およびJoint（6DOFスプリング関節）のワイヤーフレームを生成し、
+    対応するジョイントに追従コンストレイントを設定します。
+    モデル固有のグループ名を付与し、二重トランスフォーム防止のため inheritsTransform を False に設定します。
+    """
+    if not pmx_model or not getattr(pmx_model, 'rigid_bodies', None):
+        return None
+
+    # モデル固有のグループ名
+    root_grp_name = f"{model_mesh_node}_RigidBody_Joint_Visualizers"
+    rb_grp_name = f"{model_mesh_node}_RigidBody_Visualizers"
+    joint_grp_name = f"{model_mesh_node}_Joint_Visualizers"
+
+    if mc.objExists(root_grp_name):
+        try:
+            mc.delete(root_grp_name)
+        except Exception:
+            pass
+
+    main_grp = mc.group(empty=True, name=root_grp_name)
+    rb_grp = mc.group(empty=True, name=rb_grp_name, parent=main_grp)
+    joint_grp = mc.group(empty=True, name=joint_grp_name, parent=main_grp)
+
+    # 二重トランスフォーム防止: 剛体グループは親グループ移動を直接継承せずボーン追従に委ねる
+    mc.setAttr(f"{main_grp}.inheritsTransform", False)
+
+    # 剛体の生成
+    for idx, rb in enumerate(pmx_model.rigid_bodies):
+        rb_bind_p = (
+            rb.position[0] * scale,
+            rb.position[1] * scale,
+            -rb.position[2] * scale
+        )
+        deg_x = -math.degrees(rb.rotation[0])
+        deg_y = -math.degrees(rb.rotation[1])
+        deg_z = math.degrees(rb.rotation[2])
+
+        target_j = None
+        if 0 <= rb.bone_index < len(joint_node_names):
+            target_j = joint_node_names[rb.bone_index]
+
+        safe_rb_name = safe_node_name(rb.name)
+        node_name = f"{model_mesh_node}_rb_{idx:03d}_{safe_rb_name}"
+        if mc.objExists(node_name):
+            try:
+                mc.delete(node_name)
+            except Exception:
+                pass
+
+        mesh_node = None
+        if rb.shape_type == 0:
+            r = rb.size[0] * scale
+            mesh_node = mc.polySphere(radius=max(0.1, r), subdivisionsX=12, subdivisionsY=8, name=node_name, constructionHistory=False)[0]
+        elif rb.shape_type == 1:
+            w = rb.size[0] * 2.0 * scale
+            h = rb.size[1] * 2.0 * scale
+            d = rb.size[2] * 2.0 * scale
+            mesh_node = mc.polyCube(width=max(0.1, w), height=max(0.1, h), depth=max(0.1, d), name=node_name, constructionHistory=False)[0]
+        elif rb.shape_type == 2:
+            r = rb.size[0] * scale
+            h = rb.size[1] * scale
+            mesh_node = _create_capsule_visualizer(radius=r, height=h, name=node_name)
+
+        if not mesh_node:
+            continue
+
+        mc.parent(mesh_node, rb_grp)
+        mc.xform(mesh_node, worldSpace=True, translation=rb_bind_p)
+        mc.xform(mesh_node, worldSpace=True, rotation=(deg_x, deg_y, deg_z))
+
+        # ワイヤーフレーム表示設定
+        shapes = mc.listRelatives(mesh_node, shapes=True) or []
+        for shape in shapes:
+            mc.setAttr(f"{shape}.overrideEnabled", 1)
+            mc.setAttr(f"{shape}.overrideShading", 0)
+            if rb.physics_mode == 0:
+                color_idx = 6  # 青 (Kinematic)
+            elif rb.physics_mode == 1:
+                color_idx = 14 # 緑 (Dynamic)
+            else:
+                color_idx = 17 # 黄 (Aligned)
+            mc.setAttr(f"{shape}.overrideColor", color_idx)
+
+        mc.addAttr(mesh_node, longName="rbIndex", attributeType="short", defaultValue=idx)
+        mc.addAttr(mesh_node, longName="rbMode", attributeType="short", defaultValue=rb.physics_mode)
+        mc.addAttr(mesh_node, longName="rbGroup", attributeType="short", defaultValue=rb.group)
+
+        # 対応ボーンへの追従コンストレイント設定
+        if target_j and mc.objExists(target_j):
+            try:
+                c_res = mc.parentConstraint(target_j, mesh_node, maintainOffset=True)
+                if c_res:
+                    mc.addAttr(c_res[0], longName="isMmdPhysicsConstraint", attributeType="bool", defaultValue=True)
+                    mc.addAttr(c_res[0], longName="rbMode", attributeType="short", defaultValue=rb.physics_mode)
+            except Exception:
+                pass
+
+    # Joint（スプリング関節）の生成
+    if hasattr(pmx_model, 'joints'):
+        for j_idx, j in enumerate(pmx_model.joints):
+            j_safe = safe_node_name(j.name)
+            j_node_name = f"{model_mesh_node}_joint_{j_idx:03d}_{j_safe}"
+            if mc.objExists(j_node_name):
+                try:
+                    mc.delete(j_node_name)
+                except Exception:
+                    pass
+
+            j_bind_p = (
+                j.position[0] * scale,
+                j.position[1] * scale,
+                -j.position[2] * scale
+            )
+            j_deg_x = -math.degrees(j.rotation[0])
+            j_deg_y = -math.degrees(j.rotation[1])
+            j_deg_z = math.degrees(j.rotation[2])
+
+            cube_size = max(0.4, 0.15 * scale)
+            cube = mc.polyCube(width=cube_size, height=cube_size, depth=cube_size, name=j_node_name, constructionHistory=False)[0]
+            mc.parent(cube, joint_grp)
+            mc.xform(cube, worldSpace=True, translation=j_bind_p)
+            mc.xform(cube, worldSpace=True, rotation=(j_deg_x, j_deg_y, j_deg_z))
+
+            cube_shape = mc.listRelatives(cube, shapes=True)[0]
+            mc.setAttr(f"{cube_shape}.overrideEnabled", 1)
+            mc.setAttr(f"{cube_shape}.overrideShading", 0)
+            mc.setAttr(f"{cube_shape}.overrideColor", 17) # 黄色
+
+            mc.addAttr(cube, longName="jointIndex", attributeType="short", defaultValue=j_idx)
+            mc.addAttr(cube, longName="rbAIndex", attributeType="short", defaultValue=j.rigid_body_a)
+            mc.addAttr(cube, longName="rbBIndex", attributeType="short", defaultValue=j.rigid_body_b)
+
+            # 関連剛体Aのボーンにコンストレイント
+            if 0 <= j.rigid_body_a < len(pmx_model.rigid_bodies):
+                rb_a = pmx_model.rigid_bodies[j.rigid_body_a]
+                if 0 <= rb_a.bone_index < len(joint_node_names):
+                    target_j_a = joint_node_names[rb_a.bone_index]
+                    if target_j_a and mc.objExists(target_j_a):
+                        try:
+                            c_res = mc.parentConstraint(target_j_a, cube, maintainOffset=True)
+                            if c_res:
+                                mc.addAttr(c_res[0], longName="isMmdJointConstraint", attributeType="bool", defaultValue=True)
+                        except Exception:
+                            pass
+
+    print(f"  - 剛体 ({len(pmx_model.rigid_bodies)}個) および Joint ({len(getattr(pmx_model, 'joints', []))}個) のワイヤーフレームを生成しました")
+    return main_grp
+
+def create_rigidbody_visualizers(file_path_or_model, scale=8.0, model_mesh_node=None):
+    """
+    外部モジュールやスクリプト向けの互換インターフェース。
+    指定されたPMXファイルまたはモデルから剛体・Joint可視化ノードを生成します。
+    """
+    if isinstance(file_path_or_model, str):
+        model = mmd_core.pmx.load(file_path_or_model)
+        m_name = model_mesh_node or safe_node_name(os.path.splitext(os.path.basename(file_path_or_model))[0])
+    else:
+        model = file_path_or_model
+        m_name = model_mesh_node or "MMD_Model"
+
+    all_j = mc.ls(type="joint", long=True) or []
+    model_j = [j for j in all_j if m_name in j] or all_j
+    return create_rigidbody_and_joint_nodes(model, m_name, model_j, scale=scale)
+
+def reconnect_visualizers_to_bones():
+    """
+    可視化ノード（剛体・Joint）に記録されたキーフレームをすべてクリアし、
+    ボーン追従コンストレイントを通常状態（有効）に復元してモデルボーンに再吸着させます。
+    """
+    # シーン内の剛体・Joint可視化グループを検索
+    vis_groups = mc.ls("*_RigidBody_Joint_Visualizers", "MMD_RigidBody_Joint_Visualizers", type="transform") or []
+    if not vis_groups:
+        print("[Visualizer] 剛体・Joint可視化グループが見つかりません。")
+        return False
+
+    # キーフレームの削除
+    for grp in vis_groups:
+        try:
+            mc.cutKey(grp, hierarchy='below', attribute=['translateX', 'translateY', 'translateZ', 'rotateX', 'rotateY', 'rotateZ'])
+        except Exception:
+            pass
+
+    # コンストレイントの追従復元 (PassThrough解除 & 通常状態設定)
+    constraints = mc.ls(type=["parentConstraint", "pointConstraint", "orientConstraint"]) or []
+    for c in constraints:
+        is_rb = (
+            (mc.attributeQuery("isMmdPhysicsConstraint", node=c, exists=True) and mc.getAttr(f"{c}.isMmdPhysicsConstraint")) or
+            (mc.attributeQuery("isMmdRbConstraint", node=c, exists=True) and mc.getAttr(f"{c}.isMmdRbConstraint"))
+        )
+        is_jt = mc.attributeQuery("isMmdJointConstraint", node=c, exists=True) and mc.getAttr(f"{c}.isMmdJointConstraint")
+        if is_rb or is_jt:
+            try:
+                # nodeState を Normal (0) に設定して追従を有効化
+                mc.setAttr(f"{c}.nodeState", 0)
+                mc.mute(c, disable=True)
+            except Exception:
+                pass
+
+    print(f"[Visualizer] 剛体・Jointのキーフレームをクリアし、モデルボーンへの追従を復元しました（対象グループ数: {len(vis_groups)}）。")
+    return True
+
+def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes=True, create_joints=True, material_type=1, create_light=True, set_untone_mapped=True, enable_toon=True, shadow_mode=1, create_ground_shadow=True, show_completion_message=True, prevent_motion_darkening=True, create_physics=True):
     """
     MMDモデルファイル (.pmx / .pmd / .x) をMayaにインポートします。
 
@@ -294,11 +544,14 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
         split_by_material (bool): 材質ごとにポリゴンメッシュを分割するかどうか
         create_blendshapes (bool): ブレンドシェイプ（モーフ）を作成するかどうか
         create_joints (bool): ジョイント（ボーンスケルトン）を作成するかどうか
-        material_type (int): マテリアル種別 (0: なし, 1: Blinn, 2: Phong, 3: Lambert, 4: StandardSurface, 5: sample_mmd_mat ベータ版)
+        material_type (int): マテリアル種別 (0: なし, 1: Blinn, 2: Phong, 3: Lambert, 4: StandardSurface, 5: sample_mmd_mat ベータ版, 6: mmdToonShader)
         create_light (bool): MMD標準ライティング（平行光＆環境光）を作成するかどうか
         set_untone_mapped (bool): ビュー変換を 'Un-tone-mapped (sRGB)' に設定して発色を最適化するかどうか
         enable_toon (bool): Toonシェーディング（セル影）を適用するかどうか
         shadow_mode (int): セルフ影モード (0: なし, 1: モード1, 2: モード2)
+        create_ground_shadow (bool): MMD標準の地面影プレーン (Y=0) を作成するかどうか
+        prevent_motion_darkening (bool): モーション再生時の暗化を防止（シャッター開度0.01のブレなしHDRパス最適化）するかどうか
+        create_physics (bool): 剛体・Jointコライダーのワイヤーフレームを生成しボーン追従バインドするかどうか
 
     戻り値:
         tuple: (モデルノード名, ルートジョイント一覧, スキンクラスタ名, ブレンドシェイプ名)
@@ -314,19 +567,27 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"モデルファイルが存在しません: {file_path}")
 
-    # perspカメラの焦点距離をMMD標準画角に一番最初に設定
+    # perspカメラの焦点距離をMMD標準画角に設定
     setup_persp_camera_for_mmd()
 
     # MMD標準ライティングの作成
     if create_light:
         create_mmd_lighting(shadow_mode=shadow_mode)
 
+    # MMD標準地面影の作成 (Y=0平面シャドウキャッチャー)
+    if create_ground_shadow:
+        try:
+            shadow_size = 500.0 * (scale / 8.0)
+            create_mmd_ground_shadow(size=shadow_size)
+        except Exception as e:
+            print(f"[警告] 地面影プレーンの作成をスキップしました: {e}")
+
     # ビュー変換を Un-tone-mapped (sRGB) に設定して色の沈み・暗化を防止
     if set_untone_mapped:
         set_untone_mapped_view_transform()
 
-    # ビューポートのテクスチャ表示、アンチエイリアシング、深度ピーリングを一括適用
-    setup_viewport_display(shadow_mode=shadow_mode if create_light else None)
+    # ビューポートのテクスチャ表示、アンチエイリアシング、深度ピーリング、暗化防止を一括適用
+    setup_viewport_display(shadow_mode=shadow_mode if create_light else None, prevent_motion_darkening=prevent_motion_darkening)
 
     # モデルファイルのロード
     print("[1/6] モデルファイルを読み込み中...")
@@ -365,7 +626,7 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
     skin_node_name = None
     blendshape_node_name = None
 
-    # 2. ポリゴンメッシュの生成
+    # ポリゴンメッシュの生成
     print("[2/6] ポリゴンメッシュを作成中...")
     if split_by_material:
         material_mesh_nodes = []
@@ -426,11 +687,20 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
             edge_scales=vtx_edge_scales
         )
 
+        # MMD準拠の自然な描画のため、キャラクターメッシュ自身の影受けを無効化（帽子・前髪・スカートによる不快な顔・脚の黒潰れを防止）
+        # 影を落とす機能（castsShadows=True）は維持されるため、地面影プレーンには美しい足元影が投影されます。
+        mesh_shapes = mc.listRelatives(model_mesh_node, shapes=True, fullPath=True) or [model_mesh_node]
+        for m_shp in mesh_shapes:
+            try:
+                mc.setAttr(f"{m_shp}.receiveShadows", 0)
+            except Exception:
+                pass
+
         if material_type == 0:
             mc.select(model_mesh_node)
             mc.hyperShade(assign='lambert1')
 
-    # 3. テクスチャおよびマテリアルの作成
+    # テクスチャおよびマテリアルの作成
     print("[3/6] テクスチャおよびマテリアルを作成中...")
     # メインテクスチャ、スフィア、カスタムToonで使用されているインデックスを収集
     used_texture_indices = set()
@@ -451,12 +721,60 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
             except Exception as e:
                 # Maya.env未反映時のフルパスフォールバック
                 plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                mll_path = os.path.join(plugin_root, "mmd_material_plugin", "bin", "mmd_material.mll")
+                maya_ver = mc.about(version=True).split()[0] if hasattr(mc, 'about') else '2025'
+                candidate_paths = [
+                    os.path.join(plugin_root, "mmd_material_plugin", "bin", maya_ver, "mmd_material.mll"),
+                    os.path.join(plugin_root, "mmd_material_plugin", "bin", "2025", "mmd_material.mll"),
+                    os.path.join(plugin_root, "mmd_material_plugin", "bin", "mmd_material.mll"),
+                ]
+                loaded = False
+                for mll_path in candidate_paths:
+                    if os.path.exists(mll_path):
+                        try:
+                            mc.loadPlugin(mll_path)
+                            print(f"[MMD Tools for Maya] mmd_material プラグインを絶対パスからロードしました: {mll_path}")
+                            loaded = True
+                            break
+                        except Exception:
+                            pass
+                if not loaded:
+                    print(f"[警告] mmd_material プラグインのロードに失敗しました: {e}")
+
+    # 新規MMDトゥーンシェーダープラグイン (mmd_toon_shader) のロード
+    elif material_type == 6:
+        if not mc.pluginInfo("mmd_toon_shader", query=True, loaded=True):
+            try:
+                mc.loadPlugin("mmd_toon_shader")
+                print("[MMD Tools for Maya] mmd_toon_shader プラグインをロードしました。")
                 try:
-                    mc.loadPlugin(mll_path)
-                    print(f"[MMD Tools for Maya] mmd_material プラグインを絶対パスからロードしました: {mll_path}")
-                except Exception as e2:
-                    print(f"[警告] mmd_material プラグインのロードに失敗しました: {e} / {e2}")
+                    mc.pluginInfo("mmd_toon_shader", edit=True, autoload=True)
+                except Exception:
+                    pass
+            except Exception as e:
+                plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                maya_ver = mc.about(version=True).split()[0] if hasattr(mc, 'about') else '2025'
+                candidate_paths = [
+                    os.path.join(plugin_root, "mmd_toon_plugin", "bin", maya_ver, "mmd_toon_shader.mll"),
+                    os.path.join(plugin_root, "mmd_toon_plugin", "bin", "2025", "mmd_toon_shader.mll"),
+                    os.path.join(plugin_root, "mmd_toon_plugin", "bin", "mmd_toon_shader.mll"),
+                ]
+                loaded = False
+                for mll_path in candidate_paths:
+                    if os.path.exists(mll_path):
+                        try:
+                            mc.loadPlugin(mll_path)
+                            print(f"[MMD Tools for Maya] mmd_toon_shader プラグインを絶対パスからロードしました: {mll_path}")
+                            loaded = True
+                            try:
+                                mc.pluginInfo(mll_path, edit=True, autoload=True)
+                                mc.pluginInfo("mmd_toon_shader", edit=True, autoload=True)
+                            except Exception:
+                                pass
+                            break
+                        except Exception:
+                            pass
+                if not loaded:
+                    print(f"[警告] mmd_toon_shader プラグインのロードに失敗しました: {e}")
 
     texture_file_nodes = []
     texture_has_alpha_map = {}
@@ -514,8 +832,24 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
 
         mc.setAttr(f"{toon_vec_prod}.operation", 1) # Dot Product (内積)
         mc.setAttr(f"{toon_vec_prod}.normalizeOutput", True)
-        # MMD標準のワールド光線到来方向（斜め前方左上: 光源位置 (-0.5, 1.0, 0.5) を正規化）
-        mc.setAttr(f"{toon_vec_prod}.input2", -0.4082, 0.8165, 0.4082, typ='double3')
+
+        # シーン内のMMDディレクショナルライトから動的に光線方向ベクトルを取得・接続
+        dir_lights = mc.ls("mmd_directional_light*", type='transform') or mc.ls(type='directionalLight') or []
+        target_dir_light = dir_lights[0] if dir_lights else None
+        if target_dir_light and mc.nodeType(target_dir_light) == 'directionalLight':
+            target_dir_light = (mc.listRelatives(target_dir_light, parent=True, fullPath=True) or [None])[0]
+
+        if target_dir_light and mc.objExists(target_dir_light):
+            # ライトのワールドマトリクスからオブジェクトへの到来光線ベクトル（ローカル+Z）を動的算出
+            light_vec_node = mc.shadingNode('vectorProduct', asUtility=True, name=f"toon_lvec_{model_node_name}")
+            mc.setAttr(f"{light_vec_node}.operation", 3) # Vector Matrix Product (V * M)
+            mc.setAttr(f"{light_vec_node}.normalizeOutput", True)
+            mc.setAttr(f"{light_vec_node}.input1", 0.0, 0.0, 1.0, typ='double3')
+            mc.connectAttr(f"{target_dir_light}.worldMatrix[0]", f"{light_vec_node}.matrix", force=True)
+            mc.connectAttr(f"{light_vec_node}.output", f"{toon_vec_prod}.input2", force=True)
+        else:
+            # フォールバック: MMD標準の光線到来方向（斜め前方左上）
+            mc.setAttr(f"{toon_vec_prod}.input2", -0.4082, 0.8165, 0.4082, typ='double3')
 
         mc.connectAttr(f"{toon_world_norm}.output", f"{toon_vec_prod}.input1", force=True)
 
@@ -574,9 +908,16 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
         except Exception as e:
             print(f"[MMD Tools] プラグインロード確認中にエラーが発生したためフォールバックします: {e}")
             material_type = 4
+    elif material_type == 6:
+        if not mc.pluginInfo("mmd_toon_shader", query=True, loaded=True):
+            print("[MMD Tools] mmd_toon_shader プラグインをロードできなかったため、StandardSurfaceにフォールバックします。")
+            material_type = 4
 
     material_shader_dict = {}
     material_alpha_mult_dict = {}
+    material_color_source_dict = {}
+    material_tex_node_dict = {}
+    material_has_alpha_morph_dict = {}
 
     face_offset = 0
     for mat_idx, mat in enumerate(pmx_model.materials):
@@ -613,15 +954,37 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
             transparency = [0.0, 0.0, 0.0] # 不透明
 
         # 初期透明モーフ材質（頬染め・涙等）の判定
-        is_transparent_morph_mat = (alpha <= 0.05)
-        if is_transparent_morph_mat:
-            # 透明ポリゴンの受光漏れ・白線・白浮き防止のためディフューズ・アンビエント・スペキュラを遮断
-            diffuse_color = [0.0, 0.0, 0.0]
+        # 材質モーフの対象となっているか判定
+        has_mat_morph_target = False
+        for morph in getattr(pmx_model, 'morphs', []):
+            if getattr(morph, 'morph_type', 0) == 8 or (hasattr(morph, 'type_index') and morph.type_index() == 8):
+                for off in getattr(morph, 'offsets', []):
+                    if off[0] == mat_idx or off[0] == -1:
+                        has_mat_morph_target = True
+                        break
+                if has_mat_morph_target:
+                    break
+
+        # 顔オーバーレイ板ポリゴン（チーク・涙・顔斜線等）の判定
+        overlay_kw = ["頬", "cheek", "照れ", "blush", "涙", "tear", "斜線", "ガーン", "gaan"]
+        is_face_overlay_mat = any(k in mat_name_for_kw or k in mat_e_for_kw for k in overlay_kw)
+
+        is_transparent_morph_mat = (alpha <= 0.05) and has_mat_morph_target
+        if is_transparent_morph_mat and is_face_overlay_mat:
+            # 顔透過板ポリゴンのみ受光漏れ・白枠線防止のためアンビエント・スペキュラを遮断
             ambient_color = [0.0, 0.0, 0.0]
             specular_color = [0.0, 0.0, 0.0]
             spec_factor = 0.0
             transparency = [1.0, 1.0, 1.0]
             opacity = [0.0, 0.0, 0.0]
+        elif is_transparent_morph_mat:
+            # 素肌（T_肌3）や衣装（T_下着2）等の独立本体メッシュは、影の黒沈み防止のため本来のアンビエント色・スペキュラ色を維持
+            transparency = [1.0, 1.0, 1.0]
+            opacity = [0.0, 0.0, 0.0]
+        elif alpha <= 0.05 and not has_mat_morph_target:
+            # 材質モーフがなく頂点モーフ等で手前展開される材質の場合、透明固定を回避して可視化を保証
+            opacity = [1.0, 1.0, 1.0]
+            transparency = [0.0, 0.0, 0.0]
 
         # アニメモデルの顔・肌・表情保護判定 (ユーザー辞書連動)
         try:
@@ -678,8 +1041,11 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
                 mc.setAttr(f"{shd}.specularColor", 0.0, 0.0, 0.0, typ='double3')
                 mc.setAttr(f"{shd}.specular", 0.0)
                 mc.setAttr(f"{shd}.specularRoughness", 1.0)
-            if is_transparent_morph_mat:
+            if is_transparent_morph_mat and is_face_overlay_mat:
                 mc.setAttr(f"{shd}.base", 0.0)
+            elif enable_toon:
+                # 2重受光による黒沈み防止
+                mc.setAttr(f"{shd}.base", 0.85)
             else:
                 mc.setAttr(f"{shd}.base", 0.95)
         elif material_type == 5: # sample_mmd_mat (ベータ版: MMDオリジナルマテリアルプラグイン)
@@ -691,13 +1057,14 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
             if mc.attributeQuery('diffuseColor', node=shd, exists=True):
                 mc.setAttr(f"{shd}.diffuseColor", *diffuse_color, typ='double3')
                 mc.setAttr(f"{shd}.color", *diffuse_color, typ='double3')
-                mc.setAttr(f"{shd}.ambientColor", *ambient_color, typ='double3')
+                # 白飛び防止: Maya Phongでの自己発光的な加算を防止し、インポート直後でも適正な陰影を維持
+                mc.setAttr(f"{shd}.ambientColor", 0.0, 0.0, 0.0, typ='double3')
                 mc.setAttr(f"{shd}.transparency", *transparency, typ='double3')
                 mc.setAttr(f"{shd}.diffuseAlpha", alpha)
                 mc.setAttr(f"{shd}.specularColor", *specular_color, typ='double3')
                 mc.setAttr(f"{shd}.specularPower", min(100.0, max(1.0, float(spec_factor))))
                 mc.setAttr(f"{shd}.cosinePower", min(100.0, max(2.0, float(spec_factor))))
-                mc.setAttr(f"{shd}.diffuse", 0.0 if is_transparent_morph_mat else 1.0)
+                mc.setAttr(f"{shd}.diffuse", 0.0 if (is_transparent_morph_mat and is_face_overlay_mat) else 1.0)
 
                 sph_idx = getattr(mat, 'sphere_texture', -1)
                 sph_mode = getattr(mat, 'sphere_texture_mode', 0)
@@ -714,7 +1081,40 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
                     mc.setAttr(f"{shd}.baseColor", *diffuse_color, typ='double3')
                 elif mc.attributeQuery('color', node=shd, exists=True):
                     mc.setAttr(f"{shd}.color", *diffuse_color, typ='double3')
+        elif material_type == 6: # mmdToonShader (新プラグイン, 忠実再現)
+            try:
+                shd = mc.shadingNode('mmdToonShader', asShader=True, name=shader_node_name)
+            except Exception:
+                shd = mc.shadingNode('standardSurface', asShader=True, name=shader_node_name)
 
+            if mc.attributeQuery('diffuseColor', node=shd, exists=True):
+                mc.setAttr(f"{shd}.diffuseColor", *diffuse_color, typ='double3')
+                mc.setAttr(f"{shd}.color", *diffuse_color, typ='double3')
+                # 白飛び防止: 自己発光的な加算を排除し、受光計算で適正に評価
+                mc.setAttr(f"{shd}.ambientColor", 0.0, 0.0, 0.0, typ='double3')
+                mc.setAttr(f"{shd}.transparency", *transparency, typ='double3')
+                mc.setAttr(f"{shd}.diffuseAlpha", alpha)
+                mc.setAttr(f"{shd}.specularColor", *specular_color, typ='double3')
+                mc.setAttr(f"{shd}.specularPower", min(100.0, max(1.0, float(spec_factor))))
+                mc.setAttr(f"{shd}.cosinePower", min(100.0, max(2.0, float(spec_factor))))
+                mc.setAttr(f"{shd}.diffuse", 0.0 if (is_transparent_morph_mat and is_face_overlay_mat) else 1.0)
+
+                sph_idx = getattr(mat, 'sphere_texture', -1)
+                sph_mode = getattr(mat, 'sphere_texture_mode', 0)
+                mc.setAttr(f"{shd}.sphereMode", int(sph_mode))
+                mc.setAttr(f"{shd}.toonMode", 1 if enable_toon else 0)
+                mc.setAttr(f"{shd}.lightMode", 1) # MMD基準輝度モード
+                mc.setAttr(f"{shd}.shadowMode", 1) # MMD深度差判定モード
+
+                mc.setAttr(f"{shd}.edgeEnable", is_edge_enabled)
+                if len(edge_col_val) >= 3:
+                    mc.setAttr(f"{shd}.edgeColor", edge_col_val[0], edge_col_val[1], edge_col_val[2], typ='double3')
+                mc.setAttr(f"{shd}.edgeSize", edge_size_val)
+            else:
+                if mc.attributeQuery('baseColor', node=shd, exists=True):
+                    mc.setAttr(f"{shd}.baseColor", *diffuse_color, typ='double3')
+                elif mc.attributeQuery('color', node=shd, exists=True):
+                    mc.setAttr(f"{shd}.color", *diffuse_color, typ='double3')
 
         material_shader_dict[mat_idx] = shd
 
@@ -722,11 +1122,15 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
             mc.setAttr(f"{shd}.color", *diffuse_color, typ='double3')
             mc.setAttr(f"{shd}.ambientColor", *ambient_color, typ='double3')
             mc.setAttr(f"{shd}.transparency", *transparency, typ='double3')
-            if is_transparent_morph_mat:
+            if is_transparent_morph_mat and is_face_overlay_mat:
                 if mc.attributeQuery('diffuse', node=shd, exists=True):
                     mc.setAttr(f"{shd}.diffuse", 0.0)
                 if mc.attributeQuery('shadowAttenuation', node=shd, exists=True):
                     mc.setAttr(f"{shd}.shadowAttenuation", 0.0)
+            elif enable_toon:
+                # 2重受光による黒沈み防止: Toonテクスチャ乗算時は受光率を適正化
+                if mc.attributeQuery('diffuse', node=shd, exists=True):
+                    mc.setAttr(f"{shd}.diffuse", 0.65)
 
         # 日本語・中国語の元名称を保持
         mc.addAttr(shd, longName='originalName', niceName='元の名称', dataType='string')
@@ -818,6 +1222,11 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
             # Toonテクスチャはディフューズカラーに乗算合成済みのため、
             # 白飛び防止のためambientColorへの直接接続は行わない
 
+        # カラー出力ソースの保持
+        material_color_source_dict[mat_idx] = current_color_source
+        if 0 <= tex_idx < len(texture_file_nodes) and mc.objExists(texture_file_nodes[tex_idx]):
+            material_tex_node_dict[mat_idx] = texture_file_nodes[tex_idx]
+
         # 基本カラーのシェーダー接続 (メインテクスチャ × スフィア × Toon の統合出力)
         if current_color_source:
             if material_type == 4:
@@ -833,13 +1242,35 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
             else: # Blinn, Phong, Lambert, sample_mmd_mat
                 mc.connectAttr(f"{sphere_node}.outColor", f"{shd}.incandescence", force=True)
 
-        # 透過テクスチャまたは半透明材質の透過接続処理
-        if 0 <= tex_idx < len(texture_file_nodes) and tex_has_alpha:
-            tex_file_node = texture_file_nodes[tex_idx]
-            if mc.objExists(tex_file_node):
-                try:
-                    if alpha < 0.98:
-                        # 材質ディフューズアルファとテクスチャアルファの乗算ブレンド
+        # 材質モーフによるアルファ操作の有無を事前チェック
+        has_alpha_morph = False
+        for morph in getattr(pmx_model, 'morphs', []):
+            if getattr(morph, 'morph_type', 0) == 8 or (hasattr(morph, 'type_index') and morph.type_index() == 8):
+                for off in getattr(morph, 'offsets', []):
+                    if off[0] == mat_idx or off[0] == -1:
+                        d_a = off[2][3] if len(off) > 2 and len(off[2]) > 3 else 0.0
+                        calc_op = off[1]
+                        if calc_op == 1 and abs(d_a) > 0.001:
+                            has_alpha_morph = True
+                            break
+                        elif calc_op == 0 and abs(d_a - 1.0) > 0.001:
+                            has_alpha_morph = True
+                            break
+                if has_alpha_morph:
+                    break
+        material_has_alpha_morph_dict[mat_idx] = has_alpha_morph
+
+        # 透過接続処理 (モーフ制御材質は後段の統合ネットワークに委任)
+        if not has_alpha_morph:
+            # 意図的な板ポリ透過（睫毛・ハイライト等）の判定
+            cutout_keywords = ["まつげ", "睫毛", "lash", "アイライン", "ハイライト", "高光", "涙", "tear"]
+            is_cutout_part = any(k in mat_name_for_kw or k in mat_e_for_kw for k in cutout_keywords)
+
+            if alpha < 0.98:
+                # 半透明材質
+                if 0 <= tex_idx < len(texture_file_nodes) and tex_has_alpha:
+                    tex_file_node = texture_file_nodes[tex_idx]
+                    if mc.objExists(tex_file_node):
                         mult_node = mc.shadingNode('multDoubleLinear', asUtility=True, name=f"{safe_mat_id}_alpha_mult_{model_node_name}")
                         material_alpha_mult_dict[mat_idx] = mult_node
                         mc.connectAttr(f"{tex_file_node}.outAlpha", f"{mult_node}.input1", force=True)
@@ -854,23 +1285,17 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
                             mc.connectAttr(f"{mult_node}.output", f"{rev_node}.inputY", force=True)
                             mc.connectAttr(f"{mult_node}.output", f"{rev_node}.inputZ", force=True)
                             mc.connectAttr(f"{rev_node}.output", f"{shd}.transparency", force=True)
+                else:
+                    # テクスチャアルファなしの半透明
+                    trans_val = 1.0 - alpha
+                    if material_type == 4:
+                        mc.setAttr(f"{shd}.opacity", alpha, alpha, alpha, typ='double3')
                     else:
-                        # 不透明材質アルファ時はテクスチャアルファをそのまま接続
-                        if material_type == 4:
-                            mc.connectAttr(f"{tex_file_node}.outAlpha", f"{shd}.opacityR", force=True)
-                            mc.connectAttr(f"{tex_file_node}.outAlpha", f"{shd}.opacityG", force=True)
-                            mc.connectAttr(f"{tex_file_node}.outAlpha", f"{shd}.opacityB", force=True)
-                        else:
-                            mc.connectAttr(f"{tex_file_node}.outTransparency", f"{shd}.transparency", force=True)
-                except Exception:
-                    pass
-        elif is_transparent and 0 <= tex_idx < len(texture_file_nodes):
-            # テクスチャアルファが無い場合でも透過指定材質なら透過接続を試行
-            tex_file_node = texture_file_nodes[tex_idx]
-            if mc.objExists(tex_file_node):
-                tex_obj = pmx_model.textures[tex_idx]
-                tex_path_lower = tex_obj.path.lower()
-                if any(tex_path_lower.endswith(ext) for ext in ['.png', '.tga', '.dds', '.bmp']):
+                        mc.setAttr(f"{shd}.transparency", trans_val, trans_val, trans_val, typ='double3')
+            elif is_cutout_part and 0 <= tex_idx < len(texture_file_nodes) and tex_has_alpha:
+                # 睫毛やハイライト等、明確な板ポリ透過パーツのみテクスチャ透過を接続
+                tex_file_node = texture_file_nodes[tex_idx]
+                if mc.objExists(tex_file_node):
                     try:
                         if material_type == 4:
                             mc.connectAttr(f"{tex_file_node}.outAlpha", f"{shd}.opacityR", force=True)
@@ -880,6 +1305,12 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
                             mc.connectAttr(f"{tex_file_node}.outTransparency", f"{shd}.transparency", force=True)
                     except Exception:
                         pass
+            else:
+                # 顔、髪、服、肌など通常の不透明材質は透過接続を行わず、不透明（transparency=0）として保護
+                if material_type == 4:
+                    mc.setAttr(f"{shd}.opacity", 1.0, 1.0, 1.0, typ='double3')
+                else:
+                    mc.setAttr(f"{shd}.transparency", 0.0, 0.0, 0.0, typ='double3')
 
         # シェーディンググループ (SG) の作成と割り当て
         sg_node = mc.sets(renderable=True, noSurfaceShader=True, empty=True, name=f"{shd}SG")
@@ -928,10 +1359,17 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
                 edge_scales=mat_vtx_edge_scales
             )
             mc.sets(f"{sub_mesh_name}.f[0:{len(mat_face_counts) - 1}]", forceElement=sg_node)
+            # キャラクターメッシュ自身の影受けを無効化（顔・脚の黒潰れ防止）
+            try:
+                sub_shapes = mc.listRelatives(sub_mesh_name, shapes=True, fullPath=True) or [sub_mesh_name]
+                for s_shp in sub_shapes:
+                    mc.setAttr(f"{s_shp}.receiveShadows", 0)
+            except Exception:
+                pass
+
             if is_transparent_morph_mat:
                 try:
                     mc.setAttr(f"{sub_mesh_name}.castsShadows", 0)
-                    mc.setAttr(f"{sub_mesh_name}.receiveShadows", 0)
                 except Exception:
                     pass
             material_mesh_nodes.append(sub_mesh_name)
@@ -946,61 +1384,104 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
     if split_by_material:
         model_mesh_node = mc.group(material_mesh_nodes, name=model_node_name)
 
-    # 4. ブレンドシェイプ（モーフ）の作成
+    # ブレンドシェイプ（モーフ）の作成
     morph_structure_map = {}
     if create_blendshapes and not split_by_material:
         print("[4/6] ブレンドシェイプ（モーフ）を作成中...")
         vertex_morphs = [m for m in pmx_model.morphs if m.type_index() == 1]
         if vertex_morphs:
-            bs_mesh_nodes = []
+            # ベースメッシュのみを指定して空の blendShape ノードを作成
+            blendshape_node_name = mc.blendShape(model_mesh_node, name=f"bs_{model_mesh_node}")[0]
+
+            # OpenMaya 2.0 によるプラグ直接書き込み
+            sel = om.MSelectionList()
+            sel.add(blendshape_node_name)
+            bs_mobj = sel.getDependNode(0)
+            fn_bs_node = om.MFnDependencyNode(bs_mobj)
+
+            plug_input_target_0 = fn_bs_node.findPlug('inputTarget', False).elementByLogicalIndex(0)
+            plug_target_group = plug_input_target_0.child(0)
+
+            registered_count = 0
             for m_idx, morph in enumerate(vertex_morphs):
-                morph_name_e = getattr(morph, 'name_e', None)
-                safe_morph_name = safe_node_name(morph.name, name_e=morph_name_e, prefix="morph", index=m_idx)
-                target_attr_name = f"temp_bs_{m_idx:03d}_{safe_morph_name}"
-                
-                # メッシュの複製
                 try:
-                    dup_node = mc.duplicate(model_mesh_node, name=target_attr_name)[0]
-                    sel = om.MSelectionList()
-                    sel.add(dup_node)
-                    dag_path = sel.getDagPath(0)
-                    fn_mesh = om.MFnMesh(dag_path)
-                    points = fn_mesh.getPoints()
-                    num_pts = len(points)
+                    if not morph.offsets:
+                        continue
+
+                    morph_name_e = getattr(morph, 'name_e', None)
+                    safe_morph_name = safe_node_name(morph.name, name_e=morph_name_e, prefix="morph", index=m_idx)
+                    target_attr_name = f"temp_bs_{m_idx:03d}_{safe_morph_name}"
+
+                    # inputTargetGroup[m_idx].inputTargetItem[6000] プラグの取得
+                    plug_grp = plug_target_group.elementByLogicalIndex(m_idx)
+                    plug_item = plug_grp.child(0).elementByLogicalIndex(6000)
+
+                    plug_pts = None
+                    plug_comps = None
+                    for c_i in range(plug_item.numChildren()):
+                        ch = plug_item.child(c_i)
+                        if 'inputPointsTarget' in ch.name():
+                            plug_pts = ch
+                        elif 'inputComponentsTarget' in ch.name():
+                            plug_comps = ch
+
+                    if not plug_pts or not plug_comps:
+                        continue
+
+                    # 移動対象頂点と差分ベクトル配列（Sparse Delta）の構築
+                    pts_array = om.MPointArray()
+                    fn_comp = om.MFnSingleIndexedComponent()
+                    comp_obj = fn_comp.create(om.MFn.kMeshVertComponent)
 
                     for offset in morph.offsets:
                         vi = offset.index
-                        if vi < num_pts:
+                        if vi < num_vertices:
                             off = offset.offset
-                            p = points[vi]
-                            points[vi] = om.MPoint(p[0] + off[0] * scale, p[1] + off[1] * scale, p[2] - off[2] * scale)
+                            # 座標系変換: X * scale, Y * scale, -Z * scale
+                            pts_array.append(om.MPoint(off[0] * scale, off[1] * scale, -off[2] * scale, 1.0))
+                            fn_comp.addElement(vi)
 
-                    fn_mesh.setPoints(points)
-                    bs_mesh_nodes.append(dup_node)
-                    # BlendShapeターゲットとして登録される一意な識別名を記録
-                    morph_structure_map[morph.name] = dup_node
+                    if len(pts_array) == 0:
+                        continue
+
+                    # 差分頂点配列の書き込み
+                    fn_pts = om.MFnPointArrayData()
+                    plug_pts.setMObject(fn_pts.create(pts_array))
+
+                    # コンポーネントリストの書き込み
+                    fn_comp_data = om.MFnComponentListData()
+                    data_comp = fn_comp_data.create()
+                    fn_comp_data.add(comp_obj)
+                    plug_comps.setMObject(data_comp)
+
+                    # 初期ウェイト属性を0.0に設定
+                    mc.setAttr(f"{blendshape_node_name}.weight[{m_idx}]", 0.0)
+
+                    # 安全なターゲット属性名としてエイリアス登録 (MayaのチャネルボックスおよびUI認識を確保)
+                    try:
+                        mc.aliasAttr(target_attr_name, f"{blendshape_node_name}.w[{m_idx}]")
+                    except Exception:
+                        pass
+
+                    # 構造マップにターゲット属性名を記録（表情操作UIおよびVMDインポートとの整合性を維持）
+                    morph_structure_map[morph.name] = target_attr_name
+                    if morph_name_e:
+                        morph_structure_map[morph_name_e] = target_attr_name
+
+                    registered_count += 1
                 except Exception as e:
                     print(f"  [警告] モーフ '{morph.name}' の作成をスキップしました: {e}")
 
-            if bs_mesh_nodes:
-                mc.select(bs_mesh_nodes + [model_mesh_node])
-                blendshape_node_name = mc.blendShape(name=f"bs_{model_mesh_node}")[0]
-                mc.delete(bs_mesh_nodes) # 作業用複製メッシュを削除
+            print(f"  - {registered_count} 個の頂点モーフを高速登録しました")
 
-                # 日本語モーフ名へのエイリアス設定
-                for idx, m_name in enumerate(morph_structure_map.keys()):
-                    try:
-                        clean_alias = re.sub(r'[^a-zA-Z0-9_\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]', '_', m_name)
-                        mc.aliasAttr(clean_alias, f"{blendshape_node_name}.w[{idx}]")
-                    except Exception:
-                        pass
-                print(f"  - {len(bs_mesh_nodes)} 個の頂点モーフを登録しました")
-
-    # 材質モーフ（Material Morph）の作成とシェーダー連携
+    # 材質モーフ（Material Morph）の作成とMMD純正方式による統合シェーダー連携
     if create_blendshapes:
         material_morphs = [m for m in pmx_model.morphs if getattr(m, 'morph_type', 0) == 8 or (hasattr(m, 'type_index') and m.type_index() == 8)]
         if material_morphs:
             print(f"  - 材質モーフ ({len(material_morphs)} 個) を構築中...")
+
+            # モデルノードへ各モーフのアトリビュートを登録
+            morph_attr_list = []
             for m_idx, morph in enumerate(material_morphs):
                 morph_name_e = getattr(morph, 'name_e', None)
                 safe_morph_name = safe_node_name(morph.name, name_e=morph_name_e, prefix="matmorph", index=m_idx)
@@ -1013,136 +1494,200 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
                     morph_structure_map[morph.name] = attr_name
                     if morph_name_e:
                         morph_structure_map[morph_name_e] = attr_name
-
-                    # オフセット情報に基づき対象シェーダーへ接続
-                    for off in getattr(morph, 'offsets', []):
-                        target_mat_idx = off[0]
-                        calc_op = off[1]
-                        diff_data = off[2] if len(off) > 2 else [0.0, 0.0, 0.0, 0.0]
-                        diff_rgb = diff_data[:3]
-                        diff_a = diff_data[3] if len(diff_data) > 3 else 0.0
-                        edge_data = off[5] if len(off) > 5 else [0.0, 0.0, 0.0, 0.0]
-                        edge_a = edge_data[3] if len(edge_data) > 3 else 0.0
-
-                        target_indices = [target_mat_idx] if target_mat_idx >= 0 else list(material_shader_dict.keys())
-                        for ti in target_indices:
-                            target_shd = material_shader_dict.get(ti)
-                            if not target_shd or not mc.objExists(target_shd):
-                                continue
-
-                            # アルファ制御（表示および非表示）
-                            if diff_a > 0.05:
-                                # 透過から表示へのモーフ（頬染め、ガーン、肌3、下着2等）
-                                alpha_mult = material_alpha_mult_dict.get(ti)
-                                if alpha_mult and mc.objExists(alpha_mult):
-                                    try:
-                                        mc.connectAttr(f"{model_mesh_node}.{attr_name}", f"{alpha_mult}.input2", force=True)
-                                    except Exception:
-                                        pass
-                                else:
-                                    try:
-                                        rev_n = mc.shadingNode('reverse', asUtility=True, name=f"{safe_morph_name}_{ti}_rev")
-                                        mc.connectAttr(f"{model_mesh_node}.{attr_name}", f"{rev_n}.inputX", force=True)
-                                        if material_type in [1, 2, 3]:
-                                            mc.connectAttr(f"{rev_n}.outputX", f"{target_shd}.transparencyR", force=True)
-                                            mc.connectAttr(f"{rev_n}.outputX", f"{target_shd}.transparencyG", force=True)
-                                            mc.connectAttr(f"{rev_n}.outputX", f"{target_shd}.transparencyB", force=True)
-                                        elif material_type == 4:
-                                            mc.connectAttr(f"{model_mesh_node}.{attr_name}", f"{target_shd}.opacityR", force=True)
-                                            mc.connectAttr(f"{model_mesh_node}.{attr_name}", f"{target_shd}.opacityG", force=True)
-                                            mc.connectAttr(f"{model_mesh_node}.{attr_name}", f"{target_shd}.opacityB", force=True)
-                                    except Exception:
-                                        pass
-
-                                # 受光強度の連動（モーフ値に応じて拡散受光を滑らかに有効化）
-                                try:
-                                    diff_gain = mc.shadingNode('multDoubleLinear', asUtility=True, name=f"{safe_morph_name}_{ti}_diff_gain")
-                                    mc.connectAttr(f"{model_mesh_node}.{attr_name}", f"{diff_gain}.input1", force=True)
-                                    mc.setAttr(f"{diff_gain}.input2", 0.8)
-                                    if material_type in [1, 2, 3]:
-                                        mc.connectAttr(f"{diff_gain}.output", f"{target_shd}.diffuse", force=True)
-                                    elif material_type == 4:
-                                        mc.connectAttr(f"{diff_gain}.output", f"{target_shd}.base", force=True)
-                                except Exception:
-                                    pass
-
-                                # エッジ出現の連動
-                                if edge_a > 0.05 and mc.attributeQuery("edgeSize", node=target_shd, exists=True):
-                                    try:
-                                        edge_appear = mc.shadingNode('multDoubleLinear', asUtility=True, name=f"{safe_morph_name}_{ti}_edge_appear")
-                                        mc.connectAttr(f"{model_mesh_node}.{attr_name}", f"{edge_appear}.input1", force=True)
-                                        mc.setAttr(f"{edge_appear}.input2", 1.0)
-                                        mc.connectAttr(f"{edge_appear}.output", f"{target_shd}.edgeSize", force=True)
-                                    except Exception:
-                                        pass
-
-                            elif diff_a < -0.05:
-                                # 表示から非表示へのモーフ（帽子off、靴下off、ドロワoff等）
-                                try:
-                                    if material_type in [1, 2, 3]:
-                                        mc.connectAttr(f"{model_mesh_node}.{attr_name}", f"{target_shd}.transparencyR", force=True)
-                                        mc.connectAttr(f"{model_mesh_node}.{attr_name}", f"{target_shd}.transparencyG", force=True)
-                                        mc.connectAttr(f"{model_mesh_node}.{attr_name}", f"{target_shd}.transparencyB", force=True)
-                                    elif material_type == 4:
-                                        rev_n = mc.shadingNode('reverse', asUtility=True, name=f"{safe_morph_name}_{ti}_off_rev")
-                                        mc.connectAttr(f"{model_mesh_node}.{attr_name}", f"{rev_n}.inputX", force=True)
-                                        mc.connectAttr(f"{rev_n}.outputX", f"{target_shd}.opacityR", force=True)
-                                        mc.connectAttr(f"{rev_n}.outputX", f"{target_shd}.opacityG", force=True)
-                                        mc.connectAttr(f"{rev_n}.outputX", f"{target_shd}.opacityB", force=True)
-                                    elif material_type == 5:
-                                        mc.connectAttr(f"{model_mesh_node}.{attr_name}", f"{target_shd}.transparencyR", force=True)
-                                        mc.connectAttr(f"{model_mesh_node}.{attr_name}", f"{target_shd}.transparencyG", force=True)
-                                        mc.connectAttr(f"{model_mesh_node}.{attr_name}", f"{target_shd}.transparencyB", force=True)
-                                except Exception:
-                                    pass
-
-                                # 非表示化に伴う拡散受光の減衰（服が消えた際の受光・影の残存を遮断）
-                                try:
-                                    fade_rev = mc.shadingNode('reverse', asUtility=True, name=f"{safe_morph_name}_{ti}_diff_fade_rev")
-                                    mc.connectAttr(f"{model_mesh_node}.{attr_name}", f"{fade_rev}.inputX", force=True)
-                                    diff_fade = mc.shadingNode('multDoubleLinear', asUtility=True, name=f"{safe_morph_name}_{ti}_diff_fade")
-                                    mc.connectAttr(f"{fade_rev}.outputX", f"{diff_fade}.input1", force=True)
-                                    mc.setAttr(f"{diff_fade}.input2", 0.8)
-                                    if material_type in [1, 2, 3]:
-                                        mc.connectAttr(f"{diff_fade}.output", f"{target_shd}.diffuse", force=True)
-                                    elif material_type == 4:
-                                        mc.connectAttr(f"{diff_fade}.output", f"{target_shd}.base", force=True)
-                                except Exception:
-                                    pass
-
-                                # エッジ消去の連動（輪郭線の残存を防止）
-                                if edge_a < -0.05 and mc.attributeQuery("edgeSize", node=target_shd, exists=True):
-                                    try:
-                                        edge_fade_rev = mc.shadingNode('reverse', asUtility=True, name=f"{safe_morph_name}_{ti}_edge_fade_rev")
-                                        mc.connectAttr(f"{model_mesh_node}.{attr_name}", f"{edge_fade_rev}.inputX", force=True)
-                                        edge_fade = mc.shadingNode('multDoubleLinear', asUtility=True, name=f"{safe_morph_name}_{ti}_edge_fade")
-                                        mc.connectAttr(f"{edge_fade_rev}.outputX", f"{edge_fade}.input1", force=True)
-                                        cur_edge_sz = float(mc.getAttr(f"{target_shd}.edgeSize") or 1.0)
-                                        mc.setAttr(f"{edge_fade}.input2", cur_edge_sz)
-                                        mc.connectAttr(f"{edge_fade}.output", f"{target_shd}.edgeSize", force=True)
-                                    except Exception:
-                                        pass
-
-                            # カラー変化（ダークアイ、ガーン赤、ガーン青等）
-                            if any(abs(c) > 0.05 for c in diff_rgb):
-                                try:
-                                    blend_c = mc.shadingNode('blendColors', asUtility=True, name=f"{safe_morph_name}_{ti}_color_blend")
-                                    color_target_attr = f"{target_shd}.color" if material_type in [1, 2, 3] else f"{target_shd}.baseColor"
-                                    cur_col = mc.getAttr(color_target_attr)[0] if (mc.attributeQuery("color", node=target_shd, exists=True) or mc.attributeQuery("baseColor", node=target_shd, exists=True)) else [1.0, 1.0, 1.0]
-                                    if calc_op == 1:
-                                        target_col = [max(0.0, min(1.0, cur_col[i] + diff_rgb[i])) for i in range(3)]
-                                    else:
-                                        target_col = [max(0.0, min(1.0, cur_col[i] * diff_rgb[i])) for i in range(3)]
-                                    mc.setAttr(f"{blend_c}.color1", *target_col, typ='double3')
-                                    mc.setAttr(f"{blend_c}.color2", *cur_col, typ='double3')
-                                    mc.connectAttr(f"{model_mesh_node}.{attr_name}", f"{blend_c}.blender", force=True)
-                                    mc.connectAttr(f"{blend_c}.output", color_target_attr, force=True)
-                                except Exception:
-                                    pass
+                    morph_attr_list.append((attr_name, safe_morph_name, morph))
                 except Exception as e:
-                    print(f"  [警告] 材質モーフ '{morph.name}' の作成中にエラー: {e}")
+                    print(f"  [警告] 材質モーフ属性 '{morph.name}' の追加に失敗: {e}")
+                    morph_attr_list.append((None, safe_morph_name, morph))
 
-    # 5. ジョイント（ボーンスケルトン）の作成
+            # 各材質に影響を与えるモーフオフセットを辞書に収集
+            mat_morph_affects = {i: [] for i in range(len(pmx_model.materials))}
+            for attr_name, safe_m_name, morph in morph_attr_list:
+                if not attr_name:
+                    continue
+                for off in getattr(morph, 'offsets', []):
+                    target_mat_idx = off[0]
+                    calc_op = off[1]
+                    diff_data = off[2] if len(off) > 2 else [0.0, 0.0, 0.0, 0.0]
+                    spec_data = off[3] if len(off) > 3 else [0.0, 0.0, 0.0]
+                    amb_data = off[4] if len(off) > 4 else [0.0, 0.0, 0.0]
+                    edge_data = off[5] if len(off) > 5 else [0.0, 0.0, 0.0, 0.0]
+                    edge_sz = off[6] if len(off) > 6 else 0.0
+
+                    target_indices = [target_mat_idx] if target_mat_idx >= 0 else list(mat_morph_affects.keys())
+                    for ti in target_indices:
+                        if ti in mat_morph_affects:
+                            mat_morph_affects[ti].append({
+                                'morph_attr': f"{model_mesh_node}.{attr_name}",
+                                'morph_name': morph.name,
+                                'safe_morph_name': safe_m_name,
+                                'calc_op': calc_op, # 0: MUL, 1: ADD
+                                'diff_rgb': diff_data[:3],
+                                'diff_a': diff_data[3] if len(diff_data) > 3 else 0.0,
+                                'amb_rgb': amb_data[:3],
+                                'spec_rgb': spec_data[:3],
+                                'edge_rgb': edge_data[:3],
+                                'edge_a': edge_data[3] if len(edge_data) > 3 else 0.0,
+                                'edge_sz': edge_sz
+                            })
+
+            # 各材質ごとに統合シェーダー合成ネットワークを構築
+            for mat_idx, affects in mat_morph_affects.items():
+                if not affects:
+                    continue
+                target_shd = material_shader_dict.get(mat_idx)
+                if not target_shd or not mc.objExists(target_shd):
+                    continue
+
+                mat_data = pmx_model.materials[mat_idx]
+                safe_mat_id = safe_node_name(mat_data.name, name_e=getattr(mat_data, 'name_e', None), prefix="mat", index=mat_idx)
+                base_alpha = float(mat_data.diffuse[3])
+                base_diff = mat_data.diffuse[:3]
+                tex_file_node = material_tex_node_dict.get(mat_idx)
+                color_source = material_color_source_dict.get(mat_idx)
+
+                # アルファ合成ネットワーク（加算・乗算の統合）
+                alpha_affects = [a for a in affects if abs(a['diff_a']) > 0.001 or (a['calc_op'] == 0 and abs(a['diff_a'] - 1.0) > 0.001)]
+                if alpha_affects:
+                    try:
+                        add_alpha_terms = []
+                        for idx, aff in enumerate(alpha_affects):
+                            diff_a = aff['diff_a']
+                            calc_op = aff['calc_op']
+                            m_attr = aff['morph_attr']
+                            if calc_op == 1 and abs(diff_a) > 0.001:
+                                term_node = mc.shadingNode('multDoubleLinear', asUtility=True, name=f"{safe_mat_id}_a_term{idx}_{model_node_name}")
+                                mc.connectAttr(m_attr, f"{term_node}.input1", force=True)
+                                mc.setAttr(f"{term_node}.input2", float(diff_a))
+                                add_alpha_terms.append(f"{term_node}.output")
+                            elif calc_op == 0 and diff_a < 0.999:
+                                term_node = mc.shadingNode('multDoubleLinear', asUtility=True, name=f"{safe_mat_id}_a_mult_term{idx}_{model_node_name}")
+                                mc.connectAttr(m_attr, f"{term_node}.input1", force=True)
+                                mc.setAttr(f"{term_node}.input2", float(diff_a - 1.0))
+                                add_alpha_terms.append(f"{term_node}.output")
+
+                        # ベースアルファと全加算項の合算
+                        sum_alpha_node = mc.shadingNode('plusMinusAverage', asUtility=True, name=f"{safe_mat_id}_alpha_sum_{model_node_name}")
+                        mc.setAttr(f"{sum_alpha_node}.input1D[0]", float(base_alpha))
+                        for term_idx, term_out in enumerate(add_alpha_terms):
+                            mc.connectAttr(term_out, f"{sum_alpha_node}.input1D[{term_idx + 1}]", force=True)
+
+                        # アルファ値の 0.0 〜 1.0 クランプ
+                        clamp_alpha = mc.shadingNode('clamp', asUtility=True, name=f"{safe_mat_id}_alpha_clamp_{model_node_name}")
+                        mc.setAttr(f"{clamp_alpha}.minR", 0.0)
+                        mc.setAttr(f"{clamp_alpha}.maxR", 1.0)
+                        mc.connectAttr(f"{sum_alpha_node}.output1D", f"{clamp_alpha}.inputR", force=True)
+                        final_alpha_out = f"{clamp_alpha}.outputR"
+
+                        # テクスチャアルファが存在する場合は乗算ブレンド
+                        if tex_file_node and mc.objExists(tex_file_node) and texture_has_alpha_map.get(mat_data.texture, False):
+                            tex_alpha_mult = mc.shadingNode('multDoubleLinear', asUtility=True, name=f"{safe_mat_id}_final_tex_alpha_{model_node_name}")
+                            mc.connectAttr(final_alpha_out, f"{tex_alpha_mult}.input1", force=True)
+                            mc.connectAttr(f"{tex_file_node}.outAlpha", f"{tex_alpha_mult}.input2", force=True)
+                            final_opacity_source = f"{tex_alpha_mult}.output"
+                        else:
+                            final_opacity_source = final_alpha_out
+
+                        # 反転ノード経由でシェーダーの transparency に接続
+                        rev_alpha = mc.shadingNode('reverse', asUtility=True, name=f"{safe_mat_id}_final_rev_{model_node_name}")
+                        mc.connectAttr(final_opacity_source, f"{rev_alpha}.inputX", force=True)
+
+                        if material_type in [1, 2, 3]:
+                            mc.connectAttr(f"{rev_alpha}.outputX", f"{target_shd}.transparencyR", force=True)
+                            mc.connectAttr(f"{rev_alpha}.outputX", f"{target_shd}.transparencyG", force=True)
+                            mc.connectAttr(f"{rev_alpha}.outputX", f"{target_shd}.transparencyB", force=True)
+                        elif material_type == 4:
+                            mc.connectAttr(final_opacity_source, f"{target_shd}.opacityR", force=True)
+                            mc.connectAttr(final_opacity_source, f"{target_shd}.opacityG", force=True)
+                            mc.connectAttr(final_opacity_source, f"{target_shd}.opacityB", force=True)
+                        elif material_type in [5, 6]:
+                            mc.connectAttr(f"{rev_alpha}.outputX", f"{target_shd}.transparencyR", force=True)
+                            mc.connectAttr(f"{rev_alpha}.outputX", f"{target_shd}.transparencyG", force=True)
+                            mc.connectAttr(f"{rev_alpha}.outputX", f"{target_shd}.transparencyB", force=True)
+                            if mc.attributeQuery("diffuseAlpha", node=target_shd, exists=True):
+                                mc.connectAttr(final_opacity_source, f"{target_shd}.diffuseAlpha", force=True)
+
+                        # 初期アルファが透明（<= 0.05）の顔透過板材質（チーク・涙等）のみ、アルファ出現時に拡散受光を動的有効化
+                        is_target_face_overlay = any(k in (mat_data.name or "").lower() or k in (getattr(mat_data, 'name_e', '') or "").lower() for k in ["頬", "cheek", "照れ", "blush", "涙", "tear", "斜線", "ガーン", "gaan"])
+                        if base_alpha <= 0.05 and is_target_face_overlay:
+                            diff_gain = mc.shadingNode('multDoubleLinear', asUtility=True, name=f"{safe_mat_id}_diff_gain_{model_node_name}")
+                            mc.connectAttr(final_opacity_source, f"{diff_gain}.input1", force=True)
+                            mc.setAttr(f"{diff_gain}.input2", 0.8)
+                            if material_type in [1, 2, 3]:
+                                mc.connectAttr(f"{diff_gain}.output", f"{target_shd}.diffuse", force=True)
+                            elif material_type == 4:
+                                mc.connectAttr(f"{diff_gain}.output", f"{target_shd}.base", force=True)
+                            elif material_type in [5, 6]:
+                                if mc.attributeQuery("diffuse", node=target_shd, exists=True):
+                                    mc.connectAttr(f"{diff_gain}.output", f"{target_shd}.diffuse", force=True)
+                    except Exception as e:
+                        print(f"  [警告] 材質 '{mat_data.name}' のアルファモーフ統合に失敗: {e}")
+
+                # カラー合成ネットワーク（色加算・乗算の統合）
+                color_affects = [a for a in affects if any(abs(c) > 0.01 for c in a['diff_rgb']) or any(abs(c) > 0.01 for c in a['amb_rgb'])]
+                if color_affects:
+                    try:
+                        add_col_terms = []
+                        for idx, aff in enumerate(color_affects):
+                            diff_rgb = aff['diff_rgb']
+                            calc_op = aff['calc_op']
+                            m_attr = aff['morph_attr']
+                            if calc_op == 1 and any(abs(c) > 0.01 for c in diff_rgb):
+                                mult_col = mc.shadingNode('multiplyDivide', asUtility=True, name=f"{safe_mat_id}_c_term{idx}_{model_node_name}")
+                                mc.setAttr(f"{mult_col}.operation", 1) # Multiply
+                                mc.setAttr(f"{mult_col}.input1", *diff_rgb, typ='double3')
+                                mc.connectAttr(m_attr, f"{mult_col}.input2X", force=True)
+                                mc.connectAttr(m_attr, f"{mult_col}.input2Y", force=True)
+                                mc.connectAttr(m_attr, f"{mult_col}.input2Z", force=True)
+                                add_col_terms.append(f"{mult_col}.output")
+
+                        if add_col_terms:
+                            sum_col_node = mc.shadingNode('plusMinusAverage', asUtility=True, name=f"{safe_mat_id}_color_sum_{model_node_name}")
+                            sum_col_node_op = 1 # Sum
+                            if color_source and mc.objExists(color_source.split('.')[0]):
+                                mc.connectAttr(color_source, f"{sum_col_node}.input3D[0]", force=True)
+                            else:
+                                mc.setAttr(f"{sum_col_node}.input3D[0]", *base_diff, typ='double3')
+
+                            for c_idx, c_out in enumerate(add_col_terms):
+                                mc.connectAttr(c_out, f"{sum_col_node}.input3D[{c_idx + 1}]", force=True)
+
+                            color_target = f"{target_shd}.color" if material_type in [1, 2, 3, 5, 6] else f"{target_shd}.baseColor"
+                            mc.connectAttr(f"{sum_col_node}.output3D", color_target, force=True)
+                            if material_type == 6 and mc.attributeQuery("diffuseColor", node=target_shd, exists=True):
+                                mc.connectAttr(f"{sum_col_node}.output3D", f"{target_shd}.diffuseColor", force=True)
+                    except Exception as e:
+                        print(f"  [警告] 材質 '{mat_data.name}' のカラーモーフ統合に失敗: {e}")
+
+                # エッジ制御の連動
+                edge_affects = [a for a in affects if abs(a['edge_a']) > 0.01 or abs(a['edge_sz']) > 0.01]
+                if edge_affects and mc.attributeQuery("edgeSize", node=target_shd, exists=True):
+                    try:
+                        base_edge_sz = float(mc.getAttr(f"{target_shd}.edgeSize") or 1.0)
+                        add_edge_terms = []
+                        for idx, aff in enumerate(edge_affects):
+                            edge_a = aff['edge_a']
+                            m_attr = aff['morph_attr']
+                            if abs(edge_a) > 0.01:
+                                term_e = mc.shadingNode('multDoubleLinear', asUtility=True, name=f"{safe_mat_id}_e_term{idx}_{model_node_name}")
+                                mc.connectAttr(m_attr, f"{term_e}.input1", force=True)
+                                mc.setAttr(f"{term_e}.input2", float(edge_a * base_edge_sz))
+                                add_edge_terms.append(f"{term_e}.output")
+
+                        if add_edge_terms:
+                            sum_edge_node = mc.shadingNode('plusMinusAverage', asUtility=True, name=f"{safe_mat_id}_edge_sum_{model_node_name}")
+                            mc.setAttr(f"{sum_edge_node}.input1D[0]", base_edge_sz)
+                            for e_idx, e_out in enumerate(add_edge_terms):
+                                mc.connectAttr(e_out, f"{sum_edge_node}.input1D[{e_idx + 1}]", force=True)
+                            clamp_edge = mc.shadingNode('clamp', asUtility=True, name=f"{safe_mat_id}_edge_clamp_{model_node_name}")
+                            mc.setAttr(f"{clamp_edge}.minR", 0.0)
+                            mc.setAttr(f"{clamp_edge}.maxR", 10.0)
+                            mc.connectAttr(f"{sum_edge_node}.output1D", f"{clamp_edge}.inputR", force=True)
+                            mc.connectAttr(f"{clamp_edge}.outputR", f"{target_shd}.edgeSize", force=True)
+                    except Exception as e:
+                        print(f"  [警告] 材質 '{mat_data.name}' のエッジモーフ統合に失敗: {e}")
+
+
+    # ジョイント（ボーンスケルトン）の作成
     if create_joints and not split_by_material:
         print("[5/6] ジョイント（ボーン）を作成中...")
         joint_node_names = []
@@ -1238,7 +1783,7 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
                     )
                     mc.expression(string=expr, name=f"expr_loc_{child_j}_{effect_j}")
 
-        # 6. スキニングウェイト設定
+        # スキニングウェイト設定
         print("[6/6] スキニングウェイトを設定中...")
         sel = om.MSelectionList()
         sel.add(model_mesh_node)
@@ -1268,24 +1813,42 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
 
             try:
                 if w_type == mmd_core.pmx.BoneWeight.BDEF1:
-                    w[bones[0]] = 1.0
+                    b0 = bones[0]
+                    if 0 <= b0 < num_joints:
+                        w[b0] = 1.0
+                    elif num_joints > 0:
+                        w[0] = 1.0
                 elif w_type == mmd_core.pmx.BoneWeight.BDEF2:
-                    w[bones[0]] += weights[0]
-                    w[bones[1]] += 1.0 - weights[0]
+                    b0, b1 = bones[0], bones[1]
+                    w0 = weights[0]
+                    if 0 <= b0 < num_joints:
+                        w[b0] += w0
+                    if 0 <= b1 < num_joints:
+                        w[b1] += (1.0 - w0)
                 elif w_type == mmd_core.pmx.BoneWeight.SDEF:
-                    if hasattr(weights, 'weight'):
-                        w[bones[0]] += weights.weight
-                        w[bones[1]] += 1.0 - weights.weight
-                    else:
-                        w[bones[0]] += 0.5
-                        w[bones[1]] += 0.5
-                elif w_type == mmd_core.pmx.BoneWeight.BDEF4:
-                    w[bones[0]] += weights[0]
-                    w[bones[1]] += weights[1]
-                    w[bones[2]] += weights[2]
-                    w[bones[3]] += 1.0 - weights[0] - weights[1] - weights[2]
+                    b0, b1 = bones[0], bones[1]
+                    s_weight = weights.weight if hasattr(weights, 'weight') else 0.5
+                    if 0 <= b0 < num_joints:
+                        w[b0] += s_weight
+                    if 0 <= b1 < num_joints:
+                        w[b1] += (1.0 - s_weight)
+                elif w_type == mmd_core.pmx.BoneWeight.BDEF4 or w_type == getattr(mmd_core.pmx.BoneWeight, 'QDEF', 4):
+                    for idx in range(4):
+                        b_i = bones[idx]
+                        if 0 <= b_i < num_joints:
+                            w[b_i] += weights[idx]
             except Exception:
                 pass
+
+            # ウェイト合計がゼロ、またはNaNの場合のフォールバック
+            sum_w = sum(w)
+            if sum_w <= 1e-6 or math.isnan(sum_w):
+                if num_joints > 0:
+                    w = [0.0] * num_joints
+                    w[0] = 1.0
+            else:
+                # 正規化
+                w = [v / sum_w for v in w]
 
             all_weights.extend(w)
 
@@ -1314,13 +1877,18 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
                     actual_j = mc.rename(j_name, short_name)
                 except Exception:
                     actual_j = j_name
+
+            # フルDAGパスを取得して名前重複衝突を防止
+            try:
+                long_names = mc.ls(actual_j, long=True)
+                final_path = long_names[0] if long_names else actual_j
+            except Exception:
+                final_path = actual_j
+
+            # 剛体・Jointバインド用にリネーム後のノード参照を更新
+            joint_node_names[b_idx] = final_path
+
             if bone_obj:
-                # フルDAGパスを取得して名前重複衝突を防止
-                try:
-                    long_names = mc.ls(actual_j, long=True)
-                    final_path = long_names[0] if long_names else actual_j
-                except Exception:
-                    final_path = actual_j
 
                 name_jp = bone_obj.name
                 name_en = getattr(bone_obj, 'name_e', '') or ''
@@ -1374,6 +1942,11 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
     # MMDモデルルート識別アトリビュート
     mc.addAttr(model_mesh_node, longName='mmdModelRoot', attributeType='bool')
     mc.setAttr(f"{model_mesh_node}.mmdModelRoot", True)
+
+    # モデルの元ファイルパスを保持 (複数モデル物理ベイク等の自動参照用)
+    if not mc.attributeQuery('mmdModelPath', node=model_mesh_node, exists=True):
+        mc.addAttr(model_mesh_node, longName='mmdModelPath', niceName='PMXファイルパス', dataType='string')
+    mc.setAttr(f"{model_mesh_node}.mmdModelPath", os.path.abspath(file_path).replace('\\', '/'), typ='string')
 
     # モデルノードのUUID取得
     model_uuid = ""
@@ -1529,6 +2102,16 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
     except Exception as e:
         print(f"  [警告] 構造メタデータの保存中に軽微なエラー: {e}")
 
+    # 剛体・Jointコライダーの自動生成
+    physics_root_group = None
+    if create_physics and create_joints and getattr(pmx_model, 'rigid_bodies', None):
+        try:
+            physics_root_group = create_rigidbody_and_joint_nodes(
+                pmx_model, model_mesh_node, joint_node_names, scale=scale
+            )
+        except Exception as e:
+            print(f"  [警告] 剛体・Joint生成エラー: {e}")
+
     mc.select(model_mesh_node)
     if create_joints and root_joint_names:
         mc.select(root_joint_names, add=True)
@@ -1549,12 +2132,13 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
 
     return model_mesh_node, root_joint_names, skin_node_name, blendshape_node_name
 
-def setup_viewport_display(shadow_mode=None):
+def setup_viewport_display(shadow_mode=None, prevent_motion_darkening=True):
     """
     ビューポートの表示品質を最適化:
     - テクスチャ表示（displayTextures=True / 6キー相当）を有効化
     - アンチエイリアシング（マルチサンプルAAおよびポストAA）を有効化
     - 透過アルゴリズム（Depth Peeling）を設定
+    - モーション再生時の暗化防止（シャッター開度0.01によるブレなしHDRパス最適化）
     - ライティング・影表示を設定（shadow_mode指定時）
     """
     # ハードウェアレンダリング設定（アンチエイリアシング & 深度ピーリング）
@@ -1571,6 +2155,16 @@ def setup_viewport_display(shadow_mode=None):
             # 透過アルゴリズムを Depth Peeling に設定
             if mc.attributeQuery('transparencyAlgorithm', node='hardwareRenderingGlobals', exists=True):
                 mc.setAttr('hardwareRenderingGlobals.transparencyAlgorithm', 3)
+            # モーション再生時の暗化防止（シャッター開度0.01によるブレなしHDRポストパス最適化）
+            if mc.attributeQuery('motionBlurEnable', node='hardwareRenderingGlobals', exists=True):
+                mc.setAttr('hardwareRenderingGlobals.motionBlurEnable', bool(prevent_motion_darkening))
+            if prevent_motion_darkening:
+                if mc.attributeQuery('motionBlurShutterOpenFraction', node='hardwareRenderingGlobals', exists=True):
+                    mc.setAttr('hardwareRenderingGlobals.motionBlurShutterOpenFraction', 0.01)
+                if mc.attributeQuery('floatingPointRTEnable', node='hardwareRenderingGlobals', exists=True):
+                    mc.setAttr('hardwareRenderingGlobals.floatingPointRTEnable', True)
+                if mc.attributeQuery('floatingPointRTFormat', node='hardwareRenderingGlobals', exists=True):
+                    mc.setAttr('hardwareRenderingGlobals.floatingPointRTFormat', 1)
     except Exception:
         pass
 
@@ -1586,8 +2180,31 @@ def setup_viewport_display(shadow_mode=None):
     except Exception:
         pass
 
+    # シーン内のMMDモデルメッシュの影受け(receiveShadows)を0に適正化
+    optimize_model_meshes_for_mmd_lighting()
+
     # perspカメラの焦点距離をMMD標準画角に設定
     setup_persp_camera_for_mmd()
+
+def optimize_model_meshes_for_mmd_lighting(target_model_root=None):
+    """
+    MMDモデルの全メッシュに対し、自身の影受け(receiveShadows)を無効化して
+    帽子やスカートによる顔・脚の不快な黒潰れを防止しつつ、地面影への影落とし(castsShadows)を維持します。
+    ※ 地面影プレーン (mmd_ground_shadow_plane) は影を受け止めるため receiveShadows=True を維持します。
+    """
+    try:
+        all_meshes = mc.ls(type="mesh", long=True) or []
+        for m in all_meshes:
+            # 地面影プレーン自身は影を受ける必要があるためスキップ
+            if "mmd_ground_shadow" in m:
+                continue
+            # カメラやライトの補助形状はスキップ
+            if any(k in m for k in ["Camera", "Light", "light"]):
+                continue
+            if mc.attributeQuery("receiveShadows", node=m, exists=True):
+                mc.setAttr(f"{m}.receiveShadows", 0)
+    except Exception:
+        pass
 
 def setup_persp_camera_for_mmd(target_fov_deg=30.0):
     """
@@ -1643,10 +2260,10 @@ def set_untone_mapped_view_transform():
 def create_mmd_lighting(shadow_mode=1):
     """
     MMD標準のライティング設定（平行光 & 環境光）を構築します。
-    MMDデフォルト値:
+    MMD公式仕様準拠:
       - 光源色: 赤154, 緑154, 青154 (約 0.6039)
-      - 光源方向: X: -0.5, Y: -1.0, Z: +0.5 (Maya座標系: X: -0.5, Y: -1.0, Z: -0.5)
-      - 方向角: RotateX: -54.74, RotateY: 45.0, RotateZ: 0.0
+      - 方向角: RotateX: -30.0, RotateY: 30.0, RotateZ: 0.0 (正面・斜め上から優しく照らす光角)
+      - 環境光: 強度 0.65, カラー (0.70, 0.70, 0.70) で陰影面の黒潰れを防止
 
     shadow_mode:
       - 0: セルフ影なし (シャドウOFF)
@@ -1661,23 +2278,24 @@ def create_mmd_lighting(shadow_mode=1):
         if existing_dir_shapes:
             d_shape = existing_dir_shapes[0]
             d_trans = mc.listRelatives(d_shape, parent=True, fullPath=True)[0]
-            mc.setAttr(f"{d_trans}.rotate", -54.74, -45.0, 0.0, typ='double3')
+            # MMD公式仕様準拠: 正面をふんわり照らし、床影を左奥へ伸ばす自然な角度 [-30.0, 30.0, 0.0]
+            mc.setAttr(f"{d_trans}.rotate", -30.0, 30.0, 0.0, typ='double3')
             mc.setAttr(f"{d_trans}.translateY", 200.0)
             mc.setAttr(f"{d_trans}.scale", 5.0, 5.0, 5.0)
             mc.setAttr(f"{d_shape}.color", 0.6039, 0.6039, 0.6039, typ='double3')
-            mc.setAttr(f"{d_shape}.intensity", 0.85)
+            mc.setAttr(f"{d_shape}.intensity", 1.0)
             _apply_shadow_mode(d_shape, shadow_mode)
         if existing_amb_shapes:
             a_shape = existing_amb_shapes[0]
             a_trans = mc.listRelatives(a_shape, parent=True, fullPath=True)[0]
             mc.setAttr(f"{a_trans}.translateY", 200.0)
             mc.setAttr(f"{a_trans}.scale", 5.0, 5.0, 5.0)
-            mc.setAttr(f"{a_shape}.ambientShade", 0.15)
-            mc.setAttr(f"{a_shape}.color", 0.50, 0.50, 0.50, typ='double3')
-            mc.setAttr(f"{a_shape}.intensity", 0.35)
+            mc.setAttr(f"{a_shape}.ambientShade", 0.05)
+            mc.setAttr(f"{a_shape}.color", 0.70, 0.70, 0.70, typ='double3')
+            mc.setAttr(f"{a_shape}.intensity", 0.65)
         # ビューポートのテクスチャ表示とアンチエイリアシングを最適化
         setup_viewport_display(shadow_mode=shadow_mode)
-        print("[情報] 既存のMMD標準ライティングを適正化しました（白飛び防止設定適用）。")
+        print("[情報] 既存のMMD標準ライティングを適正化しました（MMD公式準拠パラメータ適用）。")
         return "mmd_lighting_grp"
 
     print(f"[情報] MMD標準ライティング（シャドウモード: {shadow_mode}）を作成中...")
@@ -1689,14 +2307,17 @@ def create_mmd_lighting(shadow_mode=1):
     amb_shape_name = _get_unique_node_name(f"{amb_light_name}Shape")
     grp_name = _get_unique_node_name("mmd_lighting_grp")
 
-    # 平行光源 (MMDデフォルトキーライト: 白飛び防止のため強度0.85に設定)
-    dir_shape = mc.directionalLight(name=dir_shape_name, intensity=0.85)
-    dir_transform = mc.listRelatives(dir_shape, parent=True)[0]
-    dir_light = mc.rename(dir_transform, dir_light_name)
+    # 平行光源 (MMDデフォルトキーライト: 強度1.0、RGB 154/255=0.6039)
+    dir_shape_raw = mc.directionalLight(intensity=1.0)
+    dir_transform_nodes = mc.listRelatives(dir_shape_raw, parent=True, fullPath=True) or [dir_shape_raw]
+    dir_light = mc.rename(dir_transform_nodes[0], dir_light_name)
+    actual_dir_shapes = mc.listRelatives(dir_light, shapes=True, fullPath=True) or []
+    dir_shape = actual_dir_shapes[0] if actual_dir_shapes else dir_shape_raw
 
-    # MMDデフォルト値: X: -0.5 (左), Y: -1.0 (下), Z: +0.5 (奥) へ進む光 -> Maya右手系角度 [-54.74, -45.0, 0.0]
-    mc.setAttr(f"{dir_light}.rotate", -54.74, -45.0, 0.0, typ='double3')
-    mc.setAttr(f"{dir_light}.color", 0.6039, 0.6039, 0.6039, typ='double3')
+    # MMDデフォルト値: 正面・斜め上から優しく照らす角度 [-30.0, 30.0, 0.0]
+    mc.setAttr(f"{dir_light}.rotate", -30.0, 30.0, 0.0, typ='double3')
+    mc.setAttr(f"{dir_shape}.color", 0.6039, 0.6039, 0.6039, typ='double3')
+    mc.setAttr(f"{dir_shape}.intensity", 1.0)
     # 頭上への配置（Y=200）および視認性向上のための拡大（スケール=5）
     mc.setAttr(f"{dir_light}.translateY", 200.0)
     mc.setAttr(f"{dir_light}.scale", 5.0, 5.0, 5.0)
@@ -1704,23 +2325,88 @@ def create_mmd_lighting(shadow_mode=1):
     # シャドウモードの適用
     _apply_shadow_mode(dir_shape, shadow_mode)
 
-    # アンビエントライト (MMDの自然で明るい環境光: 白飛び防止のため強度0.35、Color 0.50に設定)
-    amb_shape = mc.ambientLight(name=amb_shape_name, intensity=0.35)
-    amb_transform = mc.listRelatives(amb_shape, parent=True)[0]
-    amb_light = mc.rename(amb_transform, amb_light_name)
-    mc.setAttr(f"{amb_light}.ambientShade", 0.15)
-    mc.setAttr(f"{amb_light}.color", 0.50, 0.50, 0.50, typ='double3')
+    # アンビエントライト (MMD材質Ambient=0.7準拠: 強度0.65、Color 0.70に設定して黒沈みを解消)
+    amb_shape_raw = mc.ambientLight(intensity=0.65)
+    amb_transform_nodes = mc.listRelatives(amb_shape_raw, parent=True, fullPath=True) or [amb_shape_raw]
+    amb_light = mc.rename(amb_transform_nodes[0], amb_light_name)
+    actual_amb_shapes = mc.listRelatives(amb_light, shapes=True, fullPath=True) or []
+    amb_shape = actual_amb_shapes[0] if actual_amb_shapes else amb_shape_raw
+
+    mc.setAttr(f"{amb_shape}.ambientShade", 0.05)
+    mc.setAttr(f"{amb_shape}.color", 0.70, 0.70, 0.70, typ='double3')
+    mc.setAttr(f"{amb_shape}.intensity", 0.65)
     mc.setAttr(f"{amb_light}.translateY", 200.0)
     mc.setAttr(f"{amb_light}.scale", 5.0, 5.0, 5.0)
 
     # グループ化
     light_grp = mc.group(dir_light, amb_light, name=grp_name)
 
+    # MMD標準地面影プレーンの自動作成
+    create_mmd_ground_shadow()
+
     # ビューポートのテクスチャ表示・ライティング・アンチエイリアシングを最適化
     setup_viewport_display(shadow_mode=shadow_mode)
 
     print(f"[情報] MMD標準ライティングを作成しました ({light_grp})。")
     return light_grp
+
+
+def create_mmd_ground_shadow(size=500.0, shadow_intensity=0.5):
+    """
+    MMD標準の地面影（Y=0.05平面上のシャドウキャッチャー）を作成します。
+    ビューポート上でメッシュ自体は透明となり、落ち影のみを自然に受け止めます。
+    ※ 参照実装準拠で地面グリッドとのZファイティング（重なりチラつき）を防止するためY=0.05に微小オフセット。
+    """
+    grp_name = "mmd_ground_shadow_grp"
+    plane_name = "mmd_ground_shadow_plane"
+
+    if mc.objExists(plane_name):
+        return plane_name
+
+    # シャドウキャッチャー用シェーダーの構築 (useBackground)
+    shd_name = "mmd_ground_shadow_shd"
+    sg_name = f"{shd_name}SG"
+
+    if not mc.objExists(shd_name):
+        shd = mc.shadingNode('useBackground', asShader=True, name=shd_name)
+        sg = mc.sets(renderable=True, noSurfaceShader=True, empty=True, name=sg_name)
+        mc.connectAttr(f"{shd}.outColor", f"{sg}.surfaceShader", force=True)
+
+        # 影のみを受け止める設定 (反射・ハイライトを遮断し、半透明の影のみ生成)
+        mc.setAttr(f"{shd}.specularColor", 0.0, 0.0, 0.0, typ='double3')
+        mc.setAttr(f"{shd}.reflectivity", 0.0)
+        mc.setAttr(f"{shd}.reflectionLimit", 0)
+        mc.setAttr(f"{shd}.shadowMask", float(shadow_intensity))
+    else:
+        sg = sg_name
+
+    # ポリゴン平面の作成（Zファイティング防止のためY=0.05にオフセット配置）
+    plane = mc.polyPlane(name=plane_name, width=size, height=size, subdivisionsX=1, subdivisionsY=1)[0]
+    mc.setAttr(f"{plane}.translateY", 0.05)
+    mc.sets(plane, forceElement=sg)
+
+    # 煽りアングル（下から見上げた際）にモデルが隠れないよう、片面描画＆バックフェイスカリングを設定
+    shapes = mc.listRelatives(plane, shapes=True) or []
+    if shapes:
+        plane_shape = shapes[0]
+        try:
+            mc.setAttr(f"{plane_shape}.doubleSided", 0)
+            mc.setAttr(f"{plane_shape}.backfaceCulling", 3)
+        except Exception:
+            pass
+
+    # 選択誤爆防止のためレンダー専用フラグ設定
+    mc.addAttr(plane, longName='mmdGroundShadow', attributeType='bool')
+    mc.setAttr(f"{plane}.mmdGroundShadow", True)
+
+    # グループ化
+    if not mc.objExists(grp_name):
+        grp = mc.group(plane, name=grp_name)
+    else:
+        grp = mc.parent(plane, grp_name)[0]
+
+    print(f"[情報] MMD標準地面影プレーンを作成しました ({plane_name})。")
+    return plane
 
 def _apply_shadow_mode(dir_shape, shadow_mode):
     """Directional Lightノードおよびビューポートにセルフシャドウ設定を適用"""
@@ -1735,15 +2421,15 @@ def _apply_shadow_mode(dir_shape, shadow_mode):
             mc.setAttr(f"{dir_shape}.useDepthMapShadows", 1)
             mc.setAttr(f"{dir_shape}.dmapResolution", 2048)
             mc.setAttr(f"{dir_shape}.dmapFilterSize", 5)
-            mc.setAttr(f"{dir_shape}.dmapBias", 0.02)
-            mc.setAttr(f"{dir_shape}.shadowColor", 0.45, 0.45, 0.45, typ='double3')
+            mc.setAttr(f"{dir_shape}.dmapBias", 0.005)
+            mc.setAttr(f"{dir_shape}.shadowColor", 0.75, 0.75, 0.75, typ='double3')
         elif shadow_mode == 2:
             # モード2 (高精細セルフ影) - MMD準拠の自然で柔らかい半透明影
             mc.setAttr(f"{dir_shape}.useDepthMapShadows", 1)
             mc.setAttr(f"{dir_shape}.dmapResolution", 4096)
             mc.setAttr(f"{dir_shape}.dmapFilterSize", 5)
-            mc.setAttr(f"{dir_shape}.dmapBias", 0.02)
-            mc.setAttr(f"{dir_shape}.shadowColor", 0.45, 0.45, 0.45, typ='double3')
+            mc.setAttr(f"{dir_shape}.dmapBias", 0.005)
+            mc.setAttr(f"{dir_shape}.shadowColor", 0.75, 0.75, 0.75, typ='double3')
 
         # ビューポート連動（影とテクスチャ表示）
         model_panels = mc.getPanel(type='modelPanel') or []
@@ -1762,15 +2448,19 @@ def fix_toon_shading_in_scene(shadow_mode=1):
     """
     fixed_count = 0
 
+    # モデルメッシュの影受け適正化（帽子や前髪による顔・脚の黒潰れを解消）
+    optimize_model_meshes_for_mmd_lighting()
+
     # ライティングとシャドウモードの更新
     dir_shapes = mc.ls("mmd_directional_lightShape", type="directionalLight") or []
     if dir_shapes:
         dir_shape = dir_shapes[0]
         dir_transform = mc.listRelatives(dir_shape, parent=True, fullPath=True)[0]
-        mc.setAttr(f"{dir_transform}.rotate", -54.74, -45.0, 0.0, typ='double3')
+        mc.setAttr(f"{dir_transform}.rotate", -30.0, 30.0, 0.0, typ='double3')
         mc.setAttr(f"{dir_transform}.translateY", 200.0)
         mc.setAttr(f"{dir_transform}.scale", 5.0, 5.0, 5.0)
         mc.setAttr(f"{dir_shape}.color", 0.6039, 0.6039, 0.6039, typ='double3')
+        mc.setAttr(f"{dir_shape}.intensity", 1.0)
         _apply_shadow_mode(dir_shape, shadow_mode)
     elif mc.objExists("mmd_lighting_grp"):
         _apply_shadow_mode("mmd_directional_lightShape", shadow_mode)
@@ -1780,6 +2470,9 @@ def fix_toon_shading_in_scene(shadow_mode=1):
         amb_transform = mc.listRelatives(amb_shapes[0], parent=True, fullPath=True)[0]
         mc.setAttr(f"{amb_transform}.translateY", 200.0)
         mc.setAttr(f"{amb_transform}.scale", 5.0, 5.0, 5.0)
+        mc.setAttr(f"{amb_shapes[0]}.ambientShade", 0.05)
+        mc.setAttr(f"{amb_shapes[0]}.color", 0.70, 0.70, 0.70, typ='double3')
+        mc.setAttr(f"{amb_shapes[0]}.intensity", 0.65)
 
     # Toon計算ネットワークのワールド空間化 (視点回転に左右されないMMD互換設定)
     vecprod_nodes = mc.ls("toon_vecprod_*", type="vectorProduct") or []
@@ -1803,11 +2496,37 @@ def fix_toon_shading_in_scene(shadow_mode=1):
                     mc.connectAttr(f"{src_node}.matrixEyeToWorld", f"{wnorm_node}.matrix", force=True)
                     mc.connectAttr(f"{wnorm_node}.output", f"{vp}.input1", force=True)
 
-            # MMD標準のワールド光線方向に設定 (斜め前方左上)
-            mc.setAttr(f"{vp}.input2", -0.40825, 0.81650, 0.40825, typ='double3')
+            # ライトのワールドマトリクスからオブジェクトへの到来光線ベクトル（ローカル+Z）を動的算出
+            dir_lights = mc.ls("mmd_directional_light*", type='transform') or mc.ls(type='directionalLight') or []
+            target_dir_light = dir_lights[0] if dir_lights else None
+            if target_dir_light and mc.nodeType(target_dir_light) == 'directionalLight':
+                target_dir_light = (mc.listRelatives(target_dir_light, parent=True, fullPath=True) or [None])[0]
+
+            if target_dir_light and mc.objExists(target_dir_light):
+                suffix = vp.replace("toon_vecprod_", "")
+                lvec_name = f"toon_lvec_{suffix}"
+                if not mc.objExists(lvec_name):
+                    lvec_node = mc.shadingNode('vectorProduct', asUtility=True, name=lvec_name)
+                else:
+                    lvec_node = lvec_name
+                mc.setAttr(f"{lvec_node}.operation", 3) # Vector Matrix Product
+                mc.setAttr(f"{lvec_node}.normalizeOutput", True)
+                mc.setAttr(f"{lvec_node}.input1", 0.0, 0.0, 1.0, typ='double3')
+                mc.connectAttr(f"{target_dir_light}.worldMatrix[0]", f"{lvec_node}.matrix", force=True)
+                mc.connectAttr(f"{lvec_node}.output", f"{vp}.input2", force=True)
+            else:
+                # MMD標準のワールド光線方向に設定 (斜め前方左上)
+                mc.setAttr(f"{vp}.input2", -0.40825, 0.81650, 0.40825, typ='double3')
+
             fixed_count += 1
         except Exception:
             pass
+
+    # MMD標準地面影プレーンの生成・確認
+    try:
+        create_mmd_ground_shadow()
+    except Exception:
+        pass
 
     # toon_range ノードのしきい値更新 (正面は白、側面〜裏面が自然に陰るMMD最適化)
     range_nodes = mc.ls("toon_range_*", type="setRange") or []
@@ -2066,6 +2785,152 @@ def apply_material_protection_to_scene(target_model=None):
         "toon_bypassed": toon_bypass_count,
         "toon_restored": toon_restored_count
     }
+
+
+def find_model_bone(target_model_node=None, target_bone_name="右手"):
+    """
+    モデル内の指定ボーン名に対応するMayaジョイントノードを検索します。
+
+    引数:
+        target_model_node (str, optional): 対象モデルのノード名
+        target_bone_name (str): 検索するボーン名 (例: '右手', '左手', '頭', '腰')
+
+    戻り値:
+        str or None: 見つかったジョイント名
+    """
+    if not target_bone_name:
+        return None
+
+    # ボーン名エイリアス定義
+    target_norm = unicodedata.normalize('NFKC', target_bone_name).strip()
+    candidates = [target_norm]
+
+    en_name = get_english_bone_name(target_norm)
+    if en_name:
+        candidates.append(en_name)
+    jp_name = get_japanese_bone_name(target_norm)
+    if jp_name:
+        candidates.append(jp_name)
+
+    # 探索対象ジョイントの収集
+    if target_model_node and mc.objExists(target_model_node):
+        joints = mc.listRelatives(target_model_node, allDescendents=True, type='joint') or []
+        if mc.nodeType(target_model_node) == 'joint':
+            joints.append(target_model_node)
+    else:
+        joints = mc.ls(type='joint') or []
+
+    # originalName アトリビュートでの一致探索
+    for j in joints:
+        if mc.attributeQuery('originalName', node=j, exists=True):
+            orig = mc.getAttr(f"{j}.originalName") or ""
+            orig_norm = unicodedata.normalize('NFKC', orig).strip()
+            if orig_norm in candidates:
+                return j
+
+    # ジョイント名そのものでの一致探索
+    for j in joints:
+        short_name = j.split('|')[-1].split(':')[-1]
+        short_norm = unicodedata.normalize('NFKC', short_name).strip()
+        for cand in candidates:
+            if cand.lower() == short_norm.lower() or cand.lower() in short_norm.lower():
+                return j
+
+    return joints[0] if joints else None
+
+
+def attach_accessory_to_bone(accessory_node, target_model_node=None, target_bone_name="右手", maintain_offset=True):
+    """
+    アクセサリ（.x / .pmx / 任意メッシュ）をモデルのボーンへ追従アタッチします。
+    位置・角度の微調整が可能なオフセットグループ構造を自動構築します。
+
+    引数:
+        accessory_node (str): アタッチするアクセサリのノード名
+        target_model_node (str, optional): 対象モデルルートノード名
+        target_bone_name (str): アタッチ先ボーン名（'頭', '右手', '左手', '腰', '胸' 等）
+        maintain_offset (bool): 現在の位置関係を維持するかどうか
+
+    戻り値:
+        dict: アタッチ結果
+    """
+    if not accessory_node or not mc.objExists(accessory_node):
+        raise ValueError(f"アクセサリノードが存在しません: {accessory_node}")
+
+    bone_node = find_model_bone(target_model_node, target_bone_name)
+    if not bone_node or not mc.objExists(bone_node):
+        raise ValueError(f"アタッチ先ボーンが見つかりません: {target_bone_name}")
+
+    # 既存の追従コンストレイントをクリーンアップ
+    detach_accessory(accessory_node)
+
+    # オフセット微調整用親グループの構築
+    acc_parent = (mc.listRelatives(accessory_node, parent=True) or [None])[0]
+    grp_name = f"{accessory_node}_attachOffset_grp"
+
+    if not mc.objExists(grp_name):
+        offset_grp = mc.group(empty=True, name=grp_name)
+        # ジョイント位置へ移動（maintain_offsetがFalseの場合）
+        if not maintain_offset:
+            b_pos = mc.xform(bone_node, query=True, worldSpace=True, translation=True)
+            b_rot = mc.xform(bone_node, query=True, worldSpace=True, rotation=True)
+            mc.xform(offset_grp, worldSpace=True, translation=b_pos, rotation=b_rot)
+
+        if acc_parent:
+            offset_grp = mc.parent(offset_grp, acc_parent)[0]
+        mc.parent(accessory_node, offset_grp)
+    else:
+        offset_grp = grp_name
+
+    # 親子コンストレイント（移動＋回転）の接続
+    constraint = mc.parentConstraint(bone_node, offset_grp, maintainOffset=maintain_offset, name=f"{accessory_node}_pConstraint")[0]
+
+    # アタッチ情報のメタデータ記録
+    if not mc.attributeQuery('mmdAttachedBone', node=accessory_node, exists=True):
+        mc.addAttr(accessory_node, longName='mmdAttachedBone', dataType='string')
+    mc.setAttr(f"{accessory_node}.mmdAttachedBone", bone_node, typ='string')
+
+    print(f"[アクセサリアタッチ完了] '{accessory_node}' を '{bone_node}' ({target_bone_name}) に追従接続しました。")
+    return {
+        'accessory': accessory_node,
+        'bone': bone_node,
+        'offset_group': offset_grp,
+        'constraint': constraint
+    }
+
+
+def detach_accessory(accessory_node):
+    """
+    アクセサリの追従コンストレイントを解除し、独立化します。
+
+    引数:
+        accessory_node (str): 解除するアクセサリのノード名
+
+    戻り値:
+        bool: 解除成功かどうか
+    """
+    if not accessory_node or not mc.objExists(accessory_node):
+        return False
+
+    grp_name = f"{accessory_node}_attachOffset_grp"
+    target_grp = grp_name if mc.objExists(grp_name) else accessory_node
+
+    # 親コンストレイントの探索と削除
+    constraints = mc.listConnections(target_grp, type='parentConstraint') or []
+    for c in set(constraints):
+        try:
+            mc.delete(c)
+        except Exception:
+            pass
+
+    # アタッチアトリビュートの削除
+    if mc.attributeQuery('mmdAttachedBone', node=accessory_node, exists=True):
+        try:
+            mc.deleteAttr(f"{accessory_node}.mmdAttachedBone")
+        except Exception:
+            pass
+
+    print(f"[アクセサリ解除完了] '{accessory_node}' の追従コンストレイントを解除しました。")
+    return True
 
 
 # 後方互換性用エイリアス

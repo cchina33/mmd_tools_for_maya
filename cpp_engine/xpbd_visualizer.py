@@ -177,14 +177,14 @@ def map_pmx_bones_to_maya(pmx_bones, all_joints=None):
         elif dict_en and dict_en in cached_bones and mc.objExists(cached_bones[dict_en]):
             matched_j = cached_bones[dict_en]
 
-        # 優先度0: originalName による完全一致
+        # 優先度0: originalName による厳密一致
         if not matched_j:
             for info in joint_info:
                 if info['orig'] and (info['orig'] == b_name or (b_name_e and info['orig'] == b_name_e) or (dict_en and info['orig'] == dict_en)):
                     matched_j = info['node']
                     break
 
-        # 優先度1: short_name 完全一致 (和名・英名・辞書英名)
+        # 優先度1: short_name 厳密一致 (和名・英名・辞書英名)
         if not matched_j:
             for info in joint_info:
                 if info['short'] == b_name or (b_name_e and info['short'] == b_name_e) or (dict_en and info['short'] == dict_en):
@@ -390,7 +390,7 @@ def create_rigidbody_visualizers(pmx_path, scale=8.0):
         mc.xform(cube, worldSpace=True, translation=j_bind_p)
         mc.xform(cube, worldSpace=True, rotation=(j_deg_x, j_deg_y, j_deg_z))
 
-        # ワイヤーフレーム・黄色表示 (PMXエディタのJointアイコンと完全一致)
+        # ワイヤーフレーム・黄色表示 (PMXエディタのJointアイコンと同等一致)
         cube_shape = mc.listRelatives(cube, shapes=True)[0]
         mc.setAttr(f"{cube_shape}.overrideEnabled", 1)
         mc.setAttr(f"{cube_shape}.overrideShading", 0) # ワイヤー表示
@@ -513,7 +513,7 @@ def sync_visualizer_transforms(rb_transforms, frame=None):
 def reconnect_visualizers_to_bones():
     """
     可視化ノード（剛体・Joint）に記録されたキーフレームをすべてクリアし、
-    ボーン追従コンストレイントを通常状態（Normal）に復元してモデルのボーンに完全吸着させます。
+    ボーン追従コンストレイントを通常状態（Normal）に復元してモデルのボーンに吸着・追従させます。
     """
     if not mc.objExists(VIS_GROUP_NAME):
         print("[Visualizer] 可視化グループが見つかりません。")

@@ -101,7 +101,7 @@ void XpbdEngine::stepSimulation(float dt, int substeps) {
         subStep(h, alpha);
     }
 
-    // ステップ完了後: KinematicおよびAligned剛体の位置をボーン目標位置に100%完全固定
+    // ステップ完了後: KinematicおよびAligned剛体の位置をボーン目標位置に100%固定
     for (auto& rb : rigidBodies_) {
         if (rb.physicsMode == PhysicsMode::Kinematic || rb.physicsMode == PhysicsMode::Aligned) {
             rb.position = rb.targetPosition;
@@ -262,7 +262,7 @@ void XpbdEngine::solveJoint(Joint6DOF& joint, float h) {
             float wB = invMB + crB.dot(rbB->getInvInertiaWorld() * crB);
             float wSum = wA + wB;
 
-            // コンプライアンス（XPBDバネ柔軟性: ハードリミット違反時はコンプライアンス0で完全固定）
+            // コンプライアンス（XPBDバネ柔軟性: ハードリミット違反時はコンプライアンス0で厳密固定）
             float compliance = (limitViolation == 0.0f && springK > 0.0f) ? (1.0f / (springK * h * h + 1e-4f)) : 0.0f;
             float dLambda = -violation / (wSum + compliance + EPSILON);
 
@@ -635,7 +635,7 @@ void XpbdEngine::checkCollisionSphereBox(RigidBody& sphere, RigidBody& box, floa
             penetration = r - dist;
         }
     } else {
-        // 球の中心が箱内部に完全侵入している場合: 最も近い面へ押し出す
+        // 球の中心が箱内部に深く侵入している場合: 最も近い面へ押し出す
         float dx = e.x - std::abs(vLoc.x);
         float dy = e.y - std::abs(vLoc.y);
         float dz = e.z - std::abs(vLoc.z);
@@ -702,7 +702,7 @@ void XpbdEngine::checkCollisionCapsuleBox(RigidBody& capsule, RigidBody& box, fl
                 }
             }
         } else {
-            // カプセル軸が箱内部に完全侵入している場合: 太ももの中心軸から外側へ強力に押し出す
+            // カプセル軸が箱内部に深く侵入している場合: 太ももの中心軸から外側へ強力に押し出す
             Vec3 toBox = box.position - samplePt;
             Vec3 radial = toBox - axis * toBox.dot(axis);
             float radLen = radial.length();
@@ -710,7 +710,7 @@ void XpbdEngine::checkCollisionCapsuleBox(RigidBody& capsule, RigidBody& box, fl
             if (radLen > EPSILON) {
                 outDir = radial / radLen;
             } else {
-                // 完全重なり時は箱のローカルZ外側
+                // 重心重なり時は箱のローカルZ外側
                 outDir = box.rotation.rotate(Vec3(0.0f, 0.0f, 1.0f));
             }
 
@@ -833,7 +833,7 @@ void XpbdEngine::relaxPenetration(int steps, float relaxationDamping) {
 
     const float h = 1.0f / 60.0f;
     for (int step = 0; step < steps; ++step) {
-        // Kinematic剛体（太もも等）の姿勢を目標位置に完全固定
+        // Kinematic剛体（太もも等）の姿勢を目標位置に厳密固定
         for (auto& rb : rigidBodies_) {
             if (rb.physicsMode == PhysicsMode::Kinematic) {
                 rb.position = rb.targetPosition;

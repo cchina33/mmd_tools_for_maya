@@ -101,7 +101,8 @@ namespace MmdPhysicsBridge
 
             // ニュートン・ラフソン法による媒介変数 u の求解 (x(u) = t)
             float u = t;
-            for (int i = 0; i < 8; i++)
+            bool solved = false;
+            for (int i = 0; i < 16; i++)
             {
                 float oneMinusU = 1.0f - u;
                 float u2 = u * u;
@@ -111,6 +112,7 @@ namespace MmdPhysicsBridge
                 float diff = xu - t;
                 if (MathF.Abs(diff) < 1e-5f)
                 {
+                    solved = true;
                     break;
                 }
 
@@ -122,6 +124,34 @@ namespace MmdPhysicsBridge
                 }
 
                 u = Math.Clamp(u - (diff / dx), 0.0f, 1.0f);
+            }
+
+            // ニュートン法で収束しなかった場合の二分法フォールバック
+            if (!solved)
+            {
+                float uMin = 0.0f;
+                float uMax = 1.0f;
+                u = t;
+                for (int i = 0; i < 16; i++)
+                {
+                    float oneMinusU = 1.0f - u;
+                    float u2 = u * u;
+                    float o2 = oneMinusU * oneMinusU;
+                    float xu = (3.0f * o2 * u * x1) + (3.0f * oneMinusU * u2 * x2) + (u2 * u);
+                    if (MathF.Abs(xu - t) < 1e-5f)
+                    {
+                        break;
+                    }
+                    if (xu < t)
+                    {
+                        uMin = u;
+                    }
+                    else
+                    {
+                        uMax = u;
+                    }
+                    u = (uMin + uMax) * 0.5f;
+                }
             }
 
             float omU = 1.0f - u;
@@ -203,11 +233,16 @@ namespace MmdPhysicsBridge
                 qw = (k0.Qw * scale0) + (k1.Qw * scale1);
             }
 
-            // 正規化
+            // クォータニオンの安全な正規化
             float len = MathF.Sqrt((qx * qx) + (qy * qy) + (qz * qz) + (qw * qw));
-            if (len > 0.0001f)
+            if (float.IsNaN(len) || float.IsInfinity(len) || len < 0.0001f)
             {
-                qx /= len; qy /= len; qz /= len; qw /= len;
+                qx = 0.0f; qy = 0.0f; qz = 0.0f; qw = 1.0f;
+            }
+            else
+            {
+                float invLen = 1.0f / len;
+                qx *= invLen; qy *= invLen; qz *= invLen; qw *= invLen;
             }
 
             return (new float[] { tx, ty, tz }, new float[] { qx, qy, qz, qw });
@@ -272,6 +307,24 @@ namespace MmdPhysicsBridge
                 float qy = reader.ReadSingle();
                 float qz = reader.ReadSingle();
                 float qw = reader.ReadSingle();
+
+                // クォータニオンの破損データ・ゼロ除算サニタイズと正規化
+                float qLenSq = (qx * qx) + (qy * qy) + (qz * qz) + (qw * qw);
+                if (float.IsNaN(qLenSq) || float.IsInfinity(qLenSq) || qLenSq < 1e-8f)
+                {
+                    qx = 0.0f;
+                    qy = 0.0f;
+                    qz = 0.0f;
+                    qw = 1.0f;
+                }
+                else
+                {
+                    float invLen = 1.0f / MathF.Sqrt(qLenSq);
+                    qx *= invLen;
+                    qy *= invLen;
+                    qz *= invLen;
+                    qw *= invLen;
+                }
 
                 // 補間曲線 (64バイト) 取得
                 byte[] interp = reader.ReadBytes(64);

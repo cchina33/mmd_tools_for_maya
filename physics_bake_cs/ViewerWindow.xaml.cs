@@ -14,7 +14,7 @@ using BulletSharp.Math;
 using Matrix = BulletSharp.Math.Matrix;
 using MmdPhysicsBridge;
 
-namespace MmdPhysicsViewer
+namespace PhysicsSimulationBakeViewer
 {
     public partial class ViewerWindow : Window
     {
@@ -30,12 +30,14 @@ namespace MmdPhysicsViewer
 
         // カメラ制御
         private System.Windows.Point _lastMousePos;
-        private double _cameraDistance = 45.0;
+        private double _cameraDistance = 26.0;
         private double _cameraTheta = 180.0;
-        private double _cameraPhi = 10.0;
+        private double _cameraPhi = 5.0;
         private Point3D _cameraTarget = new Point3D(0, 10, 0);
-        private int _trackingBoneIndex = -1;
-        private Vector3? _lastTrackedBonePos = null;
+        private int _trackingHoriBoneIndex = -1;
+        private int _trackingSpineBoneIndex = -1;
+        private double _baseMinY = 0.0;
+        private double _baseModelHeight = 16.0;
 
         // 3D描画用
         private readonly List<GeometryModel3D> _rigidbodyVisuals = new();
@@ -58,8 +60,9 @@ namespace MmdPhysicsViewer
         private readonly double _warmupSeconds;
         private readonly int? _startFrame;
         private readonly int? _endFrame;
+        private readonly int _substepHz;
 
-        public ViewerWindow(string pmxPath, string vmdPath, string? outVmdPath, int lookahead, double warmupSeconds = 2.0, int? startFrame = null, int? endFrame = null)
+        public ViewerWindow(string pmxPath, string vmdPath, string? outVmdPath, int lookahead, double warmupSeconds = 2.0, int? startFrame = null, int? endFrame = null, int substepHz = 120)
         {
             InitializeComponent();
             Topmost = true;
@@ -69,6 +72,8 @@ namespace MmdPhysicsViewer
             _warmupSeconds = Math.Max(0.0, warmupSeconds);
             _startFrame = startFrame;
             _endFrame = endFrame;
+            _substepHz = Math.Clamp(substepHz, 60, 480);
+            _physics.SubstepHz = _substepHz;
 
             if (string.Equals(outVmdPath, "none", StringComparison.OrdinalIgnoreCase))
             {
@@ -138,6 +143,8 @@ namespace MmdPhysicsViewer
                 _physics.BuildPhysicsFromPmx(_pmx);
                 _evaluator = new PoseEvaluator(_pmx, _vmd, _physics);
 
+                Title = $"MMD リアルタイム物理ベイクビューア [{_physics.EngineVersionName}] - {_pmx.ModelName}";
+
                 _setup_scene_visuals();
                 _init_camera_tracking();
 
@@ -149,6 +156,12 @@ namespace MmdPhysicsViewer
                 actualStart = Math.Clamp(actualStart, 0, _vmd.MaxFrame);
                 actualEnd = Math.Clamp(actualEnd, actualStart, _vmd.MaxFrame);
                 int totalBakeFrames = actualEnd - actualStart + 1;
+
+                // 安定化より前に開始フレームの姿勢をモデル・剛体に先行セット
+                _evaluator.EvaluateFkAndSyncBodies(actualStart, resetAllBodies: true);
+                _evaluator.ApplyPhysicsToBones();
+                _update_camera_tracking(_evaluator.BoneWorldMatrices, immediate: true);
+                _update_viewport_display(actualStart);
 
                 // 初期メッセージ（hello）を stdout へ出力
                 var targetBones = _evaluator.PhysicsBoneIndices.Select(i => _pmx.Bones[i].Name).ToList();
@@ -203,6 +216,7 @@ namespace MmdPhysicsViewer
                             {
                                 _isCancelled = true;
                                 _cts.Cancel();
+                                Dispatcher.Invoke(Close);
                                 break;
                             }
                         }
@@ -217,6 +231,7 @@ namespace MmdPhysicsViewer
             {
                 // パイプ切断時は終了
                 _isCancelled = true;
+                Dispatcher.Invoke(Close);
             }
         }
 
@@ -258,30 +273,45 @@ namespace MmdPhysicsViewer
                 bakedVmd.BoneTracks[bones[idx].Name] = new List<VmdBoneKeyframe>();
             }
 
-            // 初期フレームの姿勢へ剛体をスナップ
+            // 安定化より前に開始フレームの姿勢をモデル・剛体に確実にセット（全剛体をスナップ）
             _evaluator.EvaluateFkAndSyncBodies(actualStart, resetAllBodies: true);
+            _evaluator.ApplyPhysicsToBones();
+            _update_viewport_display(actualStart);
 
-            // ベイク開始前の初期姿勢安定化 (ウォームアップ: 指定開始フレーム姿勢で数秒間物理演算を先行実行し、スカートや髪の垂れ下がりを落ち着かせる)
-            if (_warmupSeconds > 0.05)
+            // ベイク開始前の初期姿勢安定化 (ウォームアップ)
+            // 開始フレームが0以外の場合、急激な姿勢変化による剛体発散を防ぐため最低1.0秒(30ステップ)の安定化を自動適用
+            int warmupSteps = (int)Math.Round(_warmupSeconds * 30.0);
+            if (actualStart > 0 && warmupSteps < 30)
+            {
+                warmupSteps = 30;
+            }
+
+            if (warmupSteps > 0)
             {
                 TxtProgress.Text = "初期姿勢・物理安定化中...";
                 ProgressBar.Value = 0;
-                int warmupSteps = (int)Math.Round(_warmupSeconds * 30.0);
+                double effectiveWarmupSec = warmupSteps / 30.0;
+
                 for (int w = 0; w < warmupSteps; w++)
                 {
                     if (_isCancelled) break;
+
                     _evaluator.EvaluateFkAndSyncBodies(actualStart, resetAllBodies: false);
+#if BULLET_275
                     _physics.StepSimulation(1.0f / 30.0f, 10, 1.0f / 60.0f);
+#else
+                    _physics.StepSimulation(1.0f / 30.0f, Math.Max(12, (int)(_substepHz / 30.0f) * 2), 1.0f / _substepHz);
+#endif
                     _evaluator.ApplyPhysicsToBones();
                     _update_viewport_display(actualStart);
 
-                    double remainingSec = (_warmupSeconds * (warmupSteps - w - 1)) / (double)warmupSteps;
-                    TxtEta.Text = $"開始前の姿勢安定化中: 残り {remainingSec:F1} 秒";
+                    double remainingSec = (effectiveWarmupSec * (warmupSteps - w - 1)) / (double)warmupSteps;
+                    TxtEta.Text = $"開始前の姿勢安定化中 (フレーム {actualStart}): 残り {remainingSec:F1} 秒";
                     ProgressBar.Value = (double)(w + 1) / warmupSteps * 100.0;
                     await Task.Delay(16, _cts.Token);
                 }
 
-                // ウォームアップ終了時に残留慣性（速度・角速度・外力）をクリアし、静止姿勢から開始
+                // 安定化終了時に剛体の残留慣性（速度・角速度・外力）をクリアし、静止姿勢から開始
                 foreach (var body in _physics.RigidBodies)
                 {
                     body.LinearVelocity = Vector3.Zero;
@@ -289,6 +319,7 @@ namespace MmdPhysicsViewer
                     body.ClearForces();
                 }
             }
+
 
             // 姿勢が安定した状態でベイク計測用ストップウォッチをリセット
             sw.Restart();
@@ -313,8 +344,12 @@ namespace MmdPhysicsViewer
                 // FK計算と剛体追従
                 _evaluator.EvaluateFkAndSyncBodies(f, resetAllBodies: false);
 
-                // 物理シミュレーション (1/30秒をサブステップで進行)
+                // 物理シミュレーション (1/30秒進行)
+#if BULLET_275
                 _physics.StepSimulation(1.0f / 30.0f, 10, 1.0f / 60.0f);
+#else
+                _physics.StepSimulation(1.0f / 30.0f, Math.Max(12, (int)(_substepHz / 30.0f) * 2), 1.0f / _substepHz);
+#endif
 
                 // 物理結果をボーンへ反映
                 _evaluator.ApplyPhysicsToBones();
@@ -411,6 +446,7 @@ namespace MmdPhysicsViewer
             _rigidbodyVisuals.Clear();
             _boneJointTransforms.Clear();
 
+            // MMD左手系からWPF右手系への変換（physics_bridge_cs と共通の ScaleX = -1 左右反転方式）
             var mirrorTransform = new ScaleTransform3D(-1, 1, 1);
             MeshContainer.Transform = mirrorTransform;
             BoneContainer.Transform = mirrorTransform;
@@ -419,10 +455,15 @@ namespace MmdPhysicsViewer
 
             // メッシュ
             _subMeshes.Clear();
+            TextureLoader.ClearCache();
+            string modelDir = Path.GetDirectoryName(_pmxPath) ?? Directory.GetCurrentDirectory();
+
             if (_pmx.VertexPositions.Count > 0 && _pmx.Indices.Count > 0)
             {
                 var meshGroup = new Model3DGroup();
                 int indexOffset = 0;
+                var opaqueModels = new List<GeometryModel3D>();
+                var transparentModels = new List<GeometryModel3D>();
 
                 foreach (var mat in _pmx.Materials)
                 {
@@ -448,8 +489,20 @@ namespace MmdPhysicsViewer
                                 localIdx = mesh.Positions.Count;
                                 localMap[globalIdx] = localIdx;
                                 subMesh.GlobalVertexIndices.Add(globalIdx);
+
                                 var v = _pmx.VertexPositions[globalIdx];
                                 mesh.Positions.Add(new Point3D(v[0], v[1], v[2]));
+
+                                // UV座標のマッピング設定（PMX本来のUV座標をそのまま設定）
+                                if (globalIdx < _pmx.VertexUVs.Count)
+                                {
+                                    var uv = _pmx.VertexUVs[globalIdx];
+                                    mesh.TextureCoordinates.Add(new System.Windows.Point(uv[0], uv[1]));
+                                }
+                                else
+                                {
+                                    mesh.TextureCoordinates.Add(new System.Windows.Point(0, 0));
+                                }
                             }
                             return localIdx;
                         }
@@ -458,6 +511,7 @@ namespace MmdPhysicsViewer
                         int l1 = GetOrAddLocal(g1);
                         int l2 = GetOrAddLocal(g2);
 
+                        // ScaleX = -1 の反転変換下で表面となるPMX標準順序 (physics_bridge_cs 準拠)
                         mesh.TriangleIndices.Add(l0);
                         mesh.TriangleIndices.Add(l1);
                         mesh.TriangleIndices.Add(l2);
@@ -465,15 +519,119 @@ namespace MmdPhysicsViewer
                     indexOffset += count;
                     _subMeshes.Add(subMesh);
 
-                    var matColor = Color.FromArgb(
-                        220,
-                        (byte)Math.Clamp((int)(mat.Diffuse[0] * 255), 40, 255),
-                        (byte)Math.Clamp((int)(mat.Diffuse[1] * 255), 40, 255),
-                        (byte)Math.Clamp((int)(mat.Diffuse[2] * 255), 40, 255)
-                    );
-                    var material = new DiffuseMaterial(new SolidColorBrush(matColor));
+                    // テクスチャパス解決
+                    string? resolvedTexPath = null;
+                    if (mat.TextureIndex >= 0 && mat.TextureIndex < _pmx.Textures.Count)
+                    {
+                        string rawTex = _pmx.Textures[mat.TextureIndex];
+                        resolvedTexPath = TextureLoader.ResolveTexturePath(modelDir, rawTex);
+                    }
+
+                    // 透過判定 (日英中のマテリアル名とアルファ値による選別ルール):
+                    // 顔・肌・体・服・ボタン・足などの主要部位は不透明メッシュとして最優先描画
+                    string matNameLower = ((mat.Name ?? "") + " " + (mat.NameEnglish ?? "")).ToLowerInvariant();
+                    bool isOverlayOrTransparent = (mat.Diffuse[3] < 0.95f)
+                        || matNameLower.Contains("透")
+                        || matNameLower.Contains("trans")
+                        || matNameLower.Contains("涙")
+                        || matNameLower.Contains("泪")
+                        || matNameLower.Contains("tear")
+                        || matNameLower.Contains("shadow")
+                        || matNameLower.Contains("影")
+                        || matNameLower.Contains("暗部")
+                        || matNameLower.Contains("ハイライト")
+                        || matNameLower.Contains("highlight")
+                        || matNameLower.Contains("高光")
+                        || matNameLower.Contains("チーク")
+                        || matNameLower.Contains("照れ")
+                        || matNameLower.Contains("blush")
+                        || matNameLower.Contains("cheek")
+                        || matNameLower.Contains("红晕")
+                        || matNameLower.Contains("腮红")
+                        || matNameLower.Contains("脸红")
+                        || matNameLower.Contains("臉紅");
+
+                    bool isBaseGeometry = matNameLower.Contains("顔")
+                        || matNameLower.Contains("肌")
+                        || matNameLower.Contains("skin")
+                        || matNameLower.Contains("face")
+                        || matNameLower.Contains("脸")
+                        || matNameLower.Contains("臉")
+                        || matNameLower.Contains("面")
+                        || matNameLower.Contains("头")
+                        || matNameLower.Contains("頭")
+                        || matNameLower.Contains("head")
+                        || matNameLower.Contains("皮")
+                        || matNameLower.Contains("肤")
+                        || matNameLower.Contains("膚")
+                        || matNameLower.Contains("体")
+                        || matNameLower.Contains("身")
+                        || matNameLower.Contains("body")
+                        || matNameLower.Contains("服")
+                        || matNameLower.Contains("dress")
+                        || matNameLower.Contains("skirt")
+                        || matNameLower.Contains("cloth")
+                        || matNameLower.Contains("裙")
+                        || matNameLower.Contains("裤")
+                        || matNameLower.Contains("褲")
+                        || matNameLower.Contains("衣")
+                        || matNameLower.Contains("装")
+                        || matNameLower.Contains("裝")
+                        || matNameLower.Contains("衫")
+                        || matNameLower.Contains("ボタン")
+                        || matNameLower.Contains("button")
+                        || matNameLower.Contains("纽扣")
+                        || matNameLower.Contains("紐扣")
+                        || matNameLower.Contains("靴")
+                        || matNameLower.Contains("shoe")
+                        || matNameLower.Contains("袜")
+                        || matNameLower.Contains("襪")
+                        || matNameLower.Contains("sock")
+                        || matNameLower.Contains("足")
+                        || matNameLower.Contains("脚")
+                        || matNameLower.Contains("腳")
+                        || matNameLower.Contains("leg")
+                        || matNameLower.Contains("foot")
+                        || matNameLower.Contains("toe")
+                        || matNameLower.Contains("腕")
+                        || matNameLower.Contains("臂")
+                        || matNameLower.Contains("arm")
+                        || matNameLower.Contains("手")
+                        || matNameLower.Contains("hand")
+                        || matNameLower.Contains("掌")
+                        || matNameLower.Contains("髪")
+                        || matNameLower.Contains("发")
+                        || matNameLower.Contains("髮")
+                        || matNameLower.Contains("hair")
+                        || matNameLower.Contains("目")
+                        || matNameLower.Contains("eye")
+                        || matNameLower.Contains("瞳")
+                        || matNameLower.Contains("口")
+                        || matNameLower.Contains("mouth");
+
+                    bool isTransparent = isOverlayOrTransparent && !isBaseGeometry;
+
+                    var material = TextureLoader.CreateMmdMaterial(mat, resolvedTexPath, isTransparent);
                     var geom = new GeometryModel3D(mesh, material) { BackMaterial = material };
-                    meshGroup.Children.Add(geom);
+
+                    if (isTransparent)
+                    {
+                        transparentModels.Add(geom);
+                    }
+                    else
+                    {
+                        opaqueModels.Add(geom);
+                    }
+                }
+
+                // 不透明メッシュをベースとして先に描画、透過メッシュを手前に後から描画して遮蔽抜けを防止
+                foreach (var m in opaqueModels)
+                {
+                    meshGroup.Children.Add(m);
+                }
+                foreach (var m in transparentModels)
+                {
+                    meshGroup.Children.Add(m);
                 }
 
                 _meshTransform.OffsetX = 0;
@@ -657,64 +815,171 @@ namespace MmdPhysicsViewer
         {
             if (_pmx == null) return;
 
-            _trackingBoneIndex = -1;
-            _lastTrackedBonePos = null;
+            _trackingHoriBoneIndex = -1;
+            _trackingSpineBoneIndex = -1;
 
-            // 追従対象ボーンの探索 (センター > 全ての親 > 先頭ボーン)
+            // モデルの全高・境界を頂点位置から算出
+            float minY = float.MaxValue;
+            float maxY = float.MinValue;
+            if (_pmx.VertexPositions.Count > 0)
+            {
+                for (int i = 0; i < _pmx.VertexPositions.Count; i++)
+                {
+                    float y = _pmx.VertexPositions[i][1];
+                    if (y < minY) minY = y;
+                    if (y > maxY) maxY = y;
+                }
+            }
+            if (minY >= maxY)
+            {
+                minY = 0f;
+                maxY = 16f;
+            }
+            _baseMinY = minY;
+            _baseModelHeight = Math.Max(1.0, maxY - minY);
+
+            // 追従対象ボーンの探索:
+            // - 水平移動基準: 上半身の傾きノイズを受けない「グルーブ」または「センター」（モデル重心）
+            // - 垂直高さ基準: 全身を美しく画面に収める「上半身」（胸・体幹中心）
+            string[] spineKeywords = { "上半身2", "上半身", "upper body", "spine", "chest", "torso" };
+            string[] rootKeywords = { "全ての親", "すべての親", "root", "master", "parent of all", "所有父", "所有亲", "母骨" };
+
+            // 水平移動基準ボーン（グルーブ最優先、次にセンター）
             for (int i = 0; i < _pmx.Bones.Count; i++)
             {
-                if (_pmx.Bones[i].Name == "センター")
+                string bName = (_pmx.Bones[i].Name ?? "").Trim().ToLowerInvariant();
+                string bNameEn = (_pmx.Bones[i].NameEnglish ?? "").Trim().ToLowerInvariant();
+                if (bName.Contains("グルーブ") || bNameEn.Contains("groove"))
                 {
-                    _trackingBoneIndex = i;
+                    _trackingHoriBoneIndex = i;
                     break;
                 }
             }
-            if (_trackingBoneIndex < 0)
+            if (_trackingHoriBoneIndex < 0)
             {
                 for (int i = 0; i < _pmx.Bones.Count; i++)
                 {
-                    if (_pmx.Bones[i].Name == "全ての親")
+                    string bName = (_pmx.Bones[i].Name ?? "").Trim().ToLowerInvariant();
+                    string bNameEn = (_pmx.Bones[i].NameEnglish ?? "").Trim().ToLowerInvariant();
+                    if (bName.Contains("センター") || bNameEn.Contains("center") || bName.Contains("中心"))
                     {
-                        _trackingBoneIndex = i;
+                        _trackingHoriBoneIndex = i;
                         break;
                     }
                 }
             }
-            if (_trackingBoneIndex < 0 && _pmx.Bones.Count > 0)
+
+            // 体幹・胸の高さ基準ボーン（上半身2、上半身）
+            for (int i = 0; i < _pmx.Bones.Count; i++)
             {
-                _trackingBoneIndex = 0;
+                string bName = (_pmx.Bones[i].Name ?? "").Trim().ToLowerInvariant();
+                string bNameEn = (_pmx.Bones[i].NameEnglish ?? "").Trim().ToLowerInvariant();
+                if (spineKeywords.Any(k => bName.Contains(k) || bNameEn.Contains(k)))
+                {
+                    _trackingSpineBoneIndex = i;
+                    break;
+                }
             }
 
-            if (_trackingBoneIndex >= 0 && _trackingBoneIndex < _pmx.Bones.Count)
+            // フォールバック処理
+            if (_trackingHoriBoneIndex < 0) _trackingHoriBoneIndex = _trackingSpineBoneIndex;
+            if (_trackingSpineBoneIndex < 0) _trackingSpineBoneIndex = _trackingHoriBoneIndex;
+
+            if (_trackingHoriBoneIndex < 0)
             {
-                var bPos = _pmx.Bones[_trackingBoneIndex].Position;
-                _lastTrackedBonePos = new Vector3(bPos[0], bPos[1], bPos[2]);
-                // モデル初期位置にカメラターゲットを配置 (WPF座標系反転: -X)
-                _cameraTarget = new Point3D(-bPos[0], bPos[1] + 1.0, bPos[2]);
-                _update_camera();
+                for (int i = 0; i < _pmx.Bones.Count; i++)
+                {
+                    string bName = (_pmx.Bones[i].Name ?? "").Trim().ToLowerInvariant();
+                    string bNameEn = (_pmx.Bones[i].NameEnglish ?? "").Trim().ToLowerInvariant();
+                    if (rootKeywords.Any(k => bName.Contains(k) || bNameEn.Contains(k)))
+                    {
+                        _trackingHoriBoneIndex = i;
+                        _trackingSpineBoneIndex = i;
+                        break;
+                    }
+                }
             }
+
+            if (_trackingHoriBoneIndex < 0 && _pmx.Bones.Count > 0) _trackingHoriBoneIndex = 0;
+            if (_trackingSpineBoneIndex < 0 && _pmx.Bones.Count > 0) _trackingSpineBoneIndex = 0;
+
+            // カメラの注視点（モデル中心付近: モデル全高の約52%）および距離を自動設定（全身がゆったり収まる引き構図）
+            double targetX = 0.0;
+            double targetZ = 0.0;
+            double targetY = _baseMinY + _baseModelHeight * 0.52;
+
+            if (_trackingHoriBoneIndex >= 0 && _trackingHoriBoneIndex < _pmx.Bones.Count)
+            {
+                var hPos = _pmx.Bones[_trackingHoriBoneIndex].Position;
+                // WPF描画空間（ScaleTransform3D(-1, 1, 1)）に合わせてX座標を反転
+                targetX = -hPos[0];
+                targetZ = hPos[2];
+            }
+
+            if (_trackingSpineBoneIndex >= 0 && _trackingSpineBoneIndex < _pmx.Bones.Count)
+            {
+                var sPos = _pmx.Bones[_trackingSpineBoneIndex].Position;
+                if (sPos[1] > 0.0f)
+                {
+                    targetY = sPos[1];
+                }
+            }
+
+            _cameraTarget = new Point3D(targetX, targetY, targetZ);
+            _cameraDistance = Math.Clamp(_baseModelHeight * 2.35, 22.0, 150.0);
+            _cameraTheta = 180.0; // モデル正面方向（顔・胸側）
+            _cameraPhi = 4.0;     // 自然な正面アングル
+            _update_camera();
         }
 
-        private void _update_camera_tracking(IReadOnlyList<Matrix> matrices)
+        private void _update_camera_tracking(IReadOnlyList<Matrix> matrices, bool immediate = false)
         {
-            if (_trackingBoneIndex < 0 || _trackingBoneIndex >= matrices.Count) return;
+            if (matrices == null || matrices.Count == 0) return;
 
-            var currentPos = matrices[_trackingBoneIndex].Origin;
-            if (_lastTrackedBonePos.HasValue)
+            double targetX = _cameraTarget.X;
+            double targetZ = _cameraTarget.Z;
+            double targetY = _cameraTarget.Y;
+
+            // 水平位置（X, Z）: グルーブ/センター等の重心ボーンから算出（WPFのScaleX = -1に合わせて反転）
+            if (_trackingHoriBoneIndex >= 0 && _trackingHoriBoneIndex < matrices.Count)
             {
-                var delta = currentPos - _lastTrackedBonePos.Value;
-                if (MathF.Abs(delta.X) > 1e-4f || MathF.Abs(delta.Y) > 1e-4f || MathF.Abs(delta.Z) > 1e-4f)
+                var hPos = matrices[_trackingHoriBoneIndex].Origin;
+                targetX = -hPos.X;
+                targetZ = hPos.Z;
+            }
+
+            // 高さ位置（Y）: 上半身等の体幹胸ボーンから算出
+            if (_trackingSpineBoneIndex >= 0 && _trackingSpineBoneIndex < matrices.Count)
+            {
+                var sPos = matrices[_trackingSpineBoneIndex].Origin;
+                targetY = sPos.Y;
+            }
+
+            if (immediate)
+            {
+                _cameraTarget = new Point3D(targetX, targetY, targetZ);
+                _update_camera();
+            }
+            else
+            {
+                // スムーズ追従補間:
+                // 移動（歩行やステップ）に対して遅延なくカメラが追尾し、正面アングルを維持
+                // 小刻みな上下動や振動は滑らかに吸収
+                double factorHori = 0.25; // 水平追従（歩行・ステージ移動にしっかり追従）
+                double factorVert = 0.12; // 垂直追従（ジャンプ等の急激な上下動をダンピング）
+
+                double newX = _cameraTarget.X + (targetX - _cameraTarget.X) * factorHori;
+                double newY = _cameraTarget.Y + (targetY - _cameraTarget.Y) * factorVert;
+                double newZ = _cameraTarget.Z + (targetZ - _cameraTarget.Z) * factorHori;
+
+                if (Math.Abs(newX - _cameraTarget.X) > 1e-4 ||
+                    Math.Abs(newY - _cameraTarget.Y) > 1e-4 ||
+                    Math.Abs(newZ - _cameraTarget.Z) > 1e-4)
                 {
-                    // WPFのミラー反転にあわせて追従ターゲットを更新
-                    _cameraTarget = new Point3D(
-                        _cameraTarget.X - delta.X,
-                        _cameraTarget.Y + delta.Y,
-                        _cameraTarget.Z + delta.Z
-                    );
+                    _cameraTarget = new Point3D(newX, newY, newZ);
                     _update_camera();
                 }
             }
-            _lastTrackedBonePos = currentPos;
         }
 
         private void _update_camera()

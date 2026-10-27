@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>PhysicsSimulationBakeViewer_275</AssemblyName>
+    <RootNamespace>PhysicsSimulationBakeViewer</RootNamespace>
+    <DefineConstants>$(DefineConstants);BULLET_275</DefineConstants>
+    <NoWarn>$(NoWarn);NU1701</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BulletSharp" Version="0.11.1" />
+  </ItemGroup>
+
+  <!-- 物理ブリッジと共通のローダー・エンジン・モデルをリンク参照 -->
+  <ItemGroup>
+    <Compile Include="..\physics_bridge_cs\Models.cs" Link="Shared\Models.cs" />
+    <Compile Include="..\physics_bridge_cs\MotionUtils.cs" Link="Shared\MotionUtils.cs" />
+    <Compile Include="..\physics_bridge_cs\GeometryHelper.cs" Link="Shared\GeometryHelper.cs" />
+    <Compile Include="..\physics_bridge_cs\PmxLoader.cs" Link="Shared\PmxLoader.cs" />
+    <Compile Include="..\physics_bridge_cs\VmdLoader.cs" Link="Shared\VmdLoader.cs" />
+    <Compile Include="..\physics_bridge_cs\PhysicsSimulationEngine.cs" Link="Shared\PhysicsSimulationEngine.cs" />
+  </ItemGroup>
+
+</Project>

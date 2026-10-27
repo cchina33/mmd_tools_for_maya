@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-mmd_core.pmx - PMX 2.0 / 2.1 完全オリジナル入出力エンジン
+mmd_core.pmx - PMX 2.0 / 2.1 独自入出力エンジン
 
 PMX (Polygon Model eXtended) 公式バイナリフォーマットに準拠した
 純粋な Python 標準ライブラリのみによる高速バイナリパーサー＆ライターです。
-外部ライブラリ（blender_mmd_tools 等）に一切依存していません。
 """
 
 import struct
 import os
 import io
+import math
 
 class PMXFormatError(Exception):
     """PMXフォーマット不正エラー"""
@@ -205,7 +205,8 @@ class BinaryStreamReader:
     def read(self, n):
         b = self.f.read(n)
         if len(b) < n:
-            raise EOFError("予期せぬファイル終端に達しました")
+            # 途切れたPMXでもstruct.unpackがクラッシュしないようゼロパディング
+            b = b + b'\x00' * (n - len(b))
         return b
 
     def read_byte(self):
@@ -227,24 +228,32 @@ class BinaryStreamReader:
         return struct.unpack('<I', self.read(4))[0]
 
     def read_float(self):
-        return struct.unpack('<f', self.read(4))[0]
+        val = struct.unpack('<f', self.read(4))[0]
+        if math.isnan(val) or math.isinf(val):
+            return 0.0
+        return val
 
     def read_floats(self, count):
-        return list(struct.unpack(f'<{count}f', self.read(4 * count)))
+        raw = list(struct.unpack(f'<{count}f', self.read(4 * count)))
+        return [0.0 if (math.isnan(v) or math.isinf(v)) else v for v in raw]
 
     def read_text(self, encoding_flag):
         length = self.read_int()
         if length <= 0:
             return ""
+        # 異常に巨大な文字列長（ファイル破損や不正データ）の防護
+        if length > 1048576:
+            return ""
         raw_bytes = self.read(length)
-        enc = 'utf-8' if encoding_flag == 1 else 'utf-16le'
-        try:
-            return raw_bytes.decode(enc)
-        except UnicodeDecodeError:
+        preferred = 'utf-8' if encoding_flag == 1 else 'utf-16le'
+        encodings = [preferred, 'utf-16le', 'utf-8', 'cp932', 'shift_jis', 'gbk', 'euc-jp']
+        for enc in encodings:
             try:
-                return raw_bytes.decode('gbk') # 中国語フォールバック
+                text = raw_bytes.decode(enc)
+                return text.split('\x00')[0]
             except Exception:
-                return raw_bytes.decode('utf-8', errors='ignore')
+                continue
+        return raw_bytes.decode('utf-8', errors='replace').split('\x00')[0]
 
     def read_index(self, size, signed=False):
         if size == 1:
@@ -253,7 +262,8 @@ class BinaryStreamReader:
             return self.read_short() if signed else self.read_ushort()
         elif size == 4:
             return self.read_int() if signed else self.read_uint()
-        raise PMXFormatError(f"不正なインデックスサイズです: {size}")
+        # 不正なサイズの場合は 0 を返してクラッシュ防止
+        return 0
 
 class BinaryStreamWriter:
     def __init__(self, f):
@@ -340,7 +350,7 @@ def load(file_path):
         model.comment = reader.read_text(encoding_flag)
         model.comment_e = reader.read_text(encoding_flag)
 
-        # 3. 頂点データ
+        # 頂点データ
         vtx_count = reader.read_int()
         for _ in range(vtx_count):
             vtx = Vertex()
@@ -361,41 +371,62 @@ def load(file_path):
                 bw.bones[0] = reader.read_index(bone_idx_size, signed=False)
                 bw.bones[1] = reader.read_index(bone_idx_size, signed=False)
                 w0 = reader.read_float()
+                # 異常値・NaN・範囲外の保護
+                if math.isnan(w0) or math.isinf(w0):
+                    w0 = 1.0
+                w0 = max(0.0, min(1.0, w0))
                 bw.weights[0] = w0
                 bw.weights[1] = 1.0 - w0
             elif weight_type == BoneWeight.BDEF4 or weight_type == BoneWeight.QDEF:
                 for i in range(4):
                     bw.bones[i] = reader.read_index(bone_idx_size, signed=False)
-                bw.weights = reader.read_floats(4)
+                raw_w = reader.read_floats(4)
+                cleaned_w = [max(0.0, float(v)) for v in raw_w]
+                sum_w = sum(cleaned_w)
+                if sum_w > 1e-6:
+                    bw.weights = [v / sum_w for v in cleaned_w]
+                else:
+                    bw.weights = [1.0, 0.0, 0.0, 0.0]
             elif weight_type == BoneWeight.SDEF:
                 bw.bones[0] = reader.read_index(bone_idx_size, signed=False)
                 bw.bones[1] = reader.read_index(bone_idx_size, signed=False)
                 w0 = reader.read_float()
+                if math.isnan(w0) or math.isinf(w0):
+                    w0 = 0.5
+                w0 = max(0.0, min(1.0, w0))
                 c = reader.read_floats(3)
                 r0 = reader.read_floats(3)
                 r1 = reader.read_floats(3)
                 bw.weights = SdefWeights(w0, c, r0, r1)
+            else:
+                # 未知のウェイトタイプへの安全フォールバック
+                bw.weights[0] = 1.0
 
             vtx.weight = bw
             vtx.edge_scale = reader.read_float()
             model.vertices.append(vtx)
 
-        # 4. 面データ (3頂点インデックスごとに1面)
+        # 面データ (3頂点インデックスごとに1面)
         face_vert_count = reader.read_int()
         num_triangles = face_vert_count // 3
         for _ in range(num_triangles):
             i0 = reader.read_index(vtx_idx_size, signed=False)
             i1 = reader.read_index(vtx_idx_size, signed=False)
             i2 = reader.read_index(vtx_idx_size, signed=False)
+            # 頂点インデックスの範囲外アクセス防護
+            if vtx_count > 0:
+                i0 = min(max(0, i0), vtx_count - 1)
+                i1 = min(max(0, i1), vtx_count - 1)
+                i2 = min(max(0, i2), vtx_count - 1)
             model.faces.append([i0, i1, i2])
 
-        # 5. テクスチャテーブル
+        # テクスチャテーブル
         tex_count = reader.read_int()
         for _ in range(tex_count):
             t_path = reader.read_text(encoding_flag)
             model.textures.append(Texture(t_path))
 
-        # 6. 材質データ
+        # 材質データ
         mat_count = reader.read_int()
         for _ in range(mat_count):
             mat = Material()
@@ -409,25 +440,33 @@ def load(file_path):
             mat.edge_color = reader.read_floats(4)
             mat.edge_size = reader.read_float()
             mat.texture = reader.read_index(tex_idx_size, signed=True)
+            if mat.texture >= tex_count:
+                mat.texture = -1
             mat.sphere_texture = reader.read_index(tex_idx_size, signed=True)
+            if mat.sphere_texture >= tex_count:
+                mat.sphere_texture = -1
             mat.sphere_texture_mode = reader.read_ubyte()
             mat.is_shared_toon_texture = (reader.read_ubyte() == 1)
             if mat.is_shared_toon_texture:
                 mat.toon_texture = reader.read_ubyte()
             else:
                 mat.toon_texture = reader.read_index(tex_idx_size, signed=True)
+                if mat.toon_texture >= tex_count:
+                    mat.toon_texture = -1
             mat.comment = reader.read_text(encoding_flag)
-            mat.vertex_count = reader.read_int()
+            mat.vertex_count = max(0, reader.read_int())
             model.materials.append(mat)
 
-        # 7. ボーンデータ
+        # ボーンデータ
         bone_count = reader.read_int()
-        for _ in range(bone_count):
+        for b_idx in range(bone_count):
             b = Bone()
             b.name = reader.read_text(encoding_flag)
             b.name_e = reader.read_text(encoding_flag)
             b.location = reader.read_floats(3)
             b.parent = reader.read_index(bone_idx_size, signed=True)
+            if b.parent >= bone_count or b.parent == b_idx:
+                b.parent = -1
             b.transform_level = reader.read_int()
             flags = reader.read_ushort()
             b.flags = flags
@@ -442,9 +481,12 @@ def load(file_path):
             if flags & 0x0100 or flags & 0x0200:
                 parent_idx = reader.read_index(bone_idx_size, signed=True)
                 ratio = reader.read_float()
+                if parent_idx < 0 or parent_idx >= bone_count:
+                    parent_idx = -1
+                    ratio = 0.0
                 b.additionalTransform = (parent_idx, ratio)
-                b.hasAdditionalRotate = bool(flags & 0x0100)
-                b.hasAdditionalLocation = bool(flags & 0x0200)
+                b.hasAdditionalRotate = bool(flags & 0x0100) and (parent_idx >= 0)
+                b.hasAdditionalLocation = bool(flags & 0x0200) and (parent_idx >= 0)
 
             if flags & 0x0400: # 固定軸
                 b.axis = reader.read_floats(3)
@@ -459,6 +501,8 @@ def load(file_path):
 
             if b.isIK:
                 b.ik_target = reader.read_index(bone_idx_size, signed=True)
+                if b.ik_target is not None and (b.ik_target < 0 or b.ik_target >= bone_count):
+                    b.ik_target = None
                 b.ik_loop = reader.read_int()
                 b.ik_limit_angle = reader.read_float()
                 link_count = reader.read_int()
@@ -467,11 +511,19 @@ def load(file_path):
                     has_limits = (reader.read_ubyte() == 1)
                     lim_min = reader.read_floats(3) if has_limits else None
                     lim_max = reader.read_floats(3) if has_limits else None
-                    b.ik_links.append((link_idx, lim_min, lim_max))
+
+                    # 無効なボーンインデックスのリンクを除外
+                    if 0 <= link_idx < bone_count:
+                        if has_limits and lim_min and lim_max:
+                            safe_min = [min(lim_min[k], lim_max[k]) for k in range(3)]
+                            safe_max = [max(lim_min[k], lim_max[k]) for k in range(3)]
+                            b.ik_links.append((link_idx, safe_min, safe_max))
+                        else:
+                            b.ik_links.append((link_idx, lim_min, lim_max))
 
             model.bones.append(b)
 
-        # 8. モーフデータ
+        # モーフデータ
         morph_count = reader.read_int()
         for _ in range(morph_count):
             m = Morph()
@@ -486,23 +538,28 @@ def load(file_path):
                 for _ in range(offset_count):
                     v_idx = reader.read_index(vtx_idx_size, signed=False)
                     v_off = reader.read_floats(3)
-                    m.offsets.append(VertexMorphOffset(v_idx, v_off))
+                    # 範囲外頂点インデックスのスキップ
+                    if 0 <= v_idx < vtx_count:
+                        m.offsets.append(VertexMorphOffset(v_idx, v_off))
             elif m.morph_type == Morph.GROUP:
                 for _ in range(offset_count):
                     g_idx = reader.read_index(morph_idx_size, signed=True)
                     g_rate = reader.read_float()
-                    m.offsets.append((g_idx, g_rate))
+                    if 0 <= g_idx < morph_count:
+                        m.offsets.append((g_idx, g_rate))
             elif m.morph_type == Morph.BONE:
                 for _ in range(offset_count):
                     b_idx = reader.read_index(bone_idx_size, signed=True)
                     trans = reader.read_floats(3)
                     rot = reader.read_floats(4)
-                    m.offsets.append((b_idx, trans, rot))
+                    if 0 <= b_idx < bone_count:
+                        m.offsets.append((b_idx, trans, rot))
             elif m.morph_type in [Morph.UV, 4, 5, 6, 7]: # UV または 追加UV
                 for _ in range(offset_count):
                     v_idx = reader.read_index(vtx_idx_size, signed=False)
                     uv_off = reader.read_floats(4)
-                    m.offsets.append((v_idx, uv_off))
+                    if 0 <= v_idx < vtx_count:
+                        m.offsets.append((v_idx, uv_off))
             elif m.morph_type == Morph.MATERIAL:
                 for _ in range(offset_count):
                     mat_idx = reader.read_index(mat_idx_size, signed=True)
@@ -515,11 +572,12 @@ def load(file_path):
                     tex_tint = reader.read_floats(4)
                     sphere_tint = reader.read_floats(4)
                     toon_tint = reader.read_floats(4)
-                    m.offsets.append((mat_idx, calc_op, diff, spec, amb, edge, edge_sz, tex_tint, sphere_tint, toon_tint))
+                    if -1 <= mat_idx < mat_count:
+                        m.offsets.append((mat_idx, calc_op, diff, spec, amb, edge, edge_sz, tex_tint, sphere_tint, toon_tint))
 
             model.morphs.append(m)
 
-        # 9. 表示枠データ
+        # 表示枠データ
         disp_count = reader.read_int()
         for _ in range(disp_count):
             d = Display()
@@ -536,7 +594,7 @@ def load(file_path):
                 d.data.append((elem_type, elem_idx))
             model.display.append(d)
 
-        # 剛体データ読み込み
+        # 剛体データ読み込み (末尾破損でも読めた要素まで安全に保持)
         try:
             rigid_count = reader.read_int()
             for _ in range(rigid_count):
@@ -544,6 +602,8 @@ def load(file_path):
                 rb.name = reader.read_text(encoding_flag)
                 rb.name_e = reader.read_text(encoding_flag)
                 rb.bone_index = reader.read_index(bone_idx_size, signed=True)
+                if rb.bone_index >= bone_count:
+                    rb.bone_index = -1
                 rb.group = reader.read_ubyte()
                 rb.collision_mask = reader.read_ushort()
                 rb.shape_type = reader.read_ubyte()
@@ -557,10 +617,10 @@ def load(file_path):
                 rb.friction = reader.read_float()
                 rb.physics_mode = reader.read_ubyte()
                 model.rigid_bodies.append(rb)
-        except EOFError:
+        except Exception:
             pass
 
-        # ジョイントデータ読み込み
+        # ジョイントデータ読み込み (末尾破損でも読めた要素まで安全に保持)
         try:
             joint_count = reader.read_int()
             for _ in range(joint_count):
@@ -570,6 +630,12 @@ def load(file_path):
                 j.joint_type = reader.read_ubyte()
                 j.rigid_body_a = reader.read_index(rigid_idx_size, signed=True)
                 j.rigid_body_b = reader.read_index(rigid_idx_size, signed=True)
+                if hasattr(model, 'rigid_bodies'):
+                    rb_len = len(model.rigid_bodies)
+                    if j.rigid_body_a >= rb_len:
+                        j.rigid_body_a = -1
+                    if j.rigid_body_b >= rb_len:
+                        j.rigid_body_b = -1
                 j.position = reader.read_floats(3)
                 j.rotation = reader.read_floats(3)
                 j.linear_limit_min = reader.read_floats(3)
@@ -579,7 +645,7 @@ def load(file_path):
                 j.linear_spring = reader.read_floats(3)
                 j.angular_spring = reader.read_floats(3)
                 model.joints.append(j)
-        except EOFError:
+        except Exception:
             pass
 
     return model
@@ -697,7 +763,7 @@ def save(file_path, model):
             writer.write_text(mat.comment, encoding_flag)
             writer.write_int(mat.vertex_count)
 
-        # 7. ボーン
+        # ボーン
         writer.write_int(num_bone)
         for b in model.bones:
             writer.write_text(b.name, encoding_flag)
@@ -707,15 +773,92 @@ def save(file_path, model):
             writer.write_int(b.transform_level)
             
             # フラグ計算
-            flags = 0x0002 | 0x0004 | 0x0008 | 0x0010 # 回転, 移動, 表示, 操作
-            if b.displayConnection is not None and isinstance(b.displayConnection, int):
-                flags |= 0x0001
+            if hasattr(b, 'flags') and b.flags != 0:
+                flags = b.flags
+            else:
+                flags = 0
+                if b.displayConnection is not None and isinstance(b.displayConnection, int):
+                    flags |= 0x0001
+                if getattr(b, 'isRotatable', True):
+                    flags |= 0x0002
+                if getattr(b, 'isMovable', True):
+                    flags |= 0x0004
+                if getattr(b, 'visible', True):
+                    flags |= 0x0008
+                if getattr(b, 'isControllable', True):
+                    flags |= 0x0010
+                if getattr(b, 'isIK', False):
+                    flags |= 0x0020
+                if getattr(b, 'hasAdditionalRotate', False):
+                    flags |= 0x0100
+                if getattr(b, 'hasAdditionalLocation', False):
+                    flags |= 0x0200
+                if getattr(b, 'axis', None) is not None:
+                    flags |= 0x0400
+                if getattr(b, 'localCoordinate', None) is not None:
+                    flags |= 0x0800
+                if getattr(b, 'external_parent', None) is not None:
+                    flags |= 0x2000
+
             writer.write_ushort(flags)
 
+            # 接続先
             if flags & 0x0001:
-                writer.write_index(b.displayConnection, bone_idx_size, signed=True)
+                conn_idx = b.displayConnection if isinstance(b.displayConnection, int) else 0
+                writer.write_index(conn_idx, bone_idx_size, signed=True)
             else:
-                writer.write_floats([0.0, 0.0, 0.0])
+                conn_pos = b.displayConnection if (b.displayConnection and isinstance(b.displayConnection, (list, tuple))) else [0.0, 0.0, 0.0]
+                writer.write_floats(conn_pos)
+
+            # 付与親
+            if flags & (0x0100 | 0x0200):
+                add_p, add_r = getattr(b, 'additionalTransform', (-1, 0.0))
+                writer.write_index(add_p, bone_idx_size, signed=True)
+                writer.write_float(add_r)
+
+            # 軸固定
+            if flags & 0x0400:
+                ax = getattr(b, 'axis', [0.0, 1.0, 0.0]) or [0.0, 1.0, 0.0]
+                writer.write_floats(ax)
+
+            # ローカル軸
+            if flags & 0x0800:
+                loc_coord = getattr(b, 'localCoordinate', None)
+                if loc_coord and hasattr(loc_coord, 'x_axis') and hasattr(loc_coord, 'z_axis'):
+                    writer.write_floats(loc_coord.x_axis)
+                    writer.write_floats(loc_coord.z_axis)
+                else:
+                    writer.write_floats([1.0, 0.0, 0.0])
+                    writer.write_floats([0.0, 0.0, 1.0])
+
+            # 外部親
+            if flags & 0x2000:
+                ext_p = getattr(b, 'external_parent', 0) or 0
+                writer.write_int(ext_p)
+
+            # IKデータ
+            if flags & 0x0020:
+                ik_target = getattr(b, 'ik_target', -1)
+                ik_loop = getattr(b, 'ik_loop', 40)
+                ik_limit_angle = getattr(b, 'ik_limit_angle', 3.14159265)
+                ik_links = getattr(b, 'ik_links', []) or []
+
+                writer.write_index(ik_target if ik_target is not None else -1, bone_idx_size, signed=True)
+                writer.write_int(ik_loop)
+                writer.write_float(ik_limit_angle)
+                writer.write_int(len(ik_links))
+
+                for link in ik_links:
+                    link_idx = link[0]
+                    lim_min = link[1] if len(link) > 1 else None
+                    lim_max = link[2] if len(link) > 2 else None
+                    has_limits = 1 if (lim_min is not None and lim_max is not None) else 0
+
+                    writer.write_index(link_idx, bone_idx_size, signed=True)
+                    writer.write_ubyte(has_limits)
+                    if has_limits:
+                        writer.write_floats(lim_min)
+                        writer.write_floats(lim_max)
 
         # 8. モーフ
         writer.write_int(num_morph)

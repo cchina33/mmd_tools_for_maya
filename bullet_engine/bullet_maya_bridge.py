@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 MMD Bullet 物理演算エンジン Maya ブリッジモジュール
-本家 MMD 仕様の Bullet Physics 2.83.7 によるシミュレーションと Maya ボーンへのベイク処理を提供します。
+本家 MMD 仕様の Bullet Physics (2.75 / 2.83.7) によるシミュレーションと Maya ボーンへのベイク処理を提供します。
 """
 
 import os
@@ -96,17 +96,54 @@ class BulletMayaBridge:
     """
     Bullet物理シミュレーションとMayaシーンを仲介するブリッジクラス
     """
-    def __init__(self, pmx_path, scale=8.0):
+    def __init__(self, pmx_path, scale=8.0, target_model=None, bullet_version="2.75"):
         self.pmx_path = pmx_path
         self.scale = scale
+        self.target_model = target_model
+        self.bullet_version = bullet_version
         self.pmx_model = pmx.load(pmx_path)
 
-        # Bullet C++ エンジンの初期化
-        self.engine = BulletEngineWrapper()
+        # Bullet C++ エンジンの初期化 (指定バージョン)
+        self.engine = BulletEngineWrapper(bullet_version=bullet_version)
 
-        # PMXボーンとMayaジョイントの対応付け
-        all_joints = mc.ls(type="joint", long=True) or []
-        self.pmx_to_maya_joints = map_pmx_bones_to_maya(self.pmx_model.bones, all_joints)
+        # PMXボーンとMayaジョイントの対応付け (特定モデル指定時は多層探索により関連ジョイントを特定)
+        model_joints = []
+        if target_model and mc.objExists(target_model):
+            # 対象ノード自身がジョイントの場合
+            if mc.nodeType(target_model) == 'joint':
+                model_joints = mc.listRelatives(target_model, allDescendents=True, type="joint", fullPath=True) or []
+                model_joints.append(target_model)
+
+            # 対象ノードがメッシュまたはトランスフォームの場合: スキンクラスターからインフルエンスジョイントを探索
+            if not model_joints:
+                history_skins = mc.ls(mc.listHistory(target_model) or [], type='skinCluster') or []
+                for sc in history_skins:
+                    influences = mc.skinCluster(sc, query=True, influence=True) or []
+                    for inf in influences:
+                        if inf and mc.objExists(inf) and mc.nodeType(inf) == 'joint':
+                            long_p = mc.ls(inf, long=True)
+                            if long_p and long_p[0] not in model_joints:
+                                model_joints.append(long_p[0])
+
+            # 親グループが存在する場合: 親グループ配下のジョイントを探索
+            if not model_joints:
+                parents = mc.listRelatives(target_model, parent=True, fullPath=True) or []
+                for p in parents:
+                    p_joints = mc.listRelatives(p, allDescendents=True, type="joint", fullPath=True) or []
+                    for pj in p_joints:
+                        if pj not in model_joints:
+                            model_joints.append(pj)
+
+            # メッシュ配下の子孫ジョイントの探索
+            if not model_joints:
+                model_joints = mc.listRelatives(target_model, allDescendents=True, type="joint", fullPath=True) or []
+
+        # 上記でジョイントが取得できなかった場合、またはtarget_model未指定時はシーン全体のジョイントを対象化
+        if not model_joints:
+            model_joints = mc.ls(type="joint", long=True) or []
+
+        self.pmx_to_maya_joints = map_pmx_bones_to_maya(self.pmx_model.bones, model_joints)
+        print(f"[Bullet] ボーン紐付け完了: {len(self.pmx_to_maya_joints)} / {len(self.pmx_model.bones)} ボーン (探索対象ジョイント数: {len(model_joints)})")
 
         self.kinematic_and_aligned_rb_indices = []
         self.dynamic_rb_indices = []
@@ -158,7 +195,7 @@ class BulletMayaBridge:
 
             # 初期姿勢:
             # フレーム0におけるボーン姿勢からローカルオフセットを用いてワールド座標・回転を決定
-            # (モデルが初期ポーズをとっている場合でも、剛体とJointが完璧に初期追従して初期張力爆発を完全防止)
+            # (モデルが初期ポーズをとっている場合でも、剛体とJointが初期追従して初期張力爆発を防止)
             init_pos = rb_bind_p
             init_quat = rb_bind_q
             if target_joint and mc.objExists(target_joint):
@@ -212,7 +249,7 @@ class BulletMayaBridge:
         # ジョイント登録
         for j in self.pmx_model.joints:
             # 剛体Aに対するローカルオフセットから、現在の剛体Aのワールド姿勢に合わせてJointを配置
-            # (剛体AとJointの相対オフセット歪みを完全に排除し、初期張力爆発を防止)
+            # (剛体AとJointの相対オフセット歪みを徹底して排除し、初期張力爆発を防止)
             rb_a = self.pmx_model.rigid_bodies[j.rigid_body_a]
             rb_a_bind_p = (rb_a.position[0] * self.scale, rb_a.position[1] * self.scale, -rb_a.position[2] * self.scale)
             deg_ax = -math.degrees(rb_a.rotation[0])
@@ -308,10 +345,10 @@ class BulletMayaBridge:
         # モードに応じたサブステップ数の最適化
         if physics_mode == "dance":
             actual_substeps = max(int(sub_steps), 30)
-            relax_steps = 35
+            relax_steps = 3
         else:
             actual_substeps = min(int(sub_steps), 15) if int(sub_steps) > 15 else int(sub_steps)
-            relax_steps = 15
+            relax_steps = 3
 
         print(f"[Bullet] 超高速一括ベイク処理開始: {start_frame}F 〜 {end_frame}F (モード: {physics_mode}, FPS: {fps_val:.1f}, サブステップ: {actual_substeps})")
         dt = 1.0 / fps_val
@@ -391,7 +428,7 @@ class BulletMayaBridge:
         # アニメーションボーンの事前サンプリング
         # IKハンドル (ikHandle / ikRPsolver) やコンストレイントを毎フレーム確実に解決するため、
         # カレントタイムを明示的に移動してサンプリングします。
-        print("[Bullet] アニメーションボーン姿勢の事前キャッシュを作成中 (IK・コンストレイント完全解決)...")
+        print("[Bullet] アニメーションボーン姿勢の事前キャッシュを作成中 (IK・コンストレイント解決)...")
         kinematic_targets = {}
         parent_inv_mats = {}
 
@@ -446,18 +483,6 @@ class BulletMayaBridge:
 
         print("[Bullet] 事前キャッシュ完了 (IK・コンストレイント解決済み)。")
 
-        # MMD常時重力の反映: 自重によるスカート・髪の垂れ下がり安定化 (Pre-roll Settling)
-        print("[Bullet] MMD常時重力の反映: 自重による垂れ下がり安定化 (Pre-roll Settling) を実行中...")
-        settle_dt = 1.0 / 60.0
-        settle_steps = 60 if physics_mode == "dance" else 40
-        init_k_targets = kinematic_targets.get(int(start_frame), {})
-        for _ in range(settle_steps):
-            for rb_idx, (t_pos, t_rot) in init_k_targets.items():
-                self.engine.set_target_transform(rb_idx, t_pos, t_rot)
-            self.engine.step_simulation(dt=settle_dt, max_sub_steps=2, fixed_time_step=settle_dt / 2.0)
-        self.engine.reset_velocities()
-        print("[Bullet] 重力垂れ下がり安定化完了。MMD標準のシルエットからベイクを開始します。")
-
         self.last_eulers.clear()
 
         # 高速ベイク用のメモリバッファを初期化
@@ -495,7 +520,12 @@ class BulletMayaBridge:
                 # Kinematic剛体のマイクロステップ連続補間 (足の移動速度を持続的に物理エンジンへ伝達)
                 micro_steps = 2
                 sub_dt = dt / float(micro_steps)
-                sub_substeps = max(5, actual_substeps // micro_steps)
+
+                # 本家MMD準拠の安定した物理内部刻み (通常モード: 60Hz, ダンスモード: 120Hz)
+                # 極小のfixedTimeStepによるスプリング目標速度の暴走・あらぶりを防止し、しなやかな揺れを実現
+                physics_hz = 120.0 if physics_mode == "dance" else 60.0
+                fixed_step = 1.0 / physics_hz
+                max_sub = max(2, int(round((sub_dt / fixed_step) * 2)))
 
                 for m in range(micro_steps):
                     alpha = (m + 1.0) / float(micro_steps)
@@ -507,7 +537,7 @@ class BulletMayaBridge:
                             prev_pos[2] + (cur_pos[2] - prev_pos[2]) * alpha
                         )
                         self.engine.set_target_transform(rb_idx, interp_pos, cur_rot)
-                    self.engine.step_simulation(dt=sub_dt, max_sub_steps=sub_substeps, fixed_time_step=sub_dt / float(sub_substeps))
+                    self.engine.step_simulation(dt=sub_dt, max_sub_steps=max_sub, fixed_time_step=fixed_step)
 
 
                 # 現在フレームの物理演算適用済みボーンワールド回転行列を記録 (チェーン親子伝搬用)
@@ -536,7 +566,7 @@ class BulletMayaBridge:
                         props = joint_static_props[joint_name]
                         parent_joint = props['parent_joint']
 
-                        # 親がDynamicボーンの場合は最新の物理ワールド回転行列の逆行列を採用し、チェーンの累積誤差を完全排除
+                        # 親がDynamicボーンの場合は最新の物理ワールド回転行列の逆行列を採用し、チェーンの累積誤差を排除
                         if parent_joint in current_frame_dynamic_world_mats:
                             parent_inv_mat = current_frame_dynamic_world_mats[parent_joint].inverse()
                         else:
@@ -577,7 +607,10 @@ class BulletMayaBridge:
                         bake_buffer[joint_name]['rz'].append(euler_deg[2])
 
                 if progress_callback:
-                    progress_callback(frame, end_frame, f_idx + 1, total_frames)
+                    try:
+                        progress_callback(frame, end_frame, f_idx + 1, total_frames)
+                    except Exception:
+                        pass
 
             # キーフレーム書き込みの実行
             if not cancelled:
@@ -627,6 +660,12 @@ class BulletMayaBridge:
                     mc.loadPlugin(path)
                     if hasattr(mc, "mmdFastBakeBone"):
                         print(f"[Bullet] mmd_motion.mll を自動ロードしました: {path}")
+                        try:
+                            mc.pluginInfo(path, edit=True, autoload=True)
+                            mc.pluginInfo("mmd_motion.mll", edit=True, autoload=True)
+                            mc.pluginInfo("mmd_motion", edit=True, autoload=True)
+                        except Exception:
+                            pass
                         return True
                 except Exception as e:
                     print(f"[Bullet] mmd_motion.mll ロード試行エラー: {e}")
@@ -649,7 +688,12 @@ class BulletMayaBridge:
         C++ プラグイン (mmd_motion.mll: mmdFastBakeBone)、OpenMaya 2.0 API、cmds の順にフォールバックします。
         """
         if not bake_buffer:
+            print("[Bullet] ベイクバッファが空のため、キーフレーム書き込みをスキップしました。")
             return
+
+        total_joints = len(bake_buffer)
+        total_keys = sum(len(d.get('frames', [])) for d in bake_buffer.values())
+        print(f"[Bullet] キーフレーム書き込み準備: {total_joints} 個のジョイント (合計 {total_keys * 3} チャンネルキー)")
 
         # mmd_motion.mll プラグインの確認と自動ロード
         self._ensure_motion_plugin_loaded()
@@ -658,14 +702,17 @@ class BulletMayaBridge:
         if hasattr(mc, "mmdFastBakeBone"):
             print("[Bullet] C++ mmdFastBakeBone (mmd_motion.mll) コマンドによる超高速一括ベイクを実行します。")
             empty_trans = []
+            baked_count = 0
             for joint_name, data in bake_buffer.items():
                 frames = data['frames']
                 if not frames:
                     continue
                 try:
                     mc.mmdFastBakeBone(joint_name, frames, empty_trans, empty_trans, empty_trans, data['rx'], data['ry'], data['rz'])
+                    baked_count += 1
                 except Exception as e:
                     print(f"[Bullet] mmdFastBakeBone 実行警告 ({joint_name}): {e}")
+            print(f"[Bullet] C++ mmdFastBakeBone による書き込み完了: {baked_count} / {total_joints} ジョイント")
             return
 
         # フォールバック: OpenMaya 2.0 API によるバッチ書き込み
@@ -673,6 +720,7 @@ class BulletMayaBridge:
         try:
             import maya.api.OpenMayaAnim as oma
             time_unit = om.MTime.uiUnit()
+            baked_count = 0
             for joint_name, data in bake_buffer.items():
                 frames = data['frames']
                 if not frames:
@@ -706,12 +754,15 @@ class BulletMayaBridge:
                     else:
                         anim_curve.setObject(plug)
                     anim_curve.addKeys(time_array, double_array)
+                baked_count += 1
+            print(f"[Bullet] OpenMaya 2.0 バッチ書き込み完了: {baked_count} / {total_joints} ジョイント")
             return
         except Exception as e:
             print(f"[Bullet] OpenMaya 2.0 バッチ書き込みフォールバック失敗: {e}")
 
         # 最終フォールバック: cmds.setKeyframe
         print("[Bullet] cmds.setKeyframe による順次書き込みフォールバックを実行します。")
+        baked_count = 0
         for joint_name, data in bake_buffer.items():
             frames = data['frames']
             rx = data['rx']
@@ -722,6 +773,8 @@ class BulletMayaBridge:
                 mc.setKeyframe(joint_name, attribute='rotateX', time=f, value=rx[i])
                 mc.setKeyframe(joint_name, attribute='rotateY', time=f, value=ry[i])
                 mc.setKeyframe(joint_name, attribute='rotateZ', time=f, value=rz[i])
+            baked_count += 1
+        print(f"[Bullet] cmds.setKeyframe による書き込み完了: {baked_count} / {total_joints} ジョイント")
 
     def clear_physics_keyframes(self):
         """

@@ -27,11 +27,14 @@ asset/User_pmx_data/
 asset/vmd_bake_data/
 asset/bone_motion_export.json
 
-# ローカル設定・ログファイル
+# ローカル設定・ログファイル・一時出力
 asset/khatangton.txt
 asset/*.txt
+test_out.txt
+*_out.txt
 *.log
 *.bak
+*.tmp
 
 # Python キャッシュファイル
 __pycache__/
@@ -43,6 +46,10 @@ __pycache__/
 .mayaSwatches/
 *.swp
 *.lock
+*.mel.bak
+*.ma.bak
+*.mb.bak
+*.orig
 
 # OS 自動生成ファイル
 .DS_Store
@@ -96,6 +103,7 @@ x64/
 !bullet_engine/bin/*.dll
 !cpp_engine/bin/*.dll
 !mmd_material_plugin/bin/**
+!mmd_toon_plugin/bin/**
 !mmd_motion_plugin/bin/**
 
 # ただしデバッグシンボル・バックアップ等は保護対象内でも除外
@@ -103,7 +111,3 @@ x64/
 *_old_*.dll
 *.FileListAbsolute.txt
 *.sourcelink.json
-
-# 外部ツール
-_maya_mmd_tools-main/
-_boneDynamicsNode-0.5.0/

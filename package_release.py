@@ -36,7 +36,7 @@ def get_version(root_dir: Path) -> str:
                 return match_sub.group(1)
         except Exception:
             pass
-    return "v1.0.3"
+    return "v1.0.4"
 
 
 def get_forbidden_keywords() -> list:

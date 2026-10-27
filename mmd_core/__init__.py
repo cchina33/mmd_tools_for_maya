@@ -10,6 +10,7 @@ from . import pmx
 from . import pmd
 from . import x_file
 from . import vmd
+from . import vpd
 
-__all__ = ['pmx', 'pmd', 'x_file', 'vmd']
+__all__ = ['pmx', 'pmd', 'x_file', 'vmd', 'vpd']
 

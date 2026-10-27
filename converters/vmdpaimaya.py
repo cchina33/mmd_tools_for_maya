@@ -117,17 +117,41 @@ def _match_bone_to_joint(bone_name, joint_map):
 def get_available_mmd_models():
     """シーン内の利用可能なMMDモデル一覧を取得します。戻り値: [(ノード名, 表示名), ...]"""
     models = []
-    roots = mc.ls('*.mmdModelRoot', objectsOnly=True) or []
-    for r in roots:
-        orig = mc.getAttr(f"{r}.originalName") if mc.attributeQuery('originalName', node=r, exists=True) else r
-        models.append((r, f"{r} ({orig})"))
-
-    # mmdModelRoot がない場合のフォールバック（MMD_Modelで始まるノード等）
-    if not models:
+    candidates = mc.ls('*.mmdModelRoot', objectsOnly=True) or []
+    if not candidates:
         for node in mc.ls(type='transform') or []:
             if mc.attributeQuery('MMD_model', node=node, exists=True):
-                orig = mc.getAttr(f"{node}.originalName") if mc.attributeQuery('originalName', node=node, exists=True) else node
-                models.append((node, f"{node} ({orig})"))
+                candidates.append(node)
+
+    # 重複ノードの排除
+    unique_candidates = []
+    for c in candidates:
+        if c not in unique_candidates and mc.objExists(c):
+            unique_candidates.append(c)
+
+    # 親グループ（統合グループ *_grp や isMmdGroup 属性持ち）の除外
+    valid_roots = []
+    for r in unique_candidates:
+        # 統合グループ属性 (isMmdGroup) を持つノードは除外
+        if mc.attributeQuery('isMmdGroup', node=r, exists=True):
+            continue
+
+        # 配下に別の候補ノード（モデル実体）が含まれている親グループは除外
+        descendants = mc.listRelatives(r, allDescendents=True, fullPath=False) or []
+        has_child_candidate = any(d in unique_candidates for d in descendants)
+        if has_child_candidate:
+            continue
+
+        valid_roots.append(r)
+
+    # 表示名とタプル一覧の構築
+    seen_nodes = set()
+    for r in valid_roots:
+        if r in seen_nodes:
+            continue
+        seen_nodes.add(r)
+        orig = mc.getAttr(f"{r}.originalName") if mc.attributeQuery('originalName', node=r, exists=True) else r
+        models.append((r, f"{r} ({orig})"))
 
     return models
 
@@ -228,7 +252,7 @@ def resolve_model_structure(target_model_node=None):
             if roots:
                 target_model_node = roots[-1] # 最新のインポートモデル
 
-    # 2. モデルノードのアトリビュートから構造復元 (mmdModelStructure 優先)
+    # モデルノードのアトリビュートから構造復元 (mmdModelStructure 優先)
     if target_model_node and mc.objExists(target_model_node):
         resolved_model = target_model_node
         if mc.attributeQuery('mmdModelStructure', node=target_model_node, exists=True):
@@ -256,7 +280,7 @@ def resolve_model_structure(target_model_node=None):
             except Exception:
                 pass
 
-    # 3. キャッシュファイル (last_imported_structure.json) からの復元
+    # キャッシュファイル (last_imported_structure.json) からの復元
     if not bone_map:
         plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         cache_path = os.path.join(plugin_root, 'asset', 'last_imported_structure.json')
@@ -271,7 +295,7 @@ def resolve_model_structure(target_model_node=None):
             except Exception:
                 pass
 
-    # 4. フォールバック探索
+    # フォールバック探索
     if not bone_map:
         bone_map = _find_scene_joints(target_model_node)
     if not morph_map:
@@ -295,7 +319,7 @@ def _resolve_full_joint_path(node_candidate, target_model=None):
     except Exception:
         pass
 
-    # 2. ショートネームからロングネームを解決
+    # ショートネームからロングネームを解決
     short_name = node_candidate.split('|')[-1].split(':')[-1]
     matches = []
     try:
@@ -382,12 +406,12 @@ def print_vmd_analysis_report(motion, joint_map, target_model=None):
 
 def apply_ik_motion(motion, target_model=None):
     """
-    VMDのIK制御フレーム（VmdShowIkFrame）をMayaの足IKハンドルの ikBlend にキーフレーム設定します。
+    VMDのIK制御フレーム（VmdShowIkFrame）をMayaの足IKおよびつま先IKハンドルの ikBlend にキーフレーム設定します。
     """
     if not motion.ik_frames:
         return
 
-    # シーン内の足IKハンドルを探索
+    # シーン内の足IKおよびつま先IKハンドルを探索
     ik_handles = {}
     for side_jp, side_en in [("左", "L"), ("右", "R")]:
         h_pattern = f"*ikHandle_leg_{side_en}*"
@@ -395,6 +419,12 @@ def apply_ik_motion(motion, target_model=None):
         if matches:
             ik_handles[f"{side_jp}足ＩＫ"] = matches[0]
             ik_handles[f"{side_jp}足IK"] = matches[0]
+
+        toe_pattern = f"*ikHandle_toe_{side_en}*"
+        toe_matches = mc.ls(toe_pattern, type='ikHandle') or []
+        if toe_matches:
+            ik_handles[f"{side_jp}つま先ＩＫ"] = toe_matches[0]
+            ik_handles[f"{side_jp}つま先IK"] = toe_matches[0]
 
     if not ik_handles:
         return
@@ -416,15 +446,15 @@ def apply_ik_motion(motion, target_model=None):
                     pass
 
     if applied_ik_keys > 0:
-        print(f"  - IK制御キーフレームを足IKハンドルに設定しました ({applied_ik_keys} キー)")
+        print(f"  - IK制御キーフレームをIKハンドル群に設定しました ({applied_ik_keys} キー)")
 
 
 def apply_leg_knee_orientation(motion, joint_map, target_model=None, scale=8.0):
     """
-    大腿（左足・右足）のVMD回転キーおよび腰・足IKの姿勢変化に基づき、
-    膝の外開き方向（斜め前外側）へポールベクターロケータの位置軌道を算出し、
+    大腿のVMD回転キーおよび足IK・センターの変位に基づき、
+    膝の曲がり方向と外開き方向へポールベクターロケータの位置軌道を幾何学的に算出し、
     キーフレームを設定します。
-    これにより、しゃがみポーズやダンス動作において膝が自然に外側へ開く姿勢を再現します。
+    これにより、足IKの極端な移動やしゃがみ動作時にも膝が反転せず、自然な外開き姿勢を維持します。
     """
     if not motion.bone_frames:
         return 0
@@ -443,10 +473,11 @@ def apply_leg_knee_orientation(motion, joint_map, target_model=None, scale=8.0):
         leg_frames = motion.bone_frames.get(leg_bone_name, [])
 
         # 足IKやセンターのキーフレームも考慮（ポーズ変化フレームの網羅）
-        ik_frames = motion.bone_frames.get(f"{side_jp}足ＩＫ", []) or motion.bone_frames.get(f"{side_jp}足IK", [])
+        ik_bone_name = f"{side_jp}足ＩＫ" if f"{side_jp}足ＩＫ" in motion.bone_frames else f"{side_jp}足IK"
+        ik_frames = motion.bone_frames.get(ik_bone_name, [])
         center_frames = motion.bone_frames.get("センター", []) or motion.bone_frames.get("全ての親", [])
 
-        # 評価対象フレーム一覧（大腿キーを中心に足IK・センターのキーフレームを包含）
+        # 評価対象フレーム一覧（大腿キー・足IK・センターのキーフレームを包含）
         target_frame_set = set()
         for bf in leg_frames:
             target_frame_set.add(bf.frame)
@@ -460,10 +491,11 @@ def apply_leg_knee_orientation(motion, joint_map, target_model=None, scale=8.0):
 
         sorted_frames = sorted(target_frame_set)
 
-        # 大腿フレームのマップ（フレーム番号 -> VmdBoneFrame）
+        # フレームマップの構築
         leg_frame_map = {bf.frame: bf for bf in leg_frames}
+        ik_frame_map = {bf.frame: bf for bf in ik_frames}
 
-        # 初期Zオフセット（前方距離）の取得
+        # 初期Zオフセット（前方基準距離）の取得
         try:
             base_dist = mc.getAttr(f"{pv_node}.translateZ")
             if abs(base_dist) < 1.0:
@@ -471,46 +503,70 @@ def apply_leg_knee_orientation(motion, joint_map, target_model=None, scale=8.0):
         except Exception:
             base_dist = 25.0
 
-        # 直前の大腿クォータニオン（キーが存在しないフレームでの保持用）
-        curr_rot = om.MQuaternion()
-        is_left = (side_en == "L")
+        # 初期Yオフセット（上方基準距離）の取得
+        try:
+            base_up = mc.getAttr(f"{pv_node}.translateY")
+        except Exception:
+            base_up = base_dist * 0.5
 
-        tx_list = []
-        ty_list = []
-        tz_list = []
+        # 外開き方向の符号判定（左足・右足に応じた外向き基準）
+        lateral_dir = 1.0 if side_en == "L" else -1.0
+
+        # 直前の状態保持（キーが存在しないフレームでの補間用）
+        curr_rot = om.MQuaternion()
+        last_ik_pos = [0.0, 0.0, 0.0]
+
         frame_list = []
 
         for f in sorted_frames:
-            if f in leg_frame_map:
+            has_leg_key = f in leg_frame_map
+            if has_leg_key:
                 bf = leg_frame_map[f]
                 qx, qy, qz, qw = bf.rotation
                 curr_rot = om.MQuaternion(-qx, -qy, qz, qw)
 
-            # 前方単位ベクトル (0, 0, 1) に大腿回転を適用
+            if f in ik_frame_map:
+                last_ik_pos = ik_frame_map[f].position
+
+            # 前方単位ベクトルに大腿回転を適用
             fwd_vec = om.MVector(0.0, 0.0, 1.0)
             rot_vec = curr_rot.rotate(fwd_vec)
 
-            # 大腿の外開き角度の算出
-            vx = rot_vec.x
-            vy = rot_vec.y
-            vz = rot_vec.z
+            # 足IKの移動量（VMDローカル座標系）による追従補正
+            ik_px, ik_py, ik_pz = last_ik_pos
+            ik_fwd = ik_pz * scale
+            ik_up = ik_py * scale
+            ik_side = ik_px * scale
 
-            # 外開き成分の反映 (左右対称の外開きオフセット)
-            lateral_offset = vx * base_dist * 0.85
+            if has_leg_key:
+                # 大腿回転キーが存在する場合の回転ベース計算
+                vx = rot_vec.x
+                vy = rot_vec.y
+                vz = rot_vec.z
 
-            # ボーン軸に直交する前方距離（常に十分な前方距離を保持してフリップを防止）
-            forward_offset = max(base_dist * 0.8, vz * base_dist)
+                # 外開きオフセット（大腿の横開きに追従）
+                lateral_offset = vx * base_dist * 0.85
+                if abs(lateral_offset) < base_dist * 0.15:
+                    lateral_offset = lateral_dir * base_dist * 0.2
 
-            vertical_offset = 0.0
+                # 前方距離（足上げ・前屈時のフリップ防止）
+                forward_offset = max(base_dist * 0.8, vz * base_dist)
+                vertical_offset = vy * base_dist * 0.5
+            else:
+                # 大腿キーがなく足IK主導で動作している場合の幾何学的追従
+                # 足首が前・上に移動した分、ポールベクターも連動して前方・上方に押し出す
+                forward_offset = max(base_dist * 0.85, base_dist + ik_fwd * 0.6)
+                vertical_offset = base_up + max(0.0, ik_up * 0.5)
+
+                # 股関節の自然な外開きを維持し、内股反転を防止
+                lateral_spread = lateral_dir * max(0.0, ik_up * 0.3)
+                lateral_offset = (lateral_dir * base_dist * 0.25) + lateral_spread + (ik_side * 0.2)
 
             mc.setKeyframe(pv_node, attribute='translateX', time=f, value=lateral_offset)
             mc.setKeyframe(pv_node, attribute='translateY', time=f, value=vertical_offset)
             mc.setKeyframe(pv_node, attribute='translateZ', time=f, value=forward_offset)
 
             frame_list.append(f)
-            tx_list.append(lateral_offset)
-            ty_list.append(vertical_offset)
-            tz_list.append(forward_offset)
             applied_keys += 1
 
         # カーブの滑らかなスプライン補間設定
@@ -1112,12 +1168,16 @@ def clear_model_animation(target_model_node=None, clear_camera=True):
                     pass
 
     # 剛体およびJointノードのキーフレーム初期化
-    vis_groups = [
+    vis_groups = mc.ls(
+        "*_RigidBody_Joint_Visualizers",
+        "*_RigidBody_Visualizers",
+        "*_Joint_Visualizers",
         "MMD_RigidBody_Joint_Visualizers",
         "MMD_RigidBody_Visualizers",
         "MMD_Joint_Visualizers",
-        "MMD_Bullet_Physics_Rig"
-    ]
+        "MMD_Bullet_Physics_Rig",
+        type="transform"
+    ) or []
     for grp in vis_groups:
         if mc.objExists(grp):
             try:
@@ -1126,7 +1186,12 @@ def clear_model_animation(target_model_node=None, clear_camera=True):
                 pass
 
     # 個別剛体・Jointトランスフォームノードのキーフレーム削除
-    phys_nodes = mc.ls("rb_vis_*", "joint_vis_*", "bullet_rb_*", "bullet_joint_*", transforms=True) or []
+    phys_nodes = mc.ls(
+        "*_rb_*", "*_joint_*",
+        "rb_vis_*", "joint_vis_*",
+        "bullet_rb_*", "bullet_joint_*",
+        transforms=True
+    ) or []
     for p_node in phys_nodes:
         try:
             mc.cutKey(p_node, clear=True)
@@ -1136,10 +1201,10 @@ def clear_model_animation(target_model_node=None, clear_camera=True):
     # 剛体・Joint追従コンストレイントの復元 & モデルボーンへの再吸着
     try:
         try:
-            from ..cpp_engine import xpbd_visualizer
+            from .pmxpaimaya import reconnect_visualizers_to_bones
         except Exception:
-            from cpp_engine import xpbd_visualizer
-        xpbd_visualizer.reconnect_visualizers_to_bones()
+            from converters.pmxpaimaya import reconnect_visualizers_to_bones
+        reconnect_visualizers_to_bones()
     except Exception as e:
         print(f"  [情報] 剛体・Joint再吸着スキップ: {e}")
 
@@ -1341,10 +1406,24 @@ def delete_mmd_scene_elements(target_model_node=None, delete_lights=True, delete
                 except Exception:
                     pass
 
-            # メッシュ自体の削除
+            # メッシュおよび親統合グループ (*_grp) の削除
             if mc.objExists(m):
+                parents = mc.listRelatives(m, parent=True, fullPath=False) or []
+                parent_grp_to_delete = None
+                for p in parents:
+                    if p.endswith("_grp") or mc.attributeQuery("isMmdGroup", node=p, exists=True):
+                        parent_grp_to_delete = p
+                        break
+
                 mc.delete(m)
                 deleted_count += 1
+
+                if parent_grp_to_delete and mc.objExists(parent_grp_to_delete):
+                    try:
+                        mc.delete(parent_grp_to_delete)
+                        deleted_count += 1
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -1353,6 +1432,49 @@ def delete_mmd_scene_elements(target_model_node=None, delete_lights=True, delete
         if mc.objExists(ik_h):
             try:
                 mc.delete(ik_h)
+                deleted_count += 1
+            except Exception:
+                pass
+
+    # 物理可視化ノードおよびBulletリグのクリーンアップ (モデル別・全体両対応)
+    phys_candidates = []
+    if target_model_node:
+        clean_m = re.sub(r'[^a-zA-Z0-9_]', '_', target_model_node)
+        phys_candidates.extend(mc.ls(
+            f"{target_model_node}_RigidBody_Joint_Visualizers",
+            f"{clean_m}_RigidBody_Joint_Visualizers",
+            f"*{target_model_node}*_RigidBody_Joint_Visualizers*",
+            f"{target_model_node}_Bullet_Physics_Rig",
+            f"{target_model_node}_rb_*",
+            f"{target_model_node}_joint_*",
+            f"*{target_model_node}*_grp",
+            f"anchor_*{target_model_node}*",
+            type="transform"
+        ) or [])
+    else:
+        phys_candidates.extend(mc.ls(
+            "*_RigidBody_Joint_Visualizers",
+            "MMD_RigidBody_Joint_Visualizers",
+            "*_RigidBody_Visualizers",
+            "MMD_RigidBody_Visualizers",
+            "*_Joint_Visualizers",
+            "MMD_Joint_Visualizers",
+            "*_Bullet_Physics_Rig",
+            "MMD_Bullet_Physics_Rig",
+            "*_BulletSolver",
+            "MMD_BulletSolver",
+            "*_rb_*",
+            "*_joint_*",
+            "rb_vis_*",
+            "joint_vis_*",
+            "anchor_*",
+            type="transform"
+        ) or [])
+
+    for p_item in phys_candidates:
+        if mc.objExists(p_item):
+            try:
+                mc.delete(p_item)
                 deleted_count += 1
             except Exception:
                 pass
@@ -1412,6 +1534,16 @@ def delete_mmd_scene_elements(target_model_node=None, delete_lights=True, delete
                         except Exception:
                             pass
 
+        # MMD地面影（mmd_ground_shadow_grpおよび関連ノード）の探索と削除
+        for shadow_node in ["mmd_ground_shadow_grp", "*mmd_ground_shadow_grp*", "mmd_ground_shadow_plane", "*mmd_ground_shadow_plane*", "mmd_ground_shadow_shd", "mmd_ground_shadow_shdSG"]:
+            for s_item in mc.ls(shadow_node) or []:
+                if mc.objExists(s_item):
+                    try:
+                        mc.delete(s_item)
+                        deleted_count += 1
+                    except Exception:
+                        pass
+
     # HumanIK キャラクタ定義およびコントロールリグのクリーンアップ
     hik_characters = []
     if target_model_node:
@@ -1459,11 +1591,32 @@ def delete_mmd_scene_elements(target_model_node=None, delete_lights=True, delete
     print(f"[完了] MMD関連ノードをクリーンアップしました (削除数: {deleted_count})")
     return deleted_count
 
-def restore_viewport_lighting():
+def restore_viewport_lighting(force_reset=False, prevent_motion_darkening=True):
     """
-    ビューポートのライティング、ビュー変換、およびテクスチャ表示を復元・最適化します。
-    モーション適用後に発色が暗く沈むのを防止し、MMD最適化表示を維持します。
+    ビューポートの画面再描画を実行し、ユーザー設定のライティングおよびマテリアル表示を保護・維持します。
+    ※ force_reset=True が明示的に指定されない限り、ユーザーが意図して設定した
+       displayLights やトーンマップ設定、マテリアル発色を勝手に書き換えません。
     """
+    if force_reset:
+        try:
+            try:
+                from . import pmxpaimaya
+            except Exception:
+                try:
+                    from converters import pmxpaimaya
+                except Exception:
+                    import pmxpaimaya
+
+            # 明示的なリセット要求時のみビュー変換および表示設定を適用
+            if hasattr(pmxpaimaya, "set_untone_mapped_view_transform"):
+                pmxpaimaya.set_untone_mapped_view_transform()
+
+            if hasattr(pmxpaimaya, "setup_viewport_display"):
+                pmxpaimaya.setup_viewport_display(shadow_mode=1, prevent_motion_darkening=prevent_motion_darkening)
+        except Exception as e:
+            print(f"  [警告] ビューポート表示の復元中に軽微な例外: {e}")
+
+    # MMDモデルメッシュの影受け適正化（顔・脚の黒潰れ防止設定を維持）
     try:
         try:
             from . import pmxpaimaya
@@ -1472,33 +1625,33 @@ def restore_viewport_lighting():
                 from converters import pmxpaimaya
             except Exception:
                 import pmxpaimaya
+        if hasattr(pmxpaimaya, "optimize_model_meshes_for_mmd_lighting"):
+            pmxpaimaya.optimize_model_meshes_for_mmd_lighting()
+    except Exception:
+        pass
 
-        # ビュー変換を Un-tone-mapped (sRGB) に設定して色の沈み・暗化を防止
-        if hasattr(pmxpaimaya, "set_untone_mapped_view_transform"):
-            pmxpaimaya.set_untone_mapped_view_transform()
-
-        # ビューポートのテクスチャ表示、アンチエイリアシング、深度ピーリングを適用
-        if hasattr(pmxpaimaya, "setup_viewport_display"):
-            pmxpaimaya.setup_viewport_display(shadow_mode=1)
-    except Exception as e:
-        print(f"  [警告] ビューポート表示の復元中に軽微な例外: {e}")
-
+    # モーション再生時の暗化防止（シャッター開度0.01によるブレなしHDRポストパス最適化）
     try:
-        # シーン内のライト存在確認
-        has_lights = bool(mc.ls(type=["directionalLight", "ambientLight", "pointLight", "spotLight"]))
-        target_mode = "all" if has_lights else "default"
+        if mc.objExists('hardwareRenderingGlobals'):
+            if mc.attributeQuery('motionBlurEnable', node='hardwareRenderingGlobals', exists=True):
+                mc.setAttr('hardwareRenderingGlobals.motionBlurEnable', bool(prevent_motion_darkening))
+            if prevent_motion_darkening:
+                if mc.attributeQuery('motionBlurShutterOpenFraction', node='hardwareRenderingGlobals', exists=True):
+                    mc.setAttr('hardwareRenderingGlobals.motionBlurShutterOpenFraction', 0.01)
+                if mc.attributeQuery('floatingPointRTEnable', node='hardwareRenderingGlobals', exists=True):
+                    mc.setAttr('hardwareRenderingGlobals.floatingPointRTEnable', True)
+                if mc.attributeQuery('floatingPointRTFormat', node='hardwareRenderingGlobals', exists=True):
+                    mc.setAttr('hardwareRenderingGlobals.floatingPointRTFormat', 1)
+    except Exception:
+        pass
 
-        panels = mc.getPanel(type="modelPanel") or []
-        for p in panels:
-            try:
-                mc.modelEditor(p, edit=True, displayLights=target_mode, displayTextures=True)
-            except Exception:
-                pass
+    # ビューポートの再描画のみを安全に実行
+    try:
         mc.refresh(force=True)
     except Exception:
         pass
 
-def import_vmd(vmd_file_path=None, camera_vmd_path=None, audio_wav_path=None, scale=8.0, target_model_node=None, audio_volume=100, progress_callback=None):
+def import_vmd(vmd_file_path=None, camera_vmd_path=None, audio_wav_path=None, scale=8.0, target_model_node=None, audio_volume=100, progress_callback=None, prevent_motion_darkening=True):
     """
     VMDファイルをMayaにインポートし、対象モデル、カメラ、およびBGM音声を適用します。
     モデルモーション、カメラモーション、BGM音声の個別・一括指定に対応します。
@@ -1509,7 +1662,7 @@ def import_vmd(vmd_file_path=None, camera_vmd_path=None, audio_wav_path=None, sc
     print("==================================================")
 
     # インポート開始前のビューポートライティング状態を保護・最適化
-    restore_viewport_lighting()
+    restore_viewport_lighting(prevent_motion_darkening=prevent_motion_darkening)
 
     # タイムライン開始フレームを0に設定し、フレーム0を基準に初期化
     try:
@@ -1529,7 +1682,7 @@ def import_vmd(vmd_file_path=None, camera_vmd_path=None, audio_wav_path=None, sc
     }
 
     try:
-        # 1. カメラモーションの読み込み・適用
+        # カメラモーションの読み込み・適用
         cam_file = camera_vmd_path
         if not cam_file and vmd_file_path:
             # モデルファイル側にカメラが含まれているかのチェック用
@@ -1545,7 +1698,7 @@ def import_vmd(vmd_file_path=None, camera_vmd_path=None, audio_wav_path=None, sc
                 max_frame = max(max_frame, cam_motion.max_frame)
                 print(f"  - カメラモーションを適用しました ({len(cam_motion.camera_frames)} キー)")
 
-        # 2. キャラクターモーションの読み込み・適用
+        # キャラクターモーションの読み込み・適用
         if vmd_file_path and os.path.isfile(vmd_file_path):
             print(f"[モデル] ファイル読み込み中: {os.path.basename(vmd_file_path)}")
             motion = mmd_core.vmd.load(vmd_file_path)
@@ -1558,31 +1711,50 @@ def import_vmd(vmd_file_path=None, camera_vmd_path=None, audio_wav_path=None, sc
                 result['camera_applied'] = True
                 print(f"  - 単体カメラモーションを検出・適用しました")
             else:
-                # ボーン構造・モーフ構造の解決
-                resolved_model, joint_map, morph_map = resolve_model_structure(target_model_node)
-                target_display = resolved_model if resolved_model else "シーン全体"
-                print(f"  - 適用対象モデル: {target_display}")
-                print(f"  - 認識されたボーンマッピング数: {len(joint_map)} 本")
+                # 適用対象モデルリストの決定 (全MMDモデル対象時はシーン内の全モデルへ順次適用)
+                target_models = []
+                if target_model_node and mc.objExists(target_model_node):
+                    target_models = [target_model_node]
+                else:
+                    available = get_available_mmd_models()
+                    if available:
+                        target_models = [m[0] for m in available]
+                    else:
+                        target_models = [None]
 
-                # VMDモーションの詳細解析レポート（全ボーン・キーフレーム一覧）を出力
-                print_vmd_analysis_report(motion, joint_map, resolved_model)
+                total_bones_applied = 0
+                total_morphs_applied = 0
 
-                # VMD再インポート時に0フレームからモーションを上書きするため、既存キー・ポーズを自動初期化
-                try:
-                    clear_model_animation(resolved_model, clear_camera=False)
-                    mc.currentTime(0)
-                except Exception as e:
-                    print(f"  [情報] 既存モーション初期化: {e}")
+                for t_idx, t_model in enumerate(target_models):
+                    # ボーン構造・モーフ構造の解決
+                    resolved_model, joint_map, morph_map = resolve_model_structure(t_model)
+                    target_display = resolved_model if resolved_model else "シーン全体"
+                    print(f"  - [{t_idx+1}/{len(target_models)}] 適用対象モデル: {target_display}")
+                    print(f"    認識されたボーンマッピング数: {len(joint_map)} 本")
 
-                # ボーンアニメーションの適用
-                b_count, b_keys = apply_bone_motion(motion, joint_map, scale, resolved_model, progress_callback=progress_callback)
-                result['bones_applied'] = b_count
-                print(f"  - {b_count} 個のボーンにキーフレームを設定しました (総キー数: {b_keys})")
+                    # VMDモーションの詳細解析レポート（初回のみ出力）
+                    if t_idx == 0:
+                        print_vmd_analysis_report(motion, joint_map, resolved_model)
 
-                # モーフ（ブレンドシェイプ）アニメーションの適用
-                m_count, m_keys = apply_morph_motion(motion, morph_map, resolved_model)
-                result['morphs_applied'] = m_count
-                print(f"  - {m_count} 個のモーフにキーフレームを設定しました (総キー数: {m_keys})")
+                    # VMD再インポート時に0フレームからモーションを上書きするため、既存キー・ポーズを自動初期化
+                    try:
+                        clear_model_animation(resolved_model, clear_camera=False)
+                        mc.currentTime(0)
+                    except Exception as e:
+                        print(f"    [情報] 既存モーション初期化: {e}")
+
+                    # ボーンアニメーションの適用
+                    b_count, b_keys = apply_bone_motion(motion, joint_map, scale, resolved_model, progress_callback=progress_callback)
+                    total_bones_applied += b_count
+                    print(f"    - {b_count} 個のボーンにキーフレームを設定しました (総キー数: {b_keys})")
+
+                    # モーフ（ブレンドシェイプ）アニメーションの適用
+                    m_count, m_keys = apply_morph_motion(motion, morph_map, resolved_model)
+                    total_morphs_applied += m_count
+                    print(f"    - {m_count} 個のモーフにキーフレームを設定しました (総キー数: {m_keys})")
+
+                result['bones_applied'] = total_bones_applied
+                result['morphs_applied'] = total_morphs_applied
 
                 # 同一ファイルにカメラが含まれていた場合の適用
                 if motion.camera_frames and not result['camera_applied']:
@@ -1590,14 +1762,14 @@ def import_vmd(vmd_file_path=None, camera_vmd_path=None, audio_wav_path=None, sc
                     result['camera_applied'] = True
                     print(f"  - 複合VMD内のカメラモーションを適用しました")
 
-        # 3. BGM音声 (.wav) の読み込み・タイムライン接続
+        # BGM音声 (.wav) の読み込み・タイムライン接続
         if audio_wav_path and os.path.isfile(audio_wav_path):
             print(f"[音声] ファイル読み込み中: {os.path.basename(audio_wav_path)}")
             audio_node = import_audio(audio_wav_path, volume_percent=audio_volume)
             if audio_node:
                 result['audio_applied'] = True
 
-        # 4. Maya再生環境の設定 (MMD標準 30 fps)
+        # Maya再生環境の設定 (MMD標準 30 fps)
         result['max_frame'] = max_frame
         if max_frame > 0:
             mc.currentUnit(time='ntsc') # 30 fps
@@ -1606,8 +1778,488 @@ def import_vmd(vmd_file_path=None, camera_vmd_path=None, audio_wav_path=None, sc
 
     finally:
         # インポート完了後にビューポートのライティングとシェーディングを確実に復元
-        restore_viewport_lighting()
+        restore_viewport_lighting(prevent_motion_darkening=prevent_motion_darkening)
 
     elapsed = time.time() - start_time
     print(f"[完了] VMD インポートが完了しました ({elapsed:.2f} 秒)")
     return result
+
+
+# ==============================================================================
+# VPD (Vocaloid Pose Data) 入出力処理
+# ==============================================================================
+
+def import_vpd(file_path, target_model_node=None, scale=8.0, set_keyframe=False):
+    """
+    MMD標準のポーズデータ (.vpd) をMayaシーンのモデルへ適用します。
+
+    引数:
+        file_path (str): .vpd ファイルの絶対パス
+        target_model_node (str, optional): 対象モデルルートノード名
+        scale (float): スケール倍率（標準: 8.0）
+        set_keyframe (bool): 現在のフレームにキーフレームを打刻するかどうか
+
+    戻り値:
+        dict: 適用結果 ('bones_applied', 'morphs_applied', 'model_name')
+    """
+    if not os.path.isfile(file_path):
+        raise FileNotFoundError(f"VPDファイルが存在しません: {file_path}")
+
+    # VPDファイルの読み込み
+    pose_data = mmd_core.vpd.load(file_path)
+
+    # モデル構造の解決
+    resolved_model, joint_map, morph_map = resolve_model_structure(target_model_node)
+    target_display = resolved_model if resolved_model else "シーン全体"
+    print(f"[VPDインポート] 対象モデル: {target_display} (ソース: {pose_data.model_name})")
+
+    result = {
+        'bones_applied': 0,
+        'morphs_applied': 0,
+        'model_name': pose_data.model_name
+    }
+
+    current_frame = mc.currentTime(query=True) if set_keyframe else None
+
+    # ボーンポーズの適用
+    for bone_pose in pose_data.bones:
+        bone_name = bone_pose.name
+        j_node = _match_bone_to_joint(bone_name, joint_map)
+        if not j_node or not mc.objExists(j_node):
+            continue
+
+        try:
+            # ジョイントの初期属性・方向クォータニオンを取得
+            ro = mc.getAttr(f"{j_node}.rotateOrder")
+            jo = mc.getAttr(f"{j_node}.jointOrient")[0]
+            ra = mc.getAttr(f"{j_node}.rotateAxis")[0]
+
+            jo_rad = [math.radians(a) for a in jo]
+            ra_rad = [math.radians(a) for a in ra]
+            jo_euler = om.MEulerRotation(jo_rad[0], jo_rad[1], jo_rad[2])
+            ra_euler = om.MEulerRotation(ra_rad[0], ra_rad[1], ra_rad[2])
+
+            inv_jo_q = jo_euler.asQuaternion().inverse()
+            inv_ra_q = ra_euler.asQuaternion().inverse()
+
+            # MMD左手系クォータニオン -> Maya右手系クォータニオン
+            qx, qy, qz, qw = bone_pose.quat
+            q_maya = om.MQuaternion(-qx, -qy, qz, qw)
+
+            # jointOrient と rotateAxis を相殺
+            local_rot_q = inv_jo_q * q_maya * inv_ra_q
+            euler = local_rot_q.asEulerRotation()
+            euler.reorderIt(ro)
+
+            rx = math.degrees(euler.x)
+            ry = math.degrees(euler.y)
+            rz = math.degrees(euler.z)
+
+            mc.setAttr(f"{j_node}.rotateX", rx)
+            mc.setAttr(f"{j_node}.rotateY", ry)
+            mc.setAttr(f"{j_node}.rotateZ", rz)
+
+            if set_keyframe:
+                mc.setKeyframe(j_node, attribute='rotateX', time=current_frame, value=rx)
+                mc.setKeyframe(j_node, attribute='rotateY', time=current_frame, value=ry)
+                mc.setKeyframe(j_node, attribute='rotateZ', time=current_frame, value=rz)
+
+            # 平行移動の適用（移動値が存在する場合）
+            px, py, pz = bone_pose.trans
+            if abs(px) > 1e-4 or abs(py) > 1e-4 or abs(pz) > 1e-4:
+                # 移動可能ボーンか判定
+                is_movable = any(k in bone_name for k in ["ＩＫ", "IK", "親", "センター", "グルーブ", "全ての親", "下半身", "腰", "足先EX"])
+                if is_movable:
+                    # 初期位置属性の確認、なければ現在の位置にオフセット加算
+                    init_t = [0.0, 0.0, 0.0]
+                    if mc.attributeQuery('mmdInitialTranslate', node=j_node, exists=True):
+                        try:
+                            init_t = mc.getAttr(f"{j_node}.mmdInitialTranslate")[0]
+                        except Exception:
+                            pass
+                    tx = init_t[0] + px * scale
+                    ty = init_t[1] + py * scale
+                    tz = init_t[2] - pz * scale
+                    mc.setAttr(f"{j_node}.translateX", tx)
+                    mc.setAttr(f"{j_node}.translateY", ty)
+                    mc.setAttr(f"{j_node}.translateZ", tz)
+                    if set_keyframe:
+                        mc.setKeyframe(j_node, attribute='translateX', time=current_frame, value=tx)
+                        mc.setKeyframe(j_node, attribute='translateY', time=current_frame, value=ty)
+                        mc.setKeyframe(j_node, attribute='translateZ', time=current_frame, value=tz)
+
+            result['bones_applied'] += 1
+        except Exception as e:
+            print(f"[VPD警告] ボーン適用エラー ({bone_name}): {e}")
+
+    # 表情モーフの適用
+    for morph_pose in pose_data.morphs:
+        morph_name = morph_pose.name
+        weight = morph_pose.weight
+
+        target_info = None
+        if morph_name in morph_map:
+            target_info = morph_map[morph_name]
+        else:
+            # クリーン名による照合
+            clean = re.sub(r'[^a-zA-Z0-9_\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]', '_', morph_name)
+            for m_key, m_val in morph_map.items():
+                if m_key == clean or clean in m_key:
+                    target_info = m_val
+                    break
+
+        if target_info:
+            if isinstance(target_info, (list, tuple)) and len(target_info) >= 2:
+                bs_node, attr_name = target_info[0], target_info[1]
+            else:
+                bs_node = None
+                attr_name = str(target_info)
+                # blendShapeノードを探索
+                bs_nodes = mc.ls(type='blendShape') or []
+                for b in bs_nodes:
+                    if mc.attributeQuery(attr_name, node=b, exists=True):
+                        bs_node = b
+                        break
+
+            if bs_node and mc.objExists(f"{bs_node}.{attr_name}"):
+                try:
+                    mc.setAttr(f"{bs_node}.{attr_name}", weight)
+                    if set_keyframe:
+                        mc.setKeyframe(bs_node, attribute=attr_name, time=current_frame, value=weight)
+                    result['morphs_applied'] += 1
+                except Exception:
+                    pass
+
+    print(f"[VPDインポート完了] {result['bones_applied']} 本のボーン、{result['morphs_applied']} 個のモーフにポーズを適用しました。")
+    return result
+
+
+def export_vpd(file_path, target_model_node=None, scale=8.0):
+    """
+    Mayaシーンの現在のボーン・モーフ姿勢をMMD互換のポーズデータ (.vpd) として保存します。
+
+    引数:
+        file_path (str): 出力先 .vpd ファイルパス
+        target_model_node (str, optional): 対象モデルルートノード名
+        scale (float): スケール倍率（標準: 8.0）
+
+    戻り値:
+        dict: 保存結果 ('bones_exported', 'morphs_exported', 'file_path')
+    """
+    resolved_model, joint_map, morph_map = resolve_model_structure(target_model_node)
+    model_name = resolved_model if resolved_model else "model.osm"
+
+    bones = []
+    morphs = []
+
+    # ボーン姿勢の収集
+    for bone_name, j_node in joint_map.items():
+        if not mc.objExists(j_node):
+            continue
+
+        try:
+            # 回転クォータニオンの計算
+            ro = mc.getAttr(f"{j_node}.rotateOrder")
+            rx = math.radians(mc.getAttr(f"{j_node}.rotateX"))
+            ry = math.radians(mc.getAttr(f"{j_node}.rotateY"))
+            rz = math.radians(mc.getAttr(f"{j_node}.rotateZ"))
+
+            euler = om.MEulerRotation(rx, ry, rz, ro)
+            local_rot_q = euler.asQuaternion()
+
+            jo = mc.getAttr(f"{j_node}.jointOrient")[0]
+            ra = mc.getAttr(f"{j_node}.rotateAxis")[0]
+            jo_rad = [math.radians(a) for a in jo]
+            ra_rad = [math.radians(a) for a in ra]
+            jo_euler = om.MEulerRotation(jo_rad[0], jo_rad[1], jo_rad[2])
+            ra_euler = om.MEulerRotation(ra_rad[0], ra_rad[1], ra_rad[2])
+
+            jo_q = jo_euler.asQuaternion()
+            ra_q = ra_euler.asQuaternion()
+
+            # 姿勢 = jo_q * local_rot_q * ra_q
+            q_maya = jo_q * local_rot_q * ra_q
+
+            # Maya右手系 -> MMD左手系
+            qx = -q_maya.x
+            qy = -q_maya.y
+            qz = q_maya.z
+            qw = q_maya.w
+
+            # 平行移動量の計算
+            px, py, pz = 0.0, 0.0, 0.0
+            is_movable = any(k in bone_name for k in ["ＩＫ", "IK", "親", "センター", "グルーブ", "全ての親", "下半身", "腰", "足先EX"])
+            if is_movable:
+                tx = mc.getAttr(f"{j_node}.translateX")
+                ty = mc.getAttr(f"{j_node}.translateY")
+                tz = mc.getAttr(f"{j_node}.translateZ")
+
+                init_t = [0.0, 0.0, 0.0]
+                if mc.attributeQuery('mmdInitialTranslate', node=j_node, exists=True):
+                    try:
+                        init_t = mc.getAttr(f"{j_node}.mmdInitialTranslate")[0]
+                    except Exception:
+                        pass
+                px = (tx - init_t[0]) / scale
+                py = (ty - init_t[1]) / scale
+                pz = -(tz - init_t[2]) / scale
+
+            bones.append(mmd_core.vpd.VpdBonePose(bone_name, trans=(px, py, pz), quat=(qx, qy, qz, qw)))
+        except Exception:
+            pass
+
+    # 表情モーフの収集
+    for morph_name, target_info in morph_map.items():
+        try:
+            bs_node = None
+            attr_name = None
+            if isinstance(target_info, (list, tuple)) and len(target_info) >= 2:
+                bs_node, attr_name = target_info[0], target_info[1]
+            else:
+                attr_name = str(target_info)
+                bs_nodes = mc.ls(type='blendShape') or []
+                for b in bs_nodes:
+                    if mc.attributeQuery(attr_name, node=b, exists=True):
+                        bs_node = b
+                        break
+
+            if bs_node and mc.objExists(f"{bs_node}.{attr_name}"):
+                w = float(mc.getAttr(f"{bs_node}.{attr_name}"))
+                if abs(w) > 0.0005:
+                    morphs.append(mmd_core.vpd.VpdMorphPose(morph_name, weight=w))
+        except Exception:
+            pass
+
+    pose_data = mmd_core.vpd.VpdPoseData(model_name=model_name, bones=bones, morphs=morphs)
+    mmd_core.vpd.save(file_path, pose_data)
+
+    print(f"[VPD保存完了] {len(bones)} 本のボーン、{len(morphs)} 個のモーフ姿勢を保存しました: {file_path}")
+    return {
+        'bones_exported': len(bones),
+        'morphs_exported': len(morphs),
+        'file_path': file_path
+    }
+
+
+def export_vmd(file_path, target_model_node=None, start_frame=None, end_frame=None, step=1, scale=8.0, export_bones=True, export_morphs=True, export_camera=False, target_camera=None, simplify_keys=True):
+    """
+    Mayaのシーン内アニメーションからMMD公式モーション (.vmd) をエクスポートします。
+
+    引数:
+        file_path (str): 出力先 .vmd ファイルパス
+        target_model_node (str, optional): 対象モデルルートノード名
+        start_frame (int, optional): 開始フレーム（省略時はタイムスライダー開始値）
+        end_frame (int, optional): 終了フレーム（省略時はタイムスライダー終了値）
+        step (int): サンプリングステップ（標準: 1）
+        scale (float): スケール倍率（標準: 8.0）
+        export_bones (bool): ボーンアニメーションを出力するかどうか
+        export_morphs (bool): モーフ（表情）アニメーションを出力するかどうか
+        export_camera (bool): カメラアニメーションを出力するかどうか
+        target_camera (str, optional): 対象カメラノード
+        simplify_keys (bool): 静止時の不要な同一キーフレームを間引いて軽量化するかどうか
+
+    戻り値:
+        dict: エクスポート結果情報
+    """
+    # フレーム範囲の決定
+    if start_frame is None:
+        start_frame = int(mc.playbackOptions(query=True, minTime=True))
+    if end_frame is None:
+        end_frame = int(mc.playbackOptions(query=True, maxTime=True))
+    if start_frame > end_frame:
+        start_frame, end_frame = end_frame, start_frame
+    step = max(1, int(step))
+
+    motion = mmd_core.vmd.VmdMotion()
+    resolved_model, joint_map, morph_map = resolve_model_structure(target_model_node)
+    motion.model_name = resolved_model if resolved_model else "MMD Model"
+
+    original_time = mc.currentTime(query=True)
+
+    print("==================================================")
+    print(f"MMD VMDモーションエクスポート開始: {os.path.basename(file_path)}")
+    print(f"  - 対象モデル: {motion.model_name}")
+    print(f"  - フレーム範囲: {start_frame} 〜 {end_frame} (ステップ: {step})")
+    print(f"  - 出力対象: ボーン={export_bones}, モーフ={export_morphs}, カメラ={export_camera}")
+    print("==================================================")
+
+    bone_frames_dict = {}
+    morph_frames_dict = {}
+    camera_frames_list = []
+
+    last_bone_states = {}
+    last_morph_states = {}
+
+    try:
+        # タイムラインサンプリングループ
+        for f in range(start_frame, end_frame + 1, step):
+            mc.currentTime(f, edit=True)
+            vmd_frame_num = max(0, int(round(f)))
+
+            # ボーン姿勢のサンプリング
+            if export_bones and joint_map:
+                for bone_name, j_node in joint_map.items():
+                    if not mc.objExists(j_node):
+                        continue
+
+                    try:
+                        # 回転クォータニオンの計算
+                        ro = mc.getAttr(f"{j_node}.rotateOrder")
+                        rx = math.radians(mc.getAttr(f"{j_node}.rotateX"))
+                        ry = math.radians(mc.getAttr(f"{j_node}.rotateY"))
+                        rz = math.radians(mc.getAttr(f"{j_node}.rotateZ"))
+
+                        euler = om.MEulerRotation(rx, ry, rz, ro)
+                        local_rot_q = euler.asQuaternion()
+
+                        jo = mc.getAttr(f"{j_node}.jointOrient")[0]
+                        ra = mc.getAttr(f"{j_node}.rotateAxis")[0]
+                        jo_rad = [math.radians(a) for a in jo]
+                        ra_rad = [math.radians(a) for a in ra]
+                        jo_euler = om.MEulerRotation(jo_rad[0], jo_rad[1], jo_rad[2])
+                        ra_euler = om.MEulerRotation(ra_rad[0], ra_rad[1], ra_rad[2])
+
+                        jo_q = jo_euler.asQuaternion()
+                        ra_q = ra_euler.asQuaternion()
+
+                        q_maya = jo_q * local_rot_q * ra_q
+
+                        # Maya右手系 -> MMD左手系クォータニオン
+                        qx = -q_maya.x
+                        qy = -q_maya.y
+                        qz = q_maya.z
+                        qw = q_maya.w
+
+                        # 平行移動量の計算
+                        px, py, pz = 0.0, 0.0, 0.0
+                        is_movable = any(k in bone_name for k in ["ＩＫ", "IK", "親", "センター", "グルーブ", "全ての親", "下半身", "腰", "足先EX"])
+                        if is_movable:
+                            tx = mc.getAttr(f"{j_node}.translateX")
+                            ty = mc.getAttr(f"{j_node}.translateY")
+                            tz = mc.getAttr(f"{j_node}.translateZ")
+
+                            init_t = [0.0, 0.0, 0.0]
+                            if mc.attributeQuery('mmdInitialTranslate', node=j_node, exists=True):
+                                try:
+                                    init_t = mc.getAttr(f"{j_node}.mmdInitialTranslate")[0]
+                                except Exception:
+                                    pass
+                            px = (tx - init_t[0]) / scale
+                            py = (ty - init_t[1]) / scale
+                            pz = -(tz - init_t[2]) / scale
+
+                        cur_state = (px, py, pz, qx, qy, qz, qw)
+                        should_record = True
+                        if simplify_keys and bone_name in last_bone_states:
+                            prev_f, prev_state = last_bone_states[bone_name]
+                            pos_diff = sum(abs(cur_state[i] - prev_state[i]) for i in range(3))
+                            rot_diff = sum(abs(cur_state[i] - prev_state[i]) for i in range(3, 7))
+                            if pos_diff < 1e-4 and rot_diff < 1e-4 and f != end_frame:
+                                should_record = False
+
+                        if should_record:
+                            bf = mmd_core.vmd.VmdBoneFrame()
+                            bf.name = bone_name
+                            bf.frame = vmd_frame_num
+                            bf.position = [px, py, pz]
+                            bf.rotation = [qx, qy, qz, qw]
+                            bf.interpolation = mmd_core.vmd.DEFAULT_BONE_INTERPOLATION
+
+                            if bone_name not in bone_frames_dict:
+                                bone_frames_dict[bone_name] = []
+                            bone_frames_dict[bone_name].append(bf)
+                            last_bone_states[bone_name] = (f, cur_state)
+
+                    except Exception:
+                        pass
+
+            # 表情モーフのサンプリング
+            if export_morphs and morph_map:
+                for morph_name, target_info in morph_map.items():
+                    try:
+                        bs_node = None
+                        attr_name = None
+                        if isinstance(target_info, (list, tuple)) and len(target_info) >= 2:
+                            bs_node, attr_name = target_info[0], target_info[1]
+                        else:
+                            attr_name = str(target_info)
+                            bs_nodes = mc.ls(type='blendShape') or []
+                            for b in bs_nodes:
+                                if mc.attributeQuery(attr_name, node=b, exists=True):
+                                    bs_node = b
+                                    break
+
+                        if bs_node and mc.objExists(f"{bs_node}.{attr_name}"):
+                            w = float(mc.getAttr(f"{bs_node}.{attr_name}"))
+
+                            should_record = True
+                            if simplify_keys and morph_name in last_morph_states:
+                                prev_f, prev_w = last_morph_states[morph_name]
+                                if abs(w - prev_w) < 1e-4 and f != end_frame:
+                                    should_record = False
+
+                            if should_record:
+                                mf = mmd_core.vmd.VmdMorphFrame()
+                                mf.name = morph_name
+                                mf.frame = vmd_frame_num
+                                mf.weight = w
+
+                                if morph_name not in morph_frames_dict:
+                                    morph_frames_dict[morph_name] = []
+                                morph_frames_dict[morph_name].append(mf)
+                                last_morph_states[morph_name] = (f, w)
+                    except Exception:
+                        pass
+
+            # カメラのサンプリング
+            if export_camera:
+                cam = target_camera or "persp"
+                if mc.objExists(cam):
+                    try:
+                        cam_shape = cam if mc.nodeType(cam) == 'camera' else (mc.listRelatives(cam, shapes=True, type='camera') or [None])[0]
+                        cam_trans = cam if mc.nodeType(cam) == 'transform' else (mc.listRelatives(cam, parent=True) or [None])[0]
+
+                        pos = mc.xform(cam_trans, query=True, worldSpace=True, translation=True)
+                        rot = mc.xform(cam_trans, query=True, worldSpace=True, rotation=True)
+                        fl = mc.getAttr(f"{cam_shape}.focalLength")
+                        h_ap = mc.getAttr(f"{cam_shape}.horizontalFilmAperture") * 25.4 # mm
+                        fov = 2.0 * math.atan((h_ap * 0.5) / fl) * (180.0 / math.pi)
+
+                        cf = mmd_core.vmd.VmdCameraFrame()
+                        cf.frame = vmd_frame_num
+                        cf.distance = 0.0 # ターゲットカメラ非使用時は位置を直接注視点として設定
+                        cf.position = [pos[0] / scale, pos[1] / scale, -pos[2] / scale]
+                        cf.rotation = [math.radians(rot[0]), -math.radians(rot[1]), -math.radians(rot[2])]
+                        cf.fov = int(round(fov))
+                        cf.perspective = True
+                        camera_frames_list.append(cf)
+                    except Exception:
+                        pass
+
+    finally:
+        mc.currentTime(original_time, edit=True)
+
+    motion.bone_frames = bone_frames_dict
+    motion.morph_frames = morph_frames_dict
+    motion.camera_frames = camera_frames_list
+
+    total_bones_k = sum(len(v) for v in bone_frames_dict.values())
+    total_morphs_k = sum(len(v) for v in morph_frames_dict.values())
+    total_cam_k = len(camera_frames_list)
+
+    mmd_core.vmd.save(file_path, motion)
+
+    print("==================================================")
+    print(f"[VMDエクスポート完了] {file_path}")
+    print(f"  - ボーンキーフレーム総数: {total_bones_k:,} ({len(bone_frames_dict)} 系統)")
+    print(f"  - モーフキーフレーム総数: {total_morphs_k:,} ({len(morph_frames_dict)} 系統)")
+    if total_cam_k > 0:
+        print(f"  - カメラキーフレーム総数: {total_cam_k:,}")
+    print("==================================================")
+
+    return {
+        'total_bone_frames': total_bones_k,
+        'total_morph_frames': total_morphs_k,
+        'total_camera_frames': total_cam_k,
+        'file_path': file_path
+    }

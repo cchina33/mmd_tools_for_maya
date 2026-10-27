@@ -1,19 +1,29 @@
 # Bullet Physics 物理演算エンジン技術仕様書 (MMD本家仕様)
 
-本ドキュメントは、「MMD Tools for Maya」に搭載された MMD 本家（MikuMikuDance）互換の **Bullet Physics 2.83.7** 物理演算エンジンモジュール（`bullet_engine/`）のアーキテクチャ、ライセンス分離設計、剛体・ジョイントのパラメータ仕様、拘束解決モデル、および Maya との連携仕様を定めたものです。
+> [!NOTE]
+> 本詳細技術仕様書は、AI によって作成・整理されたドキュメントです。内容はソースコードおよび開発記録をもとに記述していますが、実際の動作と細部が異なる場合があります。
+
+本ドキュメントは、「MMD Tools for Maya」に搭載された MMD 本家（MikuMikuDance）互換の **Bullet Physics (Bullet 2.75 / Bullet 2.83.7)** 物理演算エンジンモジュール（`bullet_engine/`）のアーキテクチャ、ライセンス分離設計、剛体・ジョイントのパラメータ仕様、拘束解決モデル、および Maya との連携仕様を定めたものです。
 
 ---
 
-## 1. 導入の目的と MMD 特有のしなやかさの再現
+## 導入の目的と MMD 特有のしなやかさの再現
 
 MMD（MikuMikuDance）は、樋口優氏により Bullet Physics Library（2.75〜2.77系）を物理コアとして採用して開発されました。
 MMD のモデルデータ（剛体の反発・摩擦、ジョイントのばね定数・制限角度）は、Bullet の `btGeneric6DofSpringConstraint` および PGS (Projected Gauss-Seidel / Sequential Impulse) ソルバーの内部挙動に最適化してパラメータ調整されています。
 
-本モジュールは、Bullet 2.8x系（2.83.7）のコアソースファイルを直接プロジェクト内に組み込み、単一DLL（`mmd_bullet.dll`）へコンパイルすることで、**MMD特有の「柔らかく綺麗なしなやかさ」を Maya 上で再現**します。
+本モジュールは、以下の2つの Bullet バージョンを並行搭載し、用途に合わせて自由に切り替えてベイクできるデュアルバージョンシステムを提供します：
+
+- **Bullet 2.75 (本家MMD採用バージョン・挙動再現重視)**:
+  - 樋口優氏がMMD本家で実際に採用していたバージョンであり、MMD上での揺れ方やばねの反発・減衰特性を忠実に再現します。
+  - `mmd_bullet_275.dll` として最適化コンパイルされています。
+- **Bullet 2.83.7 (後発・改良バージョン・安定性重視)**:
+  - Bullet 2.8x 系における拘束ソルバーや接触点キャッシングの改良を取り入れたバージョンです。
+  - `mmd_bullet_283.dll` として最適化コンパイルされています。
 
 ---
 
-## 2. ライセンス分離（カプセル化）アーキテクチャ
+## ライセンス分離（カプセル化）アーキテクチャ
 
 オープンソースライセンスの明確な分離とユーザーの自由度を保証するため、以下の設計を採用しています。
 
@@ -22,23 +32,23 @@ MMD のモデルデータ（剛体の反発・摩擦、ジョイントのばね�
   - プロジェクト本体（入出力コア `mmd_core`、自作XPBDエンジン等）: **MIT License**
 - **削除耐性（Zero-Dependency Fallback）**:
   - `bullet_engine/` フォルダを丸ごと削除するだけで、プロジェクト全体は自動的に **MIT License 単一構成（自作XPBDエンジンのみ）** に戻ります。
-  - GUI（`gui.py`）は起動時および表示時に `bullet_engine/bin/mmd_bullet.dll` の存在を動的に検出します。
+  - GUI（`gui.py`）は起動時および表示時に `bullet_engine/bin/` 配下の DLL 存在を動的に検出します。
   - フォルダやDLLが削除された場合でも、GUIの起動やモデルインポート・モーション適用等に一切エラーは発生せず、「Bullet 物理ベイク実行」ボタンのみが安全に無効化（グレーアウト）され、自作「XPBD 物理ベイク実行」で全機能が平常稼働し続けます。
 
 ---
 
-## 3. 剛体（RigidBody）のパラメータ仕様 & マッピング
+## 剛体（RigidBody）のパラメータ仕様 & マッピング
 
 PMXモデルデータに定義された剛体パラメータと、Bullet Physics（`btRigidBody` / `btCollisionShape`）へのマッピング仕様です。
 
-### 3-1. 形状パラメータ（Shape Types）
+### 形状パラメータ（Shape Types）
 | PMX shape_type | 形状 | PMX size パラメータ | Bullet 衝突形状クラス | 備考 |
 | :--- | :--- | :--- | :--- | :--- |
 | `0` | 球 (Sphere) | `[radius, 0, 0]` | `btSphereShape(radius * scale)` | 半径 |
 | `1` | 箱 (Box) | `[half_x, half_y, half_z]` | `btBoxShape(btVector3(half_x * scale, half_y * scale, half_z * scale))` | XYZハーフサイズ |
 | `2` | カプセル (Capsule) | `[radius, height, 0]` | `btCapsuleShape(radius * scale, height * scale)` | Y軸沿いカプセル |
 
-### 3-2. 物理プロパティ
+### 物理プロパティ
 - **質量 (`mass`)**:
   - タイプ 0 (Kinematic): 質量 `0.0f`（物理演算で動かない静的・アニメーション駆動体）。
   - タイプ 1 (Dynamic) / タイプ 2 (Aligned): PMXの `mass` 値をそのまま設定。
@@ -53,7 +63,7 @@ PMXモデルデータに定義された剛体パラメータと、Bullet Physics
 - **アクティベーション状態**:
   - 静止による物理スリープを防ぐため、全剛体に `DISABLE_DEACTIVATION` を設定。
 
-### 3-3. 衝突グループ (1〜16) と 衝突マスク (16bit) の仕様
+### 衝突グループ (1〜16) と 衝突マスク (16bit) の仕様
 PMXモデルでは、最大16個の衝突グループを定義可能です。
 
 - **グループ番号の対応**:
@@ -75,17 +85,17 @@ PMXモデルでは、最大16個の衝突グループを定義可能です。
 
 ---
 
-## 4. ジョイント（Joint / 6DOF Spring）のパラメータ仕様
+## ジョイント（Joint / 6DOF Spring）のパラメータ仕様
 
 PMXモデルのジョイントは、すべて 6自由度スプリング拘束（`btGeneric6DofSpringConstraint`）として解決されます。
 
-### 4-1. 相対フレーム計算
+### 相対フレーム計算
 - 剛体Aおよび剛体Bのバインド時ワールドトランスフォーム $T_A, T_B$ とジョイントのワールドトランスフォーム $T_J$ から、各剛体のローカル空間におけるトランスフォームを算出：
   $$F_A = T_A^{-1} \cdot T_J$$
   $$F_B = T_B^{-1} \cdot T_J$$
 - コンストレイント生成時に第5引数を `true` に設定し、接続剛体ペア同士の直接衝突判定を無効化（`disableCollisionsBetweenLinkedBodies = true`）。
 
-### 4-2. 制限角度・移動範囲 (Limits)
+### 制限角度・移動範囲 (Limits)
 - **平行移動リミット**:
   - 下限: `[posMinX * scale, posMinY * scale, -posMaxZ * scale]`
   - 上限: `[posMaxX * scale, posMaxY * scale, -posMinZ * scale]`
@@ -95,7 +105,7 @@ PMXモデルのジョイントは、すべて 6自由度スプリング拘束（
   - 上限: `[rotMaxX, rotMaxY, -rotMinZ]`
   - `spring->setAngularLowerLimit()` / `setAngularUpperLimit()`
 
-### 4-3. スプリングばね定数 (Stiffness) & 減衰 (Damping)
+### スプリングばね定数 (Stiffness) & 減衰 (Damping)
 - 6自由度（0, 1, 2: 平行移動 XYZ / 3, 4, 5: 回転 XYZ）それぞれについて：
   - PMXの `linear_spring` / `angular_spring` が非ゼロの場合、`spring->enableSpring(i, true)` を有効化。
   - ばね定数: `spring->setStiffness(i, spring_val)`
@@ -105,50 +115,66 @@ PMXモデルのジョイントは、すべて 6自由度スプリング拘束（
 
 ---
 
-## 5. Maya 座標系変換・アニメーション連携仕様
+## Maya 座標系変換・アニメーション連携仕様
 
-### 5-1. 座標系変換規則 (MMD ↔ Maya)
+### 座標系変換規則 (MMD ↔ Maya)
 MMDとMayaはいずれも右手系（Y-up）ですが、Z軸の向き規則に対応するため以下の変換を適用します。
 - 位置: $(X \times \text{scale}, Y \times \text{scale}, -Z \times \text{scale})$
 - 回転オイラー角: $(\text{degX}, \text{degY}, -\text{degZ})$
 
-### 5-2. Kinematic 剛体の追従と AABB 即時更新
+### Kinematic 剛体の追従と AABB 即時更新
 - ボーンに対する剛体のバインドポーズでの相対ローカルオフセット $(P_{\text{offset}}, Q_{\text{offset}})$ を保持。
 - 毎フレーム、ボーンの現在姿勢 $(P_{\text{bone}}, Q_{\text{bone}})$ に相対オフセットを乗算して剛体の目標ワールド姿勢を算出：
   $$P_{\text{target}} = P_{\text{bone}} + Q_{\text{bone}} \cdot P_{\text{offset}}$$
   $$Q_{\text{target}} = Q_{\text{bone}} \cdot Q_{\text{offset}}$$
 - 目標姿勢を設定した直後に `world->updateSingleAabb(body)` を呼び出し、ブロードフェーズの衝突判定境界ボックスを即時更新（高速移動時のすり抜け・貫通を防止）。
 
-### 5-3. 初期めり込み解消ウォームアップ (Pre-roll Relaxation) と ERP 調整
+### 初期めり込み解消ウォームアップ (Pre-roll Relaxation) と ERP 調整
 モーション開始フレーム（0F等）において太もも剛体とスカート剛体がめり込んでいる場合、初期フレームでの急激な反発インパルスによるゴム跳ね・振動・破綻を防止するため、以下の事前緩和機構を搭載しています。
 
 - **ERP (Error Reduction Parameter) の抑制**:
   - `solverInfo.m_erp = 0.2f` および `solverInfo.m_erp2 = 0.2f` に設定し、拘束復元率をマイルドに抑えて跳ね返りを抑制。
 - **Pre-roll Relaxation プロセス (`bullet_relax_penetration`)**:
-  1. ワールド重力を一時的にゼロ $(0, 0, 0)$ に設定。
-  2. 動的剛体のダンピング（空気抵抗）を一時的に極大（$0.99$）に設定。
-  3. 太もも等のKinematic剛体をボーン姿勢に固定したまま、接触反発インパルスのみでスカート剛体が表面外側へ押し出されるシミュレーションを 25ステップ実行。
-  4. 押し出し完了後、線形速度・角速度・内部力をゼロクリア（`bullet_reset_velocities`）。
-  5. スプリングコンストレイントの平衡点を最新の安定相対姿勢で再初期化（`bullet_reset_constraints`）。
-  6. 重力とダンピングを元に戻してベイクを開始するため、初速ゼロ・無振動の滑らかな揺れ出しが保証されます。
+  - ワールド重力を一時的にゼロ $(0, 0, 0)$ に設定。
+  - 動的剛体のダンピング（空気抵抗）を一時的に極大（$0.99$）に設定。
+  - 太もも等のKinematic剛体をボーン姿勢に固定したまま、接触反発インパルスのみでスカート剛体が表面外側へ押し出されるシミュレーションを 25ステップ実行。
+  - 押し出し完了後、線形速度・角速度・内部力をゼロクリア（`bullet_reset_velocities`）。
+  - スプリングコンストレイントの平衡点を最新の安定相対姿勢で再初期化（`bullet_reset_constraints`）。
+  - 重力とダンピングを元に戻してベイクを開始するため、初速ゼロ・無振動の滑らかな揺れ出しが保証されます。
 
-### 5-4. OpenMaya マトリクス逆算によるキーフレーム書き込み
+### OpenMaya マトリクス逆算によるキーフレーム書き込み
 剛体の物理演算結果をボーンへ書き込む際、Maya特有のジョイント属性を考慮した厳密な逆算を行います。
-1. **目標ワールド回転の逆算**:
-   $$Q_{\text{target}} = Q_{\text{rbCurrent}} \cdot Q_{\text{offset}}^{-1}$$
-2. **親空間ローカル回転の算出**:
-   $$M_{\text{local}} = M_{\text{target}} \cdot M_{\text{parentInclusive}}^{-1}$$
-3. **jointOrient / rotateAxis の相殺**:
-   $$Q_{\text{bone}} = Q_{\text{jointOrient}}^{-1} \cdot Q_{\text{local}} \cdot Q_{\text{rotateAxis}}^{-1}$$
-4. **階層深度ソート (親から子へ)**:
-   親ボーンの回転を確定させてから子ボーンの親空間行列を計算するため、動的剛体をMayaのDAG階層深度順にソートして処理。
-5. **オイラー角連続性維持**:
-   `closestSolution` を用いて最短連続回転角を維持し、ジンバルロックや180度反転フリップを防止。
+- **目標ワールド回転の逆算**:
+  $$Q_{\text{target}} = Q_{\text{rbCurrent}} \cdot Q_{\text{offset}}^{-1}$$
+- **親空間ローカル回転の算出**:
+  $$M_{\text{local}} = M_{\text{target}} \cdot M_{\text{parentInclusive}}^{-1}$$
+- **jointOrient / rotateAxis の相殺**:
+  $$Q_{\text{bone}} = Q_{\text{jointOrient}}^{-1} \cdot Q_{\text{local}} \cdot Q_{\text{rotateAxis}}^{-1}$$
+- **階層深度ソート (親から子へ)**:
+  親ボーンの回転を確定させてから子ボーンの親空間行列を計算するため、動的剛体をMayaのDAG階層深度順にソートして処理。
+- **オイラー角連続性維持**:
+  `closestSolution` を用いて最短連続回転角を維持し、ジンバルロックや180度反転フリップを防止。
 
 ---
 
-## 6. クリーンアップと再吸着復元 (`clear_physics_keyframes`)
+## クリーンアップと再吸着復元 (`clear_physics_keyframes`)
 
 ベイク処理の終了時、またはユーザーによる「物理キーフレームをクリア」「剛体・Jointをモデルに再吸着」実行時：
 - 動的剛体に対応する全ジョイントの移動・回転キーフレームをクリア。
 - 可視化ノード（`MMD_XPBD_VISUALIZERS`）のキーフレームを削除し、モデルボーンへの追従コンストレイントを通常状態（Normal）へ復元。
+
+---
+
+## 複数モデル順次物理ベイク仕様 (追突防止・個別アイソレーション方式)
+
+シーン内に複数のMMDモデルが存在する場合、モデル同士が接触・交差した際の剛体反発や吹き飛びを防止するための技術仕様です。
+
+- **モデルスコープ限定マッピング (`target_model`)**:
+  - `BulletMayaBridge` の初期化時に `target_model` 引数を指定可能。
+  - 指定されたモデルの階層下に存在するジョイントのみを探索・マッピング対象とし、同名ボーンを持つ別モデルとの誤バインドを防止。
+- **追突防止アイソレーション順次ベイク**:
+  - 全モデルの剛体を同一のBulletワールドへ投入すると、重なった瞬間に剛体同士が激しく衝突・反発を起こすため、モデルごとに独立した `BulletMayaBridge` インスタンスを1体ずつ順次生成してベイクを実行。
+  - 各モデルは自身の剛体・ジョイントのみで構成されたクリーンな物理空間で計算され、キーフレームがMaya上の対象ジョイントへ記録されるため、追突や破綻のない自然なしなやかさを保証。
+- **自動検出によるシームレスな順次ベイク**:
+  - 「適用対象モデル」を「自動検出 (シーン内のMMDモデル)」に設定して実行すると、シーン内に存在するモデル数を自動判別。2体以上存在する場合は自動的に追突防止アイソレーション順次ベイクを行い、1体の場合は単体ベイクを実行。個別モデル指定にも対応。
+

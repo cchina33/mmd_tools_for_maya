@@ -30,13 +30,15 @@ QTabWidget::pane {{
 QTabBar::tab {{
     background-color: #202020;
     color: #a8a8a8;
-    padding: 10px 14px;
+    padding: 8px 10px;
     margin-right: 3px;
     border-top-left-radius: 5px;
     border-top-right-radius: 5px;
-    font-size: 14px;
+    font-size: 13px;
     font-weight: bold;
 }}
+
+
 
 QTabBar::tab:selected {{
     background-color: #383838;

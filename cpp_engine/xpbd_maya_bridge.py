@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-MMD XPBD 物理演算エンジン Maya ブリッジモジュール (スカート・揺れもの完全安定化版)
+MMD XPBD 物理演算エンジン Maya ブリッジモジュール (スカート・揺れもの高安定化版)
 blender_mmd_tools の剛体・ボーン同期仕様に準拠し、
 OpenMaya API による厳密な階層マトリクス計算とオイラー角連続性維持 (closestSolution) により、
-オイラー角フリップやフィードバック自己増幅によるメッシュ破綻・爆発を完全に排除します。
+オイラー角フリップやフィードバック自己増幅によるメッシュ破綻・爆発を徹底排除します。
 """
 
 import os
@@ -161,7 +161,7 @@ class XpbdMayaBridge:
             self.rb_to_bone[rb_idx] = rb.bone_index
 
             # PMXバインドデータからボーンに対する厳密なローカルオフセットを算出
-            # (アニメーション移動量によるオフセット破壊を完全防止)
+            # (アニメーション移動量によるオフセット破壊を防止)
             b_idx = rb.bone_index
             if 0 <= b_idx < len(self.pmx_model.bones):
                 bone = self.pmx_model.bones[b_idx]
@@ -310,7 +310,7 @@ class XpbdMayaBridge:
     def _cache_animated_bone_transforms(self, start_frame, end_frame):
         """
         全タイムラインにわたり、身体ボーン等の初期アニメーション姿勢を事前サンプリングしてキャッシュ
-        ベイク処理によるボーン姿勢変更が次フレームの剛体同期にフィードバック混入する現象を完全遮断
+        ベイク処理によるボーン姿勢変更が次フレームの剛体同期にフィードバック混入する現象を確実に遮断
         """
         self.anim_cache.clear()
         print(f"[XPBD] アニメーション姿勢の事前キャッシュ開始: フレーム {start_frame} ～ {end_frame}")
@@ -531,7 +531,7 @@ class XpbdMayaBridge:
                 bone_euler = bone_rot_q.asEulerRotation()
                 bone_euler.reorderIt(ro)
 
-                # 前フレームからの最短連続角度を維持 (180度フリップ・裏返りを完全防止)
+                # 前フレームからの最短連続角度を維持 (180度フリップ・裏返りを防止)
                 if j_node in prev_eulers:
                     bone_euler = bone_euler.closestSolution(prev_eulers[j_node])
                 prev_eulers[j_node] = bone_euler

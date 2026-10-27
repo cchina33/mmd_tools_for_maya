@@ -46,6 +46,8 @@ RasterizerState SolidCullFront
 {
     CullMode = FRONT;
     FillMode = SOLID;
+    DepthBias = 500;
+    SlopeScaledDepthBias = 1.0f;
 };
 
 // ラスタライザステート（両面描画）
@@ -192,7 +194,7 @@ float4 PS_Main(PS_INPUT IN) : SV_Target
         toonColor = lerp(float3(0.5f, 0.5f, 0.5f), float3(1.0f, 1.0f, 1.0f), toonStep);
     }
 
-    // 基本陰影の合成 (MMD固定機能パイプライン完全互換)
+    // 基本陰影の合成 (MMD固定機能パイプライン準拠)
     // テクスチャカラー全体に対し、ディフューズ受光色(Toon含む)と環境光(アンビエント)を乗算
     float3 diffuseTerm = gDiffuseColor * lightCol * toonColor;
     float3 ambientTerm = amb;
@@ -289,9 +291,13 @@ PS_EDGE_INPUT VS_Edge(VS_INPUT IN)
     float4 clipPos = mul(float4(IN.Position, 1.0f), gWorldViewProj);
     float4 clipNormal = mul(float4(IN.Normal, 0.0f), gWorldViewProj);
 
-    // クリップ空間でのパースペクティブ補正押し出し (ClipPosition.w を掛けて画面上のピクセル太さを一定保持)
-    float2 norm2D = normalize(clipNormal.xy);
-    clipPos.xy += norm2D * offset * clipPos.w;
+    // クリップ空間でのパースペクティブ補正押し出し (ゼロ除算防止および太さ一定化)
+    float lenNorm = length(clipNormal.xy);
+    if (lenNorm > 0.0001f)
+    {
+        float2 norm2D = clipNormal.xy / lenNorm;
+        clipPos.xy += norm2D * offset * clipPos.w;
+    }
 
     OUT.Position = clipPos;
     return OUT;
