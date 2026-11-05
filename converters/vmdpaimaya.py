@@ -611,6 +611,35 @@ def extract_vmd_camera_bezier_points(interpolation_bytes, channel_idx):
     return x1, y1, x2, y2
 
 
+def eval_mmd_camera_bezier(x1, y1, x2, y2, t):
+    """
+    MMDの2次元ベジェ曲線を評価し、正規化時間 t (0.0〜1.0) に対応する補間比率 (0.0〜1.0) を算出します。
+    二分法により X(u) = t となる媒介変数 u を求め、Y(u) を返します。
+    """
+    if t <= 0.0:
+        return 0.0
+    if t >= 1.0:
+        return 1.0
+
+    u_low = 0.0
+    u_high = 1.0
+    u = t
+
+    for _ in range(32):
+        u = (u_low + u_high) * 0.5
+        cx = 3.0 * (1.0 - u) * (1.0 - u) * u * x1 + 3.0 * (1.0 - u) * u * u * x2 + u * u * u
+        if abs(cx - t) < 1e-6:
+            break
+        if cx < t:
+            u_low = u
+        else:
+            u_high = u
+
+    cy = 3.0 * (1.0 - u) * (1.0 - u) * u * y1 + 3.0 * (1.0 - u) * u * u * y2 + u * u * u
+    return max(0.0, min(1.0, cy))
+
+
+
 def apply_curve_bezier_tangents(node, attr, key_frames, key_values, bezier_params_list):
     """
     指定ノード・属性のアニメーションカーブに対して、MMDベジェ補間曲線に基づく重み付き接線を設定します。
@@ -963,114 +992,179 @@ def apply_morph_motion(motion, morph_map, target_model_node=None):
 def apply_camera_motion(motion, scale=8.0):
     """
     VMDカメラモーションからMayaカメラを生成し、アニメーションを設定します。
-    注視点ロケータを中心とした公転（オービット）2階層リグを自動構築します。
+    MMD本家の2次元ベジェ補間式に基づき、各フレームを高精度サンプリング展開することで、
+    Mayaスプライン補間によるオーバーシュートや角度の乖離を抑止し、
+    MMD本家と一致するカメラ軌道を再現します。
     """
     if not motion.camera_frames:
         return None
 
     # 既存のカメラリグがあればクリーンアップして再生成
-    for node_name in ["MMD_Camera_Aim", "MMD_Camera"]:
-        if mc.objExists(node_name):
-            try:
-                mc.delete(node_name)
-            except Exception:
-                pass
+    for cam_pattern in ["MMD_Camera_Aim", "MMD_Camera"]:
+        nodes = mc.ls(f"*{cam_pattern}*", transforms=True) or []
+        for n in nodes:
+            if mc.objExists(n):
+                try:
+                    shapes = mc.listRelatives(n, shapes=True, fullPath=True) or []
+                    for shp in shapes:
+                        try:
+                            mc.camera(shp, edit=True, lockTransform=False)
+                        except Exception:
+                            pass
+                    for attr_name in ['translateX', 'translateY', 'translateZ',
+                                      'rotateX', 'rotateY', 'rotateZ',
+                                      'scaleX', 'scaleY', 'scaleZ']:
+                        try:
+                            mc.setAttr(f"{n}.{attr_name}", lock=False)
+                        except Exception:
+                            pass
+                    mc.delete(n)
+                except Exception:
+                    pass
 
     aim_locator = mc.spaceLocator(name="MMD_Camera_Aim")[0]
+    mc.setAttr(f"{aim_locator}.rotateOrder", 2) # ZXY (DirectX YawPitchRoll: Ry * Rx * Rz と一致)
     cam_trans, cam_shape = mc.camera(name="MMD_Camera")
     cam_trans = mc.parent(cam_trans, aim_locator)[0]
+
+    # 親付け後のフルDAGパスから安全にシェイプノードを取得
+    shapes = mc.listRelatives(cam_trans, shapes=True, fullPath=True) or [cam_shape]
+    cam_shape = shapes[0]
 
     # カメラのフィルムゲート設定 (35mm換算アスペクト)
     mc.setAttr(f"{cam_shape}.filmFit", 3) # Overscan
     aperture_inch = mc.camera(cam_shape, query=True, verticalFilmAperture=True)
     aperture_mm = aperture_inch * 25.4
 
-    cam_keys = []
-    aim_tx = []
-    aim_ty = []
-    aim_tz = []
-    aim_rx = []
-    aim_ry = []
-    aim_rz = []
-    cam_dist_vals = []
-    cam_fl_vals = []
+    sorted_frames = sorted(motion.camera_frames, key=lambda cf: cf.frame)
+    num_frames = len(sorted_frames)
 
-    cam_bx = []
-    cam_by = []
-    cam_bz = []
-    cam_brot = []
-    cam_bdist = []
-    cam_bfov = []
-
-    for cf in motion.camera_frames:
+    if num_frames == 1:
+        cf = sorted_frames[0]
         f = cf.frame
-
-        # 注視点の位置 (MMD左手系 -> Maya右手系, Z反転)
         tx = cf.position[0] * scale
         ty = cf.position[1] * scale
         tz = -cf.position[2] * scale
+        rx = math.degrees(cf.rotation[0])
+        ry = math.degrees(cf.rotation[1])
+        rz = -math.degrees(cf.rotation[2])
+        cam_dist = -cf.distance * scale
+        fov_rad = math.radians(cf.fov) if cf.fov > 0 else math.radians(30.0)
+        fl = (aperture_mm / 2.0) / math.tan(fov_rad / 2.0)
+
         mc.setKeyframe(aim_locator, attribute='translateX', time=f, value=tx)
         mc.setKeyframe(aim_locator, attribute='translateY', time=f, value=ty)
         mc.setKeyframe(aim_locator, attribute='translateZ', time=f, value=tz)
-
-        # カメラの公転回転角度
-        rx = math.degrees(cf.rotation[0])
-        ry = -math.degrees(cf.rotation[1])
-        rz = -math.degrees(cf.rotation[2])
         mc.setKeyframe(aim_locator, attribute='rotateX', time=f, value=rx)
         mc.setKeyframe(aim_locator, attribute='rotateY', time=f, value=ry)
         mc.setKeyframe(aim_locator, attribute='rotateZ', time=f, value=rz)
-
-        # 注視点からの距離オフセット (MMD distanceは通常負値)
-        cam_dist = -cf.distance * scale
-        mc.setKeyframe(cam_trans, attribute='translateX', time=f, value=0.0)
-        mc.setKeyframe(cam_trans, attribute='translateY', time=f, value=0.0)
         mc.setKeyframe(cam_trans, attribute='translateZ', time=f, value=cam_dist)
-        mc.setKeyframe(cam_trans, attribute='rotateX', time=f, value=0.0)
-        mc.setKeyframe(cam_trans, attribute='rotateY', time=f, value=0.0)
-        mc.setKeyframe(cam_trans, attribute='rotateZ', time=f, value=0.0)
-
-        # 視野角 (FOV) から焦点距離 (focalLength) への変換
-        fov_rad = math.radians(cf.fov) if cf.fov > 0 else math.radians(30.0)
-        fl = (aperture_mm / 2.0) / math.tan(fov_rad / 2.0)
         mc.setKeyframe(cam_shape, attribute='focalLength', time=f, value=fl)
-
-        cam_keys.append(f)
-        aim_tx.append(tx)
-        aim_ty.append(ty)
-        aim_tz.append(tz)
-        aim_rx.append(rx)
-        aim_ry.append(ry)
-        aim_rz.append(rz)
-        cam_dist_vals.append(cam_dist)
-        cam_fl_vals.append(fl)
-
-        cam_bx.append(extract_vmd_camera_bezier_points(cf.interpolation, 0))
-        cam_by.append(extract_vmd_camera_bezier_points(cf.interpolation, 1))
-        cam_bz.append(extract_vmd_camera_bezier_points(cf.interpolation, 2))
-        cam_brot.append(extract_vmd_camera_bezier_points(cf.interpolation, 3))
-        cam_bdist.append(extract_vmd_camera_bezier_points(cf.interpolation, 4))
-        cam_bfov.append(extract_vmd_camera_bezier_points(cf.interpolation, 5))
-
-    # カメラアニメーションカーブへのMMDベジェ接線適用
-    if len(cam_keys) >= 2:
-        apply_curve_bezier_tangents(aim_locator, 'translateX', cam_keys, aim_tx, cam_bx)
-        apply_curve_bezier_tangents(aim_locator, 'translateY', cam_keys, aim_ty, cam_by)
-        apply_curve_bezier_tangents(aim_locator, 'translateZ', cam_keys, aim_tz, cam_bz)
-        apply_curve_bezier_tangents(aim_locator, 'rotateX', cam_keys, aim_rx, cam_brot)
-        apply_curve_bezier_tangents(aim_locator, 'rotateY', cam_keys, aim_ry, cam_brot)
-        apply_curve_bezier_tangents(aim_locator, 'rotateZ', cam_keys, aim_rz, cam_brot)
-        apply_curve_bezier_tangents(cam_trans, 'translateZ', cam_keys, cam_dist_vals, cam_bdist)
-        apply_curve_bezier_tangents(cam_shape, 'focalLength', cam_keys, cam_fl_vals, cam_bfov)
     else:
-        for node in [aim_locator, cam_trans, cam_shape]:
-            try:
-                mc.keyTangent(node, edit=True, inTangentType='spline', outTangentType='spline')
-            except Exception:
-                pass
+        # キーフレーム区間ごとにMMDベジェ補間式を用いて高精度サンプリング展開
+        for i in range(num_frames - 1):
+            prev_cf = sorted_frames[i]
+            next_cf = sorted_frames[i + 1]
+            f_start = prev_cf.frame
+            f_end = next_cf.frame
+            dt = float(f_end - f_start)
 
-    print(f"[情報] カメラアニメーションを適用しました: {len(motion.camera_frames)} フレーム")
+            # チャンネル別ベジェパラメータの抽出
+            bx = extract_vmd_camera_bezier_points(next_cf.interpolation, 0)
+            by = extract_vmd_camera_bezier_points(next_cf.interpolation, 1)
+            bz = extract_vmd_camera_bezier_points(next_cf.interpolation, 2)
+            brot = extract_vmd_camera_bezier_points(next_cf.interpolation, 3)
+            bdist = extract_vmd_camera_bezier_points(next_cf.interpolation, 4)
+            bfov = extract_vmd_camera_bezier_points(next_cf.interpolation, 5)
+
+            p_pos = prev_cf.position
+            n_pos = next_cf.position
+            p_rx = math.degrees(prev_cf.rotation[0])
+            p_ry = math.degrees(prev_cf.rotation[1])
+            p_rz = -math.degrees(prev_cf.rotation[2])
+            n_rx = math.degrees(next_cf.rotation[0])
+            n_ry = math.degrees(next_cf.rotation[1])
+            n_rz = -math.degrees(next_cf.rotation[2])
+            p_dist = prev_cf.distance
+            n_dist = next_cf.distance
+            p_fov = prev_cf.fov
+            n_fov = next_cf.fov
+
+            # 末尾の区間のみ終端フレームを含めてキーを設定
+            range_end = f_end + 1 if i == num_frames - 2 else f_end
+
+            if dt <= 1.0:
+                # カット割り（1フレーム差）または同一フレーム
+                frames_to_eval = [f_start] if i < num_frames - 2 else [f_start, f_end]
+            else:
+                frames_to_eval = range(f_start, range_end)
+
+            for f in frames_to_eval:
+                t = float(f - f_start) / dt if dt > 0.0 else 0.0
+                t = max(0.0, min(1.0, t))
+
+                wx = eval_mmd_camera_bezier(bx[0], bx[1], bx[2], bx[3], t)
+                wy = eval_mmd_camera_bezier(by[0], by[1], by[2], by[3], t)
+                wz = eval_mmd_camera_bezier(bz[0], bz[1], bz[2], bz[3], t)
+                wrot = eval_mmd_camera_bezier(brot[0], brot[1], brot[2], brot[3], t)
+                wdist = eval_mmd_camera_bezier(bdist[0], bdist[1], bdist[2], bdist[3], t)
+                wfov = eval_mmd_camera_bezier(bfov[0], bfov[1], bfov[2], bfov[3], t)
+
+                tx = (p_pos[0] + wx * (n_pos[0] - p_pos[0])) * scale
+                ty = (p_pos[1] + wy * (n_pos[1] - p_pos[1])) * scale
+                tz = -(p_pos[2] + wz * (n_pos[2] - p_pos[2])) * scale
+
+                rx = p_rx + wrot * (n_rx - p_rx)
+                ry = p_ry + wrot * (n_ry - p_ry)
+                rz = p_rz + wrot * (n_rz - p_rz)
+
+                cam_dist = -(p_dist + wdist * (n_dist - p_dist)) * scale
+
+                cur_fov = p_fov + wfov * (n_fov - p_fov)
+                fov_rad = math.radians(cur_fov) if cur_fov > 0 else math.radians(30.0)
+                fl = (aperture_mm / 2.0) / math.tan(fov_rad / 2.0)
+
+                mc.setKeyframe(aim_locator, attribute='translateX', time=f, value=tx)
+                mc.setKeyframe(aim_locator, attribute='translateY', time=f, value=ty)
+                mc.setKeyframe(aim_locator, attribute='translateZ', time=f, value=tz)
+                mc.setKeyframe(aim_locator, attribute='rotateX', time=f, value=rx)
+                mc.setKeyframe(aim_locator, attribute='rotateY', time=f, value=ry)
+                mc.setKeyframe(aim_locator, attribute='rotateZ', time=f, value=rz)
+                mc.setKeyframe(cam_trans, attribute='translateZ', time=f, value=cam_dist)
+                mc.setKeyframe(cam_shape, attribute='focalLength', time=f, value=fl)
+
+    # アニメーションカーブの接線形状を滑らかに保持
+    for node in [aim_locator, cam_trans, cam_shape]:
+        try:
+            mc.keyTangent(node, edit=True, inTangentType='spline', outTangentType='spline')
+        except Exception:
+            pass
+
+    print(f"[情報] カメラアニメーションを適用しました: {len(motion.camera_frames)} キーフレームを高精度サンプリング展開")
     return aim_locator
+
+def set_mmd_camera_locked(locked=True):
+    """
+    シーン内の MMD_Camera および MMD_Camera_Aim のロック状態を切り替えます。
+    """
+    for cam_name in ["MMD_Camera_Aim", "MMD_Camera"]:
+        if mc.objExists(cam_name):
+            shapes = mc.listRelatives(cam_name, shapes=True, fullPath=True) or []
+            for shp in shapes:
+                try:
+                    mc.camera(shp, edit=True, lockTransform=locked)
+                except Exception:
+                    pass
+            for attr_name in ['translateX', 'translateY', 'translateZ',
+                              'rotateX', 'rotateY', 'rotateZ',
+                               'scaleX', 'scaleY', 'scaleZ']:
+                try:
+                    mc.setAttr(f"{cam_name}.{attr_name}", lock=locked)
+                except Exception:
+                    pass
+    state_str = "ロック" if locked else "ロック解除"
+    print(f"[情報] MMD_Camera の状態を {state_str} に変更しました。")
+
 
 def clear_model_animation(target_model_node=None, clear_camera=True):
     """
@@ -1225,6 +1319,20 @@ def clear_model_animation(target_model_node=None, clear_camera=True):
         for cam_name in ["MMD_Camera_Aim", "MMD_Camera"]:
             if mc.objExists(cam_name):
                 try:
+                    # ロックされている場合の安全な解除処理
+                    shapes = mc.listRelatives(cam_name, shapes=True, fullPath=True) or []
+                    for shp in shapes:
+                        try:
+                            mc.camera(shp, edit=True, lockTransform=False)
+                        except Exception:
+                            pass
+                    for attr_name in ['translateX', 'translateY', 'translateZ',
+                                      'rotateX', 'rotateY', 'rotateZ',
+                                      'scaleX', 'scaleY', 'scaleZ']:
+                        try:
+                            mc.setAttr(f"{cam_name}.{attr_name}", lock=False)
+                        except Exception:
+                            pass
                     mc.delete(cam_name)
                 except Exception:
                     pass
@@ -1772,7 +1880,7 @@ def import_vmd(vmd_file_path=None, camera_vmd_path=None, audio_wav_path=None, sc
         # Maya再生環境の設定 (MMD標準 30 fps)
         result['max_frame'] = max_frame
         if max_frame > 0:
-            mc.currentUnit(time='ntsc') # 30 fps
+            mc.currentUnit(time='ntsc')  # MMD標準の30fpsに設定
             mc.playbackOptions(minTime=0, maxTime=max_frame, animationStartTime=0, animationEndTime=max_frame)
             mc.currentTime(0)
 

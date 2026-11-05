@@ -15,25 +15,128 @@ MMD Tools for Maya は、外部ライブラリ（numpyや外部バイナリパ�
 
 ```text
 mmd_tools_for_maya/
+├── __init__.py                       # パッケージ初期化＆後方互換透過エクスポート
 ├── mmd_tools_for_maya_plugin.py      # Mayaプラグイン登録エントリポイント
-├── gui.py                    # モダン統合UI (PySide6 / PySide2)
-├── pmxpaimaya.py             # MMDモデルインポートエンジン (メイン)
-├── pmd2pmx.py                # PMDからPMXへの自動変換エンジン (剛体・ジョイント対応)
-├── vmdpaimaya.py             # MMDモーション(VMD)アニメーション適用エンジン
-├── vmd_analyzer.py           # VMDモーション構造解析・診断モジュール
-├── mayapaipmx.py             # MayaシーンからPMXへのエクスポートエンジン
-├── toon/                     # MMD標準共有トゥーンテクスチャ (toon01.bmp〜toon10.bmp)
-├── mmd_core/                 # 自作MMDバイナリパーサーエンジン
-│   ├── __init__.py           # パッケージ初期化
-│   ├── pmx.py                # PMX 2.0 / 2.1 パーサー
-│   ├── pmd.py                # PMD (MMD旧形式) パーサー & PMX変換
-│   ├── x_file.py             # DirectX (.x) テキスト/バイナリ構文解析器
-│   ├── vmd.py                # VMD モーションパーサー
-│   └── vpd.py                # VPD ポーズパーサー
-└── asset/                    # ユーティリティデータ・補助モジュール
-    ├── jaka.py               # 日本語/中国語ノード名のローマ字変換 & 安全名生成
-    ├── hik.py                # HumanIK (HIK) ボーン定義マッピング
-    └── khatangton.txt        # GUI設定永続化ファイル
+├── README.md                         # プロジェクト概要・導入手順
+├── LICENSE                           # MITライセンス条項
+│
+├── ui/                               # モダン統合UIパッケージ (PySide6 / PySide2 互換)
+│   ├── __init__.py                   # UIエクスポート定義
+│   ├── gui.py                        # メインウィンドウ統合エントリ (MMDToolsMainWindow, show_ui)
+│   ├── gui_style.py                  # 共通ダークテーマスタイルシート (QSS)
+│   ├── common.py                     # Qt互換インポート・共通ログ・ユーティリティ
+│   ├── tab_import.py                 # モデルインポートタブ (PMX/PMD/X・設定・解析連携)
+│   ├── tab_easy_import.py            # 簡単インポートタブ (ワンクリックシンプル導入)
+│   ├── tab_vmd.py                    # VMDモーションインポートタブ (ボーン・モーフ・カメラ・音声)
+│   ├── tab_material.py               # シェーダー設定タブ (Toon/Sphere・マテリアル保護)
+│   ├── tab_physics.py                # 物理演算タブ (Bullet/XPBD/外部ビューア連携)
+│   ├── tab_export.py                 # エクスポートタブ (PMX/VMD/VPD一元集約)
+│   ├── tab_hik.py                    # HumanIK管理タブ (キャラクター定義・リグ展開)
+│   ├── tab_extra.py                  # その他機能タブ (地面影・照明操作・モデル判定・VPD)
+│   ├── tab_plugin.py                 # プラグイン管理タブ (mll/C++/C#バイナリ管理)
+│   ├── tab_cleanup.py                # MMD削除・クリーンアップタブ (要素別一括消去)
+│   ├── dialog_light_control.py       # MMD照明操作ダイアログ (影向きXYZ・RGBカラー)
+│   ├── dialog_model_classifier.py    # モデル種別判定・個別指定設定ダイアログ
+│   ├── dialog_physics_model_select.py# 物理演算対象モデル選択ダイアログ
+│   ├── morph_window.py               # 表情・モーフ操作GUI (4分割パネル・材質モーフ連動)
+│   ├── pmm_dialog.py                 # PMMプロジェクト解析・モデル選択インポート
+│   ├── multi_model_dialog.py         # 複数モデル一括順次インポートダイアログ
+│   ├── accessory_dialog.py           # アクセサリ追従アタッチダイアログ
+│   ├── advanced_dict_dialog.py       # 高度なユーザー辞書・マテリアル保護設定GUI
+│   ├── user_dict_dialog.py           # 未登録ボーン名検出・対話型辞書登録ダイアログ
+│   ├── material_protect_dialog.py    # マテリアル保護キーワード管理GUI
+│   ├── bone_state_export_dialog.py   # ボーン状態・トランスフォーム情報エクスポートGUI
+│   └── experimental_dialog.py        # 試験的機能ダイアログ
+│
+├── converters/                       # モデル・モーション変換・インポートエンジン群
+│   ├── __init__.py                   # コンバータエクスポート定義
+│   ├── pmxpaimaya.py                 # MMDモデルインポートエンジン (メッシュ/マテリアル/IK/地面影)
+│   ├── vmdpaimaya.py                 # MMDモーション(VMD)アニメーション適用エンジン
+│   ├── mayapaipmx.py                 # MayaシーンからPMXへのエクスポートエンジン
+│   ├── pmd2pmx.py                    # PMDからPMXへの自動変換エンジン (剛体・ジョイント対応)
+│   ├── physics_stream.py             # 外部C#物理ビューア連携・リアルタイムストリーミング＆ベイク
+│   ├── vmd_analyzer.py               # VMDモーション構造解析・診断モジュール
+│   └── bullet_builder.py             # 剛体構築補助モジュール
+│
+├── mmd_core/                         # 自作MMDバイナリ/テキスト構文解析パッケージ (MIT)
+│   ├── __init__.py                   # パッケージエクスポート定義
+│   ├── pmx.py                        # PMX 2.0 / 2.1 パーサー & ライター (推奨標準フォーマット)
+│   ├── vmd.py                        # VMD モーションパーサー
+│   ├── vpd.py                        # VPD ポーズパーサー
+│   ├── pmm.py                        # PMM (Polygon Movie Maker) プロジェクト解析
+│   ├── pmd.py                        # PMD (旧形式) パーサー & PMX自動変換
+│   └── x_file.py                     # DirectX (.x) 構文解析器
+│
+├── asset/                            # 辞書データ・設定管理補助モジュール
+│   ├── __init__.py                   # アセット初期化
+│   ├── model_classifier_manager.py   # モデル種別判定・個別指定設定マネージャ
+│   ├── user_dict_manager.py          # ユーザー辞書・マテリアル保護設定管理モジュール
+│   ├── user_dictionary.json          # ユーザー設定永続化ファイル (保護キーワード・カスタム辞書)
+│   ├── bone_dict.py                  # 標準ボーン日英相互変換モジュール (ユーザー辞書連動)
+│   ├── bone_dict.json                # 標準ボーン定義JSON
+│   ├── jaka.py                       # 日本語/中国語ノード名のローマ字変換 & 健全化
+│   ├── jaka_dict.json                # ローマ字変換定義JSON
+│   ├── hik.py                        # HumanIK (HIK) ボーン定義マッピング
+│   └── hik_dict.json                 # HIKボーンマッピング定義JSON
+│
+├── toon/                             # MMD標準共有トゥーンテクスチャ (toon01.bmp〜toon10.bmp)
+│
+├── bullet_engine/                    # MMD本家 Bullet 2.83.7 物理演算エンジン (zlib license)
+│   ├── bin/
+│   │   └── mmd_bullet.dll            # コンパイル済み Bullet 物理エンジンDLL
+│   ├── include/                      # Bullet C++ ヘッダー群
+│   ├── src/                          # Bullet C++ ソース群 & C-API エクスポートラッパー
+│   ├── build_bullet_dll.py           # MSVC / MinGW 自動検出 DLL ビルドスクリプト
+│   ├── bullet_wrapper.py             # ctypes による Bullet DLL Python バインディング
+│   ├── bullet_maya_bridge.py         # Bullet 物理シミュレーション・Maya ベイク制御エンジン
+│   ├── LICENSE                       # Bullet 公式 zlib ライセンス条項
+│   └── README.md                     # Bullet エンジン概要・ビルド手順
+│
+├── cpp_engine/                       # C++ XPBD 物理演算エンジン (MIT)
+│   ├── bin/
+│   │   └── mmd_xpbd.dll              # コンパイル済みXPBD物理エンジンDLL
+│   ├── include/
+│   │   └── xpbd_engine.h             # XPBDエンジンヘッダー
+│   ├── src/
+│   │   └── xpbd_engine.cpp           # XPBDエンジン実装
+│   ├── build_dll.py                  # MSVC / MinGW 自動検出DLLビルドスクリプト
+│   ├── xpbd_wrapper.py               # ctypes による C++ DLL Pythonバインディング
+│   ├── xpbd_visualizer.py            # Maya上のメッシュ・Jointロケーター追従・再吸着
+│   ├── xpbd_maya_bridge.py           # シミュレーションベイク制御エンジン
+│   └── test_xpbd.py                  # XPBDエンジンスタンドアロン単体テスト
+│
+├── mmd_material_plugin/              # MMD専用シェーダー C++ プラグイン (Viewport 2.0 対応)
+│   ├── bin/                          # 各年度版コンパイル済みシェーダープラグイン (.mll)
+│   ├── shaders/                      # DirectX 11 HLSL シェーダーコード
+│   ├── src/                          # C++ ソースコード群
+│   ├── scripts/                      # シェーダー自動セットアップスクリプト
+│   └── CMakeLists.txt                # ビルド定義
+│
+├── mmd_toon_plugin/                  # Viewport 2.0 専用 OGSFX Toonシェーダー C++ プラグイン
+│   ├── bin/                          # コンパイル済みシェーダープラグイン (.mll)
+│   ├── shaders/                      # OGSFX トゥーンシェーダーコード
+│   ├── src/                          # C++ ソースコード群
+│   └── CMakeLists.txt                # ビルド定義
+│
+├── mmd_motion_plugin/                # 高速モーション処理 C++ プラグイン
+│   ├── bin/                          # コンパイル済みモーションプラグイン (.mll)
+│   ├── src/                          # 高速補間・キーフレーム処理ソース群
+│   └── CMakeLists.txt                # ビルド定義
+│
+├── physics_bake_cs/                  # MMD物理演算リアルタイムベイクアプリ (C# / .NET 8 / WPF 3D)
+│   ├── bin/Release/net8.0-windows/   # 実行可能バイナリ群
+│   └── ...                           # ソースコード群
+│
+├── physics_bridge_cs/                # MMD物理演算シミュレーションビューア (C# / .NET 8 / WPF)
+│   ├── bin/Release/net8.0-windows/   # 実行可能バイナリ群
+│   └── ...                           # ソースコード群
+│
+├── pmx_analyzer/                     # PMXモデル詳細解析・一括保存 & ユーザー辞書対話登録パッケージ
+│   ├── __init__.py                   # 解析パッケージエクスポート定義
+│   ├── analyzer_core.py              # 構造解析・未登録漢字抽出
+│   └── user_dict_dialog.py           # 未登録ボーン名対話型登録GUI
+│
+└── docs/                             # 独立技術仕様書群
 ```
 
 ---
@@ -48,14 +151,37 @@ mmd_tools_for_maya/
   - `uninitializePlugin(mobject)`: アンロード時に登録したメニューをクリーンアップします。
   - `show_mmd_window()`: GUIダイアログ（`gui.py`）を起動します。
 
-#### 2. `gui.py` (ユーザーインターフェース)
+#### 2. `ui/` パッケージ (モダン統合ユーザーインターフェース)
 
-- **役割**: Maya 2025（PySide6 / Qt6）および過去バージョン（PySide2 / Qt5）の両方で動作するモダンなダークテーマUIを提供します。
-- **主な特徴とクラス**:
-  - `MmdMayaMainWindow`: メインタブウィンドウ（「MMD → Maya」「モーション (VMD)」「Maya → MMD」「HumanIK 管理」の4タブ構成）。
-  - `ImportTabWidget`: モデルインポート用のオプションUI（スケール、メッシュ分割、ジョイント・モーフ作成、Toonシェーディング等）。
-  - `VmdImportTabWidget`: VMDモーション読み込み専用タブ。適用先モデル選択コンボボックス、ドラッグ＆ドロップ対応、再生範囲自動調整。
-  - `ExecutionLogDialog` & `StreamRedirector`: 重いインポート処理中に進捗ログをリアルタイム表示する専用ダイアログ。
+- **役割**: Maya 2025（PySide6 / Qt6）および過去バージョン（PySide2 / Qt5）の両方で動作するモダンなダークテーマUIを提供します。メインウィンドウ、10個の独立した機能別タブ、および各種専門操作ダイアログへ構造化分割され、保守性と拡張性が大幅に向上しました。
+- **主な構成と各モジュールの役割**:
+  - `ui/gui.py`: メインウィンドウ (`MMDToolsMainWindow` / `MmdMayaMainWindow`)、起動関数 (`show_ui`)、ホットリロード機構、タブ統合。
+  - `ui/gui_style.py`: 全UIコンポーネントで統一されたダークテーマ QSS スタイルシート定義。
+  - `ui/common.py`: Qt互換インポート、Mayaメインウィンドウ取得、および共通進捗ログダイアログ (`ExecutionLogDialog`)。
+  - `ui/tab_*.py` (10個の独立タブ):
+    - `tab_import.py`: モデルインポート（PMX/PMD/X、設定、解析連携）
+    - `tab_easy_import.py`: 初心者向けワンクリック簡単インポート
+    - `tab_vmd.py`: VMDモーション・カメラ・WAV音声インポート（スクロール対応）
+    - `tab_material.py`: シェーダー設定・Toon切り替え・マテリアル保護
+    - `tab_physics.py`: 物理演算設定・ベイク（Bullet / XPBD / 外部新3Dビューア連携）
+    - `tab_export.py`: PMX / VMD / VPD エクスポート機能の一元集約
+    - `tab_hik.py`: HumanIK (HIK) キャラクター定義・コントロールリグ展開
+    - `tab_extra.py`: その他機能（地面影、照明操作、モデル種別判定、表情操作、VPDポーズ適用など）
+    - `tab_plugin.py`: プラグインマネージャ（mll / C++ / C# バイナリ管理）
+    - `tab_cleanup.py`: シーン内 MMD 要素の一括削除・初期化
+  - **専門操作ダイアログ群**:
+    - `ui/dialog_light_control.py`: MMD照明操作ダイアログ（地面影の向きXYZ・RGBカラーのリアルタイム調整）
+    - `ui/dialog_model_classifier.py`: モデル種別判定・個別指定設定ダイアログ（キャラクター、ステージ、スカイドーム）
+    - `ui/dialog_physics_model_select.py`: 物理演算対象モデル選択ダイアログ
+    - `ui/morph_window.py`: 表情・モーフ操作GUI（4分割パネル、タイムスライダー追従、材質モーフ自動連動）
+    - `ui/pmm_dialog.py`: PMMプロジェクト解析ダイアログ (`PmmAnalysisDialog`) およびチェックリスト形式のモデル選択インポート (`PmmModelImportSelectDialog`)
+    - `ui/multi_model_dialog.py`: 複数モデル一括順次インポート (`MultiModelImportDialog`) およびベイク確認ダイアログ
+    - `ui/accessory_dialog.py`: アクセサリ追従アタッチダイアログ
+    - `ui/advanced_dict_dialog.py`: 高度なユーザー辞書・マテリアル保護設定GUI
+    - `ui/user_dict_dialog.py`: 未登録ボーン名検出・対話型辞書登録ダイアログ
+    - `ui/material_protect_dialog.py`: マテリアル保護キーワード管理GUI
+    - `ui/bone_state_export_dialog.py`: ボーン状態・トランスフォーム情報エクスポートGUI
+    - `ui/experimental_dialog.py`: 試験的機能ダイアログ
 
 #### 3. `pmxpaimaya.py` (モデルインポートエンジン)
 
@@ -87,6 +213,8 @@ mmd_tools_for_maya/
 
 #### 7. `mmd_core/` パッケージ (自作データパーサー群)
 
+- **`pmm.py`**:
+  - MikuMikuDance のプロジェクトファイル (`.pmm`) 解析エンジン。解像度・カメラ視野角などのメタデータ抽出、複数モデル境界追従リシンク機構、実体ファイル照合、タイムライン走査によるモーション/ポーズ判定、および旧データ自動判定を提供。
 - **`pmx.py`**:
   - PMX 2.0 / 2.1 仕様に基づくバイナリ解析器。頂点（BDEF1/BDEF2/BDEF4/SDEF/QDEF）、面、テクスチャパス（UTF-8/UTF-16）、マテリアル、ボーン、モーフ（頂点/UV/ボーン/材質）、剛体、ジョイントの読み書きをサポート。
 - **`pmd.py`**:
@@ -96,7 +224,7 @@ mmd_tools_for_maya/
 - **`vmd.py` / `vpd.py`**:
   - カメラ・ボーン・モーフのアニメーションキーフレーム（VMD）およびポーズ設定（VPD）のデータ解析器。
 
-#### 6. `asset/` モジュール (補助ライブラリ)
+#### 8. `asset/` モジュール (補助ライブラリ)
 
 - **`jaka.py`**:
   - MMDモデル特有の日本語（漢字・ひらがな・カタカナ）や中国語（簡体字・繁体字）のボーン名・マテリアル名を、Maya内部で安全に扱える英数字（ヘボン式ローマ字 / ピンイン）に変換し、不正文字によるノード作成失敗を防止。
@@ -119,7 +247,7 @@ MMD（MikuMikuDance）のセル調アニメ陰影（Toon）は、通常のテク
 ライト方向ベクトル L と 法線 N の内積 (N・L: 光の当たり具合) ──> Toon画像のV座標 ──> 影の色
 ```
 
-### なぜ「V Coord（V座標）」に接続するのか？
+### 「V Coord（V座標）」に接続する
 
 1. **UV座標軸の定義**:
    - 3Dグラフィックスにおけるテクスチャ座標（UV）では、**U軸が横方向（水平）**、**V軸が縦方向（垂直）** を表します。
@@ -182,10 +310,10 @@ MMD Tools for Maya では、Mayaのリアルタイムビューポート（Viewpo
    - これにより、MMD特有の「一定以上の角度になると急激に影が落ちる」アニメ調のセル境界が形成されます。
 4. **Toon `file` ノード**:
    - メッシュのポリゴンUV（`place2dTexture`）から切り離し、`uCoord` を `0.5` 固定、`vCoord` に `setRange.outValueX` を接続します。
-   - これにより、**ポリゴンのUV展開形状に起因する汚れや帯の焼き付きが100%防止**されます。
+   - これにより、**ポリゴンのUV展開形状に起因する汚れや帯の焼き付きが防止**されます。
 5. **`multiplyDivide` (カラー乗算ノード)**:
    - メインカラー（基本テクスチャ × スフィアマップ）に Toon ファイルノードの `outColor` を乗算（Multiply）します。
-   - 光が当たっている面は Toon の白（1.0, 1.0, 1.0）が掛かるため本来のテクスチャが100%美しく発色し、影の面には Toon の暗部色が乗算されてセル影が落ちます。
+   - 光が当たっている面は Toon の白（1.0, 1.0, 1.0）が掛かるため本来のテクスチャが美しく発色し、影の面には Toon の暗部色が乗算されてセル影が落ちます。
 
 ---
 
@@ -226,15 +354,48 @@ MMD Tools for Maya では、インポート時に以下のAPIを実行し、ト�
 mc.colorManagementPrefs(edit=True, viewTransformName='Un-tone-mapped (sRGB)')
 ```
 
-これにより、MMDの元テクスチャが持っている鮮やかな発色が100%そのままビューポートに再現されます。
+これにより、MMDの元テクスチャが持っている鮮やかな発色がそのままビューポートに再現されます。
 
-### MMD標準ライト（Directional & Ambient）
+### MMD標準ライティング・影システム
 
-Mayaのデフォルトライトは暗く、影が強く落ちすぎるため、MMDの描画環境と同等のライトをワンクリックで自動構築します：
+MMD特有の陰影と接地感をMaya上で再現するため、専用のライティング・セルフシャドウ機構を構築します。
 
-- **平行光源 (`directionalLight`)**: 強度 `1.0`（メインの太陽光・キーライト）
-- **環境光 (`ambientLight`)**: 強度 `0.55`、アンビエントシェード `0.25`（影が真っ黒に潰れるのを防止）
-- シーン内にすでにライトが存在する場合は二重生成を回避する安全設計となっています。
+#### MMD標準ライト（Directional & Ambient）
+- **平行光源 (`directionalLight`)**:
+  - メインの太陽光・キーライト（光の色: RGB 各154、強度 `1.0`）。
+  - デフォルトの向きは MMD 本家の標準値（XYZ: `0.50, -1.00, -0.50`）に初期化され、右手奥から手前左下へ向かう自然な影を形成します。
+- **環境光 (`ambientLight`)**:
+  - 強度 `0.55`、アンビエントシェード `0.25`（暗部が黒潰れせず、Toon陰影が鮮明に見えるよう光を補正）。
+
+#### 本家MMDセルフシャドウ方式による地面影落ちアーキテクチャ
+MMD本家のセルフシャドウ・地面影描画を再現するため、専用のシャドウキャッチャー構造と属性制御を採用しています。
+
+- **地面影受けプレーン (`mmd_ground_shadow_plane`)**:
+  - `create_mmd_ground_shadow()` により、グループノード `mmd_ground_shadow_grp` 配下に自動生成。
+  - Z-fighting（床面との重なりによるチラつき）を抑止するため、垂直位置は微小オフセット $Y = 0.05$ に配置。
+- **シャドウキャッチャーシェーダー (`mmd_ground_shadow_shd`)**:
+  - 黒ベース（RGB: 0, 0, 0）のマテリアルに、影の受光量に応じた透明度（Transparency）制御を適用。
+  - プレーン自体の面色は見えず、落ちてくる影のみを自然な濃度（標準0.5）で描画。
+- **影の送受信属性制御**:
+  - キャラクターメッシュおよびステージメッシュ: `receiveShadows = True`（自身の影や他オブジェクトからの影を綺麗に受ける）。
+  - 地面影プレーン自身: `castsShadows = False`（影プレーン自身が影を落とすことによる無駄な自己遮蔽やデプスマップ解像度低下を防止）。
+- **ステージモデル検出による自動切り替え機構 (`setup_mmd_ground_shadow_mode`)**:
+  - シーン内にステージモデル（またはスカイドーム）がインポートされた場合、地面影プレーンは自動的に非表示（`visibility = 0`）に切り替わります。これにより、キャラクターの影はステージモデルの床面メッシュ自体へ直接落ちるようになります。
+  - キャラクターのみのシーンでは、地面影プレーンが自動で表示（`visibility = 1`）され、Y=0の床面に自然な接地影が形成されます。
+
+#### MMD照明操作GUI (`dialog_light_control.py`)
+MMD本家の「照明操作」パネルの操作感を再現した専用ダイアログです：
+- **カラー調整**: 赤・緑・青（各0〜255）のスライダーにより、平行光源の光色をリアルタイムに変更。
+- **影の向き調整**:
+  - X, Y, Z スライダーにより、影が伸びる方向（光の到来角度）を自由に調整。
+  - 初期化ボタンを押すことで、MMD本家推奨の基本値（X: 0.50, Y: -1.00, Z: -0.50）へ即座に復帰。
+- **登録ボタン**: 現在の照明角度と色をシーン内へ確定登録。
+
+#### モデル種別判定マネージャ (`asset/model_classifier_manager.py`)
+シーン内の各PMXモデルが「キャラクター」「ステージ」「スカイドーム」のいずれであるかを自動判定・管理します：
+- ボーン構造、剛体数、バウンディングボックスの大きさ、および特定キーワードから種別を自動推定。
+- 「その他機能」タブの「モデル種別判定・個別指定設定」ダイアログ（`dialog_model_classifier.py`）から、ユーザーが手動でモデル種別を個別設定・変更可能。
+- 設定内容はモデルノードのメタデータ（`mmdModelType`）および設定ファイルに永続化され、地面影プレーンの表示切り替えやライティング適正化に活用されます。
 
 ---
 
@@ -296,7 +457,7 @@ MMDの回転クォータニオン $(q_x, q_y, q_z, q_w)$ は左手系基準で�
 
 ### ボーン構造メタデータによる強制適用アーキテクチャ
 
-MMD Tools for Maya では以下のアーキテクチャにより、**モデル名に依存せず、現在シーン内にあるモデルへ強制的に適用**します：
+MMD Tools for Maya では以下のアーキテクチャにより、**モデル名に依存せず、現在シーン内にあるモデルへ適用**します：
 
 - **モデルインポート時のメタデータ埋め込み (`pmxpaimaya.py`)**:
   - モデルインポート時に、日本語ボーン名と対応するMayaノードのフルDAGパスの辞書テーブルを作成。
@@ -307,7 +468,7 @@ MMD Tools for Maya では以下のアーキテクチャにより、**モデル�
     - `"下半身"` → `"|ModelRoot|...|waist|kahanshin"`
 - **名前の自動逆引き解決 (`vmdpaimaya.py`)**:
   - Maya内部でノード名がローマ字化（`migi_ude`）されていても、日本語名（「右腕」）をキーとして一意のノードパスを直接取得。
-  - モデル選択コンボボックスで指定されたターゲットモデル、またはシーン内で検出されたMMDモデルに対して無条件にキーフレームを適用。
+  - モデル選択コンボボックスで指定されたターゲットモデル、またはシーン内で検出されたMMDモデルに対してキーフレームを適用。
 
 ---
 
@@ -318,7 +479,7 @@ MMD Tools for Maya では以下のアーキテクチャにより、**モデル�
 MMD Tools for Maya では以下の2重保護を実装しています：
 
 - **フルDAGパス（ロングネーム）特定**:
-  - `_resolve_full_joint_path()` により、指定されたモデルの階層ツリー下にあるノードをパイプ区切りフルパス（`|Root|Parent|Child`）で特定し、シーン内の別モデルと同名であっても絶対に競合しない安全性を確立。
+  - `_resolve_full_joint_path()` により、指定されたモデルの階層ツリー下にあるノードをパイプ区切りフルパス（`|Root|Parent|Child`）で特定し、シーン内の別モデルと同名であっても競合しない安全性を確立。
 - **ボーン・キー単位の個別例外保護**:
   - キーフレーム設定ループを個別 `try-except` で保護。万が一未知の特殊ボーンで例外が発生しても、体・腕・足・頭・指などの全ボーン処理が途中で停止せず、最後まで確実にキーフレームを完遂します。
 
@@ -334,7 +495,7 @@ MMDのダンスや歩行アニメーションでは、太ももやひざのFKボ
 
 #### Maya IKハンドルの自動構築 (`setup_mmd_ik`)
 
-MMD Tools for Maya は、モデルインポート時およびモーション適用時に、以下のIKシステムを全自動で構築します：
+MMD Tools for Maya は、モデルインポート時およびモーション適用時に、以下のIKシステムを自動で構築します：
 
 - **脚部IK (足 → ひざ → 足首)**:
   - `startJoint` を「足」、`endEffector` を「足首」として、回転面ソルバー（`ikRPsolver`）による `ikHandle` を生成。
@@ -354,7 +515,7 @@ MMD Tools for Maya は、モデルインポート時およびモーション適�
 
 MMDのカメラは、固定位置に配置された通常のカメラとは異なり、**「注視点（Target: XYZ）」を中心として「公転回転（RX, RY, RZ）」し、そこから「距離（Distance: 通常負値）」離れた位置から被写体を捉える**というオービット構造を採用しています。
 
-MMD Tools for Maya では、この構造をMaya上で寸分の狂いもなく再現するため、以下の2階層カメラリグを自動生成します：
+MMD Tools for Maya では、この構造をMaya上で再現するため、以下の2階層カメラリグを自動生成します：
 
 ```text
 MMD_Camera_Aim (注視点ロケータ: Transform)
@@ -369,7 +530,9 @@ MMD_Camera_Aim (注視点ロケータ: Transform)
 ```
 
 #### 視野角（FOV）から焦点距離（focalLength）への換算理論
+
 MMDのカメラキーフレームには視野角 $\text{FOV}$（度数法）が記録されています。Mayaのカメラシェイプではミリ単位の焦点距離 `focalLength` で制御されるため、以下の光学計算式を用いて毎フレームの焦点距離をキーフレーム設定します：
+
 - $\text{fovRad} = \text{radians}(\text{FOV})$
 - $\text{focalLength} = \frac{\text{verticalFilmAperture} \times 25.4}{2.0 \times \tan\left(\frac{\text{fovRad}}{2.0}\right)}$
 - これにより、注視点を中心としたカメラワークの回転・ドリーイン/アウト・ズームが同期します。
@@ -431,12 +594,15 @@ MMDモーションは制作環境や制作者によって使用されるボー�
 MMDモデルとモーションの間で生じる「足や腰が動かない」現象を解決するため、`vmdpaimaya.py` に以下の多重マッチングアルゴリズムを実装しています：
 
 #### 全角・半角英数（NFKC）の自動正規化
+
 VMDモーション内で全角（`左足ＩＫ`）と半角（`左足IK`）が混在していても、`unicodedata.normalize('NFKC')` を通して統一し、空白文字（スペース）を除去して照合します。
 
 #### ボーンエイリアス（同義語）辞書
+
 MMD特有の表記揺れ（`左足IK` ↔ `左足ＩＫ` ↔ `左足IK親`、`全ての親` ↔ `すべての親` ↔ `操作中心` 等）をテーブル化し、双方向から検索・解決します。
 
 #### 準標準ボーンのフォールバック合成
+
 - **グルーブ → センター**: モーションに「グルーブ」があるのにモデルに存在しない場合、自動的に「センター」ジョイントへ移動・回転を合成。
 - **腰 → 下半身**: モーションに「腰」があるのにモデルに存在しない場合、自動的に「下半身」ジョイントへ回転を適用。
 - **足IK親 → 足IK**: モーションに「足IK親」があるのにモデルに存在しない場合、足IKジョイントへ位置オフセットを合算。
@@ -447,7 +613,7 @@ MMD特有の表記揺れ（`左足IK` ↔ `左足ＩＫ` ↔ `左足IK親`、`�
 ### MMDクリーンアップ機能 (CleanupTabWidget)
 
 制作やアニメーション検証を繰り返す際、シーン内に残った古いノードやマテリアルが蓄積してシーンが重くなるのを防ぐため、専用タブ **「MMD削除 (クリーンアップ)」**（`CleanupTabWidget`）を提供しています。
-UIは「**削除対象モデルの選択**」と「**全削除ボタン**」のみで構成されたシンプルな設計となっており、迷わずワンクリックで確実なクリーンアップを実行できます：
+UIは「**削除対象モデルの選択**」と「**全削除ボタン**」のみで構成されたシンプルな設計となっており、迷わずワンクリックでクリーンアップを実行できます：
 
 ```python
 def delete_mmd_scene_elements(
@@ -471,7 +637,7 @@ def delete_mmd_scene_elements(
 - **物理演算ノードの一括クリーンアップ**:
   - 剛体・Joint可視化ノード（`MMD_RigidBody_Joint_Visualizers`）やBullet物理リグ（`MMD_Bullet_Physics_Rig`）を一括検出して削除。
 - **MMDカメラ・オーディオ・ライトの一括消去**:
-  - `MMD_Camera_Aim` / `MMD_Camera`、BGM音声ノード、および照明グループ **`mmd_lighting_grp`** を漏れなく消去。
+  - `MMD_Camera_Aim` / `MMD_Camera`、BGM音声ノード、および照明グループ **`mmd_lighting_grp`** を消去。
 - **Maya標準「未使用ノードの削除」の自動実行**:
   - `mel.eval('MLdeleteUnused;')`（Mayaの Delete Unused Nodes）を内部実行。
   - 不要になったシェーダー（Blinn、StandardSurface）、Toonユーティリティノード（`multiplyDivide`, `samplerInfo`, `setRange`）、およびテクスチャ `file` ノードを一括クリーンアップし、シーンを常に軽量・清潔に保ちます。
@@ -496,19 +662,18 @@ def delete_mmd_scene_elements(
 ### GUIアーキテクチャ & レイアウト設計
 
 - **ウィンドウサイズ**:
-  - デフォルトサイズ: **750 × 780 px** (最小サイズ: 680 × 600 px)
-  - 高解像度ディスプレイでもゆったりと文字が読めるよう、全体フォントサイズを 14〜16px へ底上げ調整。
-- **タブ構成（全5タブ）**:
+  - デフォルトサイズ: **980 × 820 px** (最小サイズ: 480 × 360 px)
+  - 高解像度ディスプレイでもゆったりと文字が読めるよう、フォントサイズを最適化。
+- **タブ構成**:
+  - `プラグイン管理`: C++高速化、物理演算、シェーダープラグインのロード状態確認・自動ロード設定
   - `MMD → Maya (インポート)`: PMX / PMD / DirectX (.x) モデル読み込み
-  - `モーション (VMD)`: キャラクタ＆カメラモーションの個別・一括インポート、VPDポーズ読み込み
-  - `Maya → MMD (エクスポート)`: エクスポート関連機能を一元集約した統合タブ
-    - モデルデータ (.pmx) エクスポート（試験的機能）
-    - モーションデータ (.vmd) エクスポート（試験的機能）
-    - ポーズデータ (.vpd) エクスポート（試験的機能）
-  - `HumanIK 管理`: HIK定義およびコントロールリグ構築
-  - `MMD削除 (クリーンアップ)`: 対象モデル選択、各削除オプション、アニメーション初期化および全削除
+  - `モーション (VMD)`: キャラクタ＆カメラモーションの個別・一括インポート
+  - `物理演算ベイク`: 物理シミュレーションおよびベイク
+  - `物理演算ベイクGUI`: WPF3Dリアルタイム物理ビューア連携ベイク
+  - `その他機能`: 共通設定、マテリアル保護、辞書設定、試験的機能
+  - `MMD削除 (クリーンアップ)`: 対象モデル選択、各削除オプション、全削除
 - **縦長レイアウトの解消と操作性向上**:
-  - 設定項目が増加したタブ（モーションタブ・エクスポートタブ等）に `QScrollArea` を導入。
+  - 設定項目が多いタブに `QScrollArea` を導入。
   - ウィンドウが縦に伸びすぎて操作しづらくなる現象を解消し、コンパクトな画面領域内でも全設定項目へ快適にアクセス可能。
 
 ---
@@ -564,13 +729,15 @@ def delete_mmd_scene_elements(
 ## 10. PMD剛体適正化および透過素材モーフ制御
 
 ### PMDからPMXへの剛体ワールド座標自動展開
+
 - **ボーン相対位置からワールド座標への変換**:
   - PMD形式の剛体データは関連ボーン原点からの相対位置（ローカル座標）として記録されているため、PMX形式へ変換する際に関連ボーンのワールド位置を加算してワールド座標系を構築。
-  - これにより、頭髪やスカート、腕部などの剛体が足元（原点）に密集する不整合を根本解決。
+  - これにより、頭髪やスカート、腕部などの剛体が足元（原点）に密集する不整合を解決。
 - **PMD材質アルファ異常値の自動補正**:
   - 一部PMDモデルに見られるアルファ値1.0超過（99.0等）のデータを0.0〜1.0へ自動正規化。
 
 ### 透過素材モーフ（PMX・PMD共通）の表示制御
+
 - **基本カラーの維持**:
   - 初期アルファが0.05以下の材質に対しても、ディフューズ色（`diffuse_color`）を黒色で上書きせず材質本来の色を保持。
 - **各種シェーダー（mmdMaterial等）へのアトリビュート接続網羅**:
@@ -581,6 +748,82 @@ def delete_mmd_scene_elements(
 - **ポーズデータ適用UIの再配置**:
   - 「モーション (VMD)」タブの縦長解消および操作性向上のため、VPDポーズデータ適用UIを「その他機能」タブへ移動・集約。
 
+---
 
+## 11. UIモジュール分割リファクタリングとアーキテクチャ
 
+### 背景と目的
 
+初期開発において単一ファイルに集約されていた `ui/gui.py` は、機能追加に伴い **約 7,900 行 (7,899行)** にまで肥大化していました。これにより以下の課題が生じていました：
+
+- コードの見通しや検索性の低下
+- 機能修正時の影響範囲が広く、インポート漏れなどのリスクが増大
+- モジュール動的解決やモデル一覧取得などの重複コードの散在
+
+これらを解消するため、**既存の挙動・UIデザイン・外部スクリプト向けの後方互換性を維持したまま**、機能ごとに独立した15のモジュールへ分割・再設計しました（`ui/gui.py` 本体は 247 行へスリム化）。
+
+### モジュール分割構成と設計思想
+
+```text
+ui/
+├── __init__.py                  # パッケージ公開定義
+├── gui_style.py                 # QSSスタイルシート定義
+├── common.py                    # Qt互換インポート、Maya窓口、ExecutionLogDialog、共通ヘルパー
+│
+├── # --- 独立ダイアログ群 ---
+├── pmm_dialog.py                # PmmDropArea, PmmModelImportSelectDialog, PmmAnalysisDialog
+├── multi_model_dialog.py        # MultiModelLogDialog, MultiModelDropTableWidget, MultiModelImportDialog, MultiModelPhysicsBakeDialog
+├── accessory_dialog.py          # AccessoryAttachDialog
+├── experimental_dialog.py       # ExperimentalFeaturesDialog
+├── morph_window.py              # 表情操作パネル
+├── user_dict_dialog.py          # ユーザー辞書設定ダイアログ
+├── advanced_dict_dialog.py      # 詳細辞書ダイアログ
+├── material_protect_dialog.py   # マテリアル保護設定ダイアログ
+├── bone_state_export_dialog.py  # ボーン状態JSONエクスポートダイアログ
+│
+├── # --- メインタブ・機能パネル群 ---
+├── tab_plugin.py                # PluginTabWidget
+├── tab_import.py                # ImportTabWidget
+├── tab_vmd.py                   # VmdImportTabWidget
+├── tab_physics.py               # PhysicsTabWidget, PhysicsGuiTabWidget
+├── tab_extra.py                 # ExtraTabWidget
+├── tab_cleanup.py               # CleanupTabWidget
+├── tab_export.py                # ExportTabWidget, ExportDialog
+├── tab_material.py              # MaterialTabWidget, MaterialDialog
+├── tab_hik.py                   # HikTabWidget, HikWindow, show_hik_window
+│
+└── gui.py                       # MmdMayaMainWindow, show_ui, close_existing_ui, 後方互換再エクスポート
+```
+
+- **共通基盤の一元化 (`ui/common.py`)**:
+  - `PySide6`（Maya 2025+）と `PySide2`（Maya 2024以前）の全ウィジェット・Core・Guiクラスの互換インポートを1箇所に集約。
+  - `ExecutionLogDialog`（プログレスバー・推定残り時間付きログウィンドウ）や `get_maya_main_window`、`restore_viewport_lighting` などの共通リソースを提供。
+  - `populate_mmd_model_combo` により、シーン内のMMDモデル一覧取得・コンボボックス反映ロジックを一元化。
+- **独立ダイアログ群のモジュール化**:
+  - `ui/pmm_dialog.py`: PMMプロジェクト解析ダイアログ (`PmmAnalysisDialog`)、ドロップゾーン (`PmmDropArea`)、およびモデル選択インポートダイアログ (`PmmModelImportSelectDialog`) を集約。
+  - `ui/multi_model_dialog.py`: 複数モデル順次インポート (`MultiModelImportDialog`) およびベイク確認ダイアログ (`MultiModelPhysicsBakeDialog`) を集約。
+  - `ui/accessory_dialog.py`: アクセサリ追従アタッチ (`AccessoryAttachDialog`)。
+  - `ui/experimental_dialog.py`: 開発中・試験的機能の一覧ダイアログ (`ExperimentalFeaturesDialog`)。
+- **機能タブ群の独立化 (`ui/tab_*.py`)**:
+  - プラグイン管理、モデルインポート、モーション、物理演算（XPBD / Bullet）、MMD削除、エクスポート、シェーダー（mmdMaterial）、HumanIK、その他機能の各タブを個別のファイルに分離。
+  - 最もコード規模の大きかった物理演算タブ（約 1,600 行）も `ui/tab_physics.py` として独立管理。
+- **非循環グラフ（DAG）による依存性管理**:
+  - 「`common.py` ← `独立ダイアログ群` ← `各機能タブ群` ← `gui.py`」という単方向の依存関係を確立し、モジュール間の循環参照（Circular Import）を排除。
+- **後方互換性とホットリロード機構 (`ui/gui.py`)**:
+  - 外部スクリプトやシェルフから `from ui.gui import MmdMayaMainWindow, show_ui, ImportTabWidget, Natanglak` のように直接参照されても正常に機能するよう、全クラスを `ui.gui` の名前空間へ再エクスポート。
+  - `show_ui()` 実行時に `_reload_ui_submodules()` を呼び出し、分割された全サブモジュールを依存順序に従って `importlib.reload` し、最新のクラス定義を自動反映するホットリロード機構を導入。
+
+### PMMプロジェクト解析とモデル選択インポート機能
+
+`ui/pmm_dialog.py` と `mmd_core/pmm.py` の連携により、MikuMikuDance のプロジェクトファイル (`.pmm`) からモデルを抽出し、Mayaシーンへ安全にインポートするパイプラインを構築しました：
+
+- **プロジェクト解析とアセット照合**:
+  - PMMバイナリからプロジェクトメタデータ（解像度、カメラ視野角）および参照アセット（モデル、アクセサリ、音声）を抽出。
+  - PC上の実体ファイルとの突合判定（一致、部分一致、不一致、未検出）や、タイムライン走査によるモーション・ポーズ判定を実施。
+  - 重複する未検出アイテムを過去の残骸データ（旧データ）として自動判定し、「ファイルが存在しない」チェックボックスによる表示切り替えをサポート。
+- **チェックリスト形式のインポート選択ダイアログ**:
+  - 実在するモデルのみ初期状態でチェックONとし、ユーザーが必要なモデルを選択して一括インポート可能。
+- **PMD自動変換連携**:
+  - モデル形式が旧形式の PMD (`.pmd`) である場合、既存の `converters/pmd2pmx.py` を呼び出して自動的に PMX へ変換し、その後にMayaへインポート。
+- **グループ化と二重トランスフォーム防止**:
+  - インポート前後のノード差分から各モデルを `{モデル名}_grp` にグループ化し、メッシュの `inheritsTransform` を無効化して座標ずれを防止。

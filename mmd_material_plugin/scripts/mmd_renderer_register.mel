@@ -1,0 +1,80 @@
+// ====================================================================
+// MMD独自レンダラー (MMD Renderer) Maya登録用 MELスクリプト
+// Render View および Render Settings (レンダリング設定) への統合
+// ====================================================================
+
+// Render View ウィンドウからのレンダリング実行プロシージャ
+global proc mmdRenderInvokeProc(int $width, int $height, int $doShadows, int $doGlow, string $camera, string $option)
+{
+    // カメラ未指定時の安全解決
+    if ($camera == "")
+    {
+        string $panel = `getPanel -withFocus`;
+        if (`getPanel -typeOf $panel` == "modelPanel")
+        {
+            $camera = `modelPanel -query -camera $panel`;
+        }
+        else
+        {
+            $camera = "persp";
+        }
+    }
+
+    // 解像度未指定時はシーンのデフォルト解像度を取得
+    if ($width <= 0)
+    {
+        $width = `getAttr "defaultResolution.width"`;
+    }
+    if ($height <= 0)
+    {
+        $height = `getAttr "defaultResolution.height"`;
+    }
+
+    print("[MMD Renderer] Starting render: camera=" + $camera + ", resolution=" + $width + "x" + $height + "\n");
+    mmdRender -w $width -h $height -cam $camera;
+}
+
+// バッチレンダリング実行プロシージャ
+global proc mmdBatchRenderInvokeProc(string $option)
+{
+    int $w = `getAttr "defaultResolution.width"`;
+    int $h = `getAttr "defaultResolution.height"`;
+    mmdRender -w $w -h $h -b true;
+}
+
+// MMD独自レンダラーの Maya 登録プロシージャ
+global proc mmdRenderer_Register()
+{
+    // 既存登録がある場合は安全に一旦解除
+    mmdRenderer_Unregister();
+
+    // renderer コマンドによる「MMD Renderer」の登録
+    if (!`renderer -exists "mmdRenderer"`)
+    {
+        renderer
+            -rendererUIName "MMD Renderer"
+            -renderProcedure "mmdRenderInvokeProc"
+            -batchRenderProcedure "mmdBatchRenderInvokeProc"
+            -commandRenderProcedure "mmdBatchRenderInvokeProc"
+            "mmdRenderer";
+
+        // Render Settings の共通タブ（Common）を追加
+        renderer -edit -addGlobalsTab "Common"
+            "createMayaSoftwareCommonGlobalsTab"
+            "updateMayaSoftwareCommonGlobalsTab"
+            "mmdRenderer";
+
+        print("[MMD Renderer] Registered MMD Renderer to Render Settings.\n");
+    }
+}
+
+// MMD独自レンダラーの登録解除プロシージャ
+global proc mmdRenderer_Unregister()
+{
+    if (`renderer -exists "mmdRenderer"`)
+    {
+        renderer -unregisterRenderer "mmdRenderer";
+        print("[MMD Renderer] Unregistered MMD Renderer.\n");
+    }
+}
+

@@ -9,24 +9,25 @@
 
 ---
 
-## 1. 全体パイプラインの流れ
+## 処理パイプラインの概要
 
-本ツールは、モデルの読み込みからアニメーション、物理演算の焼き付け（ベイク）まで、以下の流れでスムーズに処理を進めます。
+本ツールは、モデルの読み込みからアニメーション、物理演算の焼き付け（ベイク）、およびレンダーオーバーライドによる描画まで、以下の流れでスムーズに処理を進めます。
 
 ```mermaid
 flowchart TD
-    A["① PMX モデルファイルの指定"] --> B["② モデルの自動組み立て<br>(ボーン・メッシュ・ウェイト)"]
-    B --> C["③ 専用シェーダーの適用<br>(トゥーン影・スフィア・輪郭線)"]
-    C --> D["④ 表情・材質モーフの接続<br>(目・眉・口・チーク・服off)"]
-    D --> E["⑤ VMD ダンスモーション読み込み<br>(なめらかなキーフレーム展開)"]
-    E --> F["⑥ 剛体・Joint の自動配置<br>(髪・スカート等の物理骨組み)"]
-    F --> G["⑦ リアルタイム物理ベイク<br>(外部高速エンジン連携)"]
-    G --> H["Maya タイムラインで完成アニメーション再生"]
+    A["PMX モデルファイルの指定"] --> B["モデルの自動組み立て<br>(ボーン・メッシュ・ウェイト)"]
+    B --> C["専用シェーダーの適用<br>(mmdMaterial / mmdToonShader)"]
+    C --> D["表情・材質モーフの接続<br>(目・眉・口・チーク・服off)"]
+    D --> E["VMD ダンスモーション読み込み<br>(なめらかなキーフレーム展開)"]
+    E --> F["剛体・Joint の自動配置<br>(髪・スカート等の物理骨組み)"]
+    F --> G["リアルタイム物理ベイク<br>(外部高速エンジン連携)"]
+    G --> H["MMD Viewport Renderer による描画<br>(同一メッシュ輪郭線・白背景表示)"]
+    H --> I["Maya タイムラインでのアニメーション再生・Render View レンダリング"]
 ```
 
 ---
 
-## 2. モデル（PMX）のインポートと組み立て
+## モデル（PMX）のインポートと組み立て
 
 PMX ファイルを読み込むと、Maya の中に「骨（ボーン）」「外見（メッシュ）」「骨と皮膚をつなぐ情報（ウェイト）」が順番に自動構築されます。
 
@@ -60,13 +61,16 @@ graph LR
 
 > [!TIP]
 > **詳しい仕様や数式・スキニングアルゴリズムはこちらをご覧ください:**  
-> [model_import_specification.md](model_import_specification.md)
+> [pmx_model_import_specification.md](pmx_model_import_specification.md) (PMX仕様)  
+> [pmd_model_import_specification.md](pmd_model_import_specification.md) (PMD仕様)  
+> [x_model_import_specification.md](x_model_import_specification.md) (.x仕様)  
+> [pmx-pmd-x_specification.md](pmx-pmd-x_specification.md) (共通構築仕様・フロー図)
 
 ---
 
-## 3. 表情モーフと材質モーフの仕組み
+## 表情モーフと材質モーフの仕組み
 
-キャラクターの豊かな感情表現やパーツの切り替えは、「頂点モーフ」と「材質モーフ」の2つの仕組みで再現されます。
+キャラクターの豊かな感情表現やパーツの切り替えは、「頂点モーフ」と「材質モーフ」の仕組みで再現されます。
 
 ```mermaid
 graph TD
@@ -91,35 +95,35 @@ graph TD
 
 > [!TIP]
 > **詳しい仕様やモーフ計算・属性接続はこちらをご覧ください:**  
-> [model_import_specification.md](model_import_specification.md)
+> [pmx_model_import_specification.md](pmx_model_import_specification.md) (モーフ直接書き込み・材質モーフ)
 
 ---
 
-## 4. MMD専用シェーダー（見た目の再現）
+## MMD専用シェーダー（質感と陰影の再現）
 
-Maya にモデルを読み込んだ際、通常の CG シェーダーのままだと「白飛びする」「暗すぎる」「アニメ調に見えない」といった現象が発生します。本ツールでは、MMD 専用の Viewport 2.0 シェーダープラグインを用いて本家に近い見た目を再現します。
+Maya にモデルを読み込んだ際、通常の CG シェーダーのままだと「白飛びする」「暗すぎる」「アニメ調に見えない」といった現象が発生します。本ツールでは、MMD 専用の C++ プラグイン（`mmd_material.mll`）が提供する 2 種類のシェーディングノードを用いて本家に近い見た目を再現します。
 
-- **MMD Toon Shader（`mmd_toon_shader.mll`）**: インポート時の標準マテリアルです。OGSFX 形式の C++ シェーダーノード（`mmdToonShader`）で、トゥーン・スフィア・セルフシャドウを MMD の計算式に沿って合成します。
-- **MMD Material（`mmd_material.mll`）**: もう一つの MMD 専用シェーダーノード（`mmdMaterial`）で、マテリアル種別の選択で切り替えられます。
+- **MMD Toon Shader (`mmdToonShader`)**:
+  インポート時の標準マテリアルです。OGSFX 形式の C++ シェーダーノードで、トゥーン陰影・スフィアマップ・セルフシャドウを MMD 本家の計算モデルに沿って合成します。
+- **MMD Material (`mmdMaterial`)**:
+  Maya のフラグメントグラフ（`mayaPhongSurface`）を活用したマテリアルノードで、スフィアマップや MMD 固有の反射パラメータを軽快に描画します。
 
 ```mermaid
 graph TD
     subgraph レイヤー構造のイメージ
-        Layer1["① 基本テクスチャ<br>(服や肌の元のイラスト・模様)"]
-        Layer2["② トゥーン影 (Toon)<br>(セルアニメ調のハッキリした影)"]
-        Layer3["③ スフィアマップ (Sphere)<br>(金属や布のツヤ・光沢の反射)"]
-        Layer4["④ アウトライン (輪郭線)<br>(アニメのような外枠の線)"]
+        Layer1["基本テクスチャ<br>(服や肌の元のイラスト・模様)"]
+        Layer2["トゥーン影 (Toon)<br>(セルアニメ調のハッキリした影)"]
+        Layer3["スフィアマップ (Sphere)<br>(金属や布のツヤ・光沢の反射)"]
     end
 
     Layer1 --> Combine["シェーダーで重ね合わせ合成"]
     Layer2 --> Combine
     Layer3 --> Combine
-    Layer4 --> Combine
     Combine --> Result["MMD本家そのままの生き生きとしたセル調の質感"]
 ```
 
 - **トゥーン影**: 光が当たっている面と影になる面を段階的に塗り分け、アニメ調のくっきりした陰影を作り出します。
-- **スフィアマップ**: 視線に合わせてハイライトや光沢がキラリと動く効果を加えます。
+- **スフィアマップ**: 視線に合わせてハイライトや光沢が動く効果を加えます。
 - **二重構造の透過**: 髪の毛の下から透ける眉毛や、薄いベール、頬のチークなどが黒ずんだりチラついたりせず、自然なグラデーションで綺麗に透き通るよう設計されています。
 - **顔透過メッシュの受光遮断**: チークや涙などの透過板ポリゴンが不要な光や影を拾って白枠線や四角い影が浮き出ないよう自動で最適化します。
 
@@ -128,12 +132,77 @@ graph TD
 > 材質モーフ（服offや頬染め等）や顔透過メッシュの白枠線抑制は、モデル制作者様によるマテリアルの設計やテクスチャのアルファ構造、法線の向きによって、正しく表示・連動できない場合があります。
 
 > [!TIP]
-> **詳しい仕様やシェーダーの内部構造・HLSLコードはこちらをご覧ください:**  
+> **詳しい仕様やシェーダーの内部構造・数理モデルはこちらをご覧ください:**  
 > [mmd_material_plugin_specification.md](mmd_material_plugin_specification.md)
 
 ---
 
-## 5. ダンスモーション（VMD）とカメラ・音声の適用
+## MMD Viewport Renderer と同一メッシュ輪郭線描画の仕組み
+
+キャラクターの輪郭を縁取る黒いエッジ線（アウトライン）は、以前のような「別メッシュ（`_Edge`）の複製」を行わず、元メッシュ単体から裏面を描画する **同一メッシュ方式（MMD本家構造）** によって実現されています。
+また、これを破綻なく合成するため、独自のレンダーオーバーライド（`MMDRenderOverride`）が描画順序を制御します。
+
+```mermaid
+graph TD
+    subgraph MMD Viewport Renderer パイプライン
+        Op1["背景クリア<br>(白背景 RGB:1.0 & 深度:1.0)"]
+        Op2["エッジ描画パス (MMDEdgeScenePass)<br>(元メッシュ裏面を法線方向に押し出し描画)"]
+        Op3["不透明サーフェス描画<br>(肌や衣装の表面を描いて手前エッジを上書き)"]
+        Op4["透過サーフェス描画 (Object Sorting)<br>(目・眉・透明装飾を奥から手前へブレンド)"]
+        Op5["画面出力<br>(Viewport 表示 / Render View 転送)"]
+    end
+
+    Op1 --> Op2
+    Op2 --> Op3
+    Op3 --> Op4
+    Op4 --> Op5
+    Op5 --> Out["外周に細く均一な輪郭線が残るセル調描画"]
+```
+
+- **同一メッシュ方式（単一ジオメトリ描画）**:
+  シーン内にエッジ専用の余分なメッシュノードを生成しません。元メッシュ単体の頂点データを用い、前面カリング（裏面描画）によって押し出された面を描画するため、リグやスキニングの計算負荷を最小限に抑えます。
+- **材質エッジ焼き込みモジュール (`mmd_edge_bake.py`)**:
+  モデル内の各材質に設定されたエッジ有効フラグ（`edgeEnable`）や太さ（`edgeSize`）を頂点カラーセット `mmd_edge_scale` へ焼き込みます。目・眉・口などエッジを描画しないパーツの除外や、材質ごとの線幅スケールが自動的に反映されます。
+- **Zファイティング（縞模様）および凹面突き抜け防止機構**:
+  ハードウェアラスタライザ深度バイアス（`DepthBias = 500` / `SlopeScaledDepthBias = 1.2f`）および頂点シェーダーでのクリップ空間奥方向深度オフセットにより、腕や脚の側面で発生していた黒い縞模様（Zファイティング）や、スカートの谷間・リボンの凹面での黒い塊突き抜けを防止します。
+- **均一ピクセル線幅制御**:
+  エッジ幅は画面解像度に連動したピクセル単位（既定 `1.5px`）で計算されます。カメラの画角（FOV）や被写体との距離に左右されず、常に均質な輪郭線を保持します。プロジェクション行列要素に対する保護ガードにより画面乱れを防ぎます。
+- **Render View（MMD Renderer / `mmdRender`）オフスクリーン描画**:
+  カラーバッファと深度バッファの双方（2面）を供給し、さらに透過アルゴリズムに Object Sorting（オブジェクトソート方式）を適用することで、Render View によるオフスクリーンレンダリング時でも目や眉などの透過パーツが白く抜けず、肌色の上に美しくアルファ合成されます。
+
+---
+
+## ライティングと本家MMD地面影（接地感の再現）
+
+MMD特有の生き生きとした立体感と接地感を作り出すため、専用の平行光・環境光および地面影（セルフシャドウ）システムが自動構築されます。
+
+```mermaid
+graph TD
+    subgraph ライティング
+        DirLight["平行光源 (Directional Light)<br>光色: RGB(154,154,154)<br>向き: X=0.50, Y=-1.00, Z=-0.50"]
+        AmbLight["環境光 (Ambient Light)<br>暗部の黒潰れを防ぎToon陰影を維持"]
+    end
+
+    subgraph 地面影システム
+        ShadowPlane["地面影受けプレーン (Y=0.05)<br>シャドウキャッチャーシェーダー"]
+        CharMesh["キャラクターメッシュ<br>(影を落とす & 受ける)"]
+        StageMesh["ステージモデル<br>(床面に直接影を受ける)"]
+    end
+
+    DirLight --> CharMesh
+    CharMesh -->|影を落とす| ShadowPlane
+    CharMesh -->|ステージ配置時は自動切替| StageMesh
+```
+
+- **本家MMDセルフシャドウ方式による地面影**:
+  - キャラクターの足元（Y=0.05）に専用の影受けプレーン（`mmd_ground_shadow_plane`）が自動生成されます。シャドウキャッチャーシェーダーにより、床自体の面色は透明のまま、キャラクターのリアルタイム接地影のみが自然な濃さで描画されます。
+  - **ステージモデルとの自動切り替え**: ステージモデルやスカイドームが配置されている場合は、地面影プレーンが自動で非表示になり、ステージ床面自体にキャラクターの影が美しく落ちるよう切り替わります。
+- **MMD照明操作GUI（`dialog_light_control.py`）**:
+  - MMD本家と同様の操作パネルで、光の色（赤・緑・青）や影の伸びる向き（X, Y, Zスライダー）を直感的に操作できます。初期化ボタンにより、いつでも本家推奨の角度（X: 0.50, Y: -1.00, Z: -0.50）へ復帰できます。
+
+---
+
+## ダンスモーション（VMD）とカメラ・音声の適用
 
 MMD のダンスモーション（VMD）を読み込むと、タイムライン上に滑らかなアニメーションキーフレームが展開されます。
 
@@ -157,7 +226,7 @@ graph LR
 
 ---
 
-## 6. 剛体と Joint（物理の骨組み）の構築
+## 剛体と Joint（物理の骨組み）の構築
 
 スカートや長い髪の毛、リボンなどを自然にふわふわと揺らすために、「剛体（当たり判定カプセル）」と「Joint（関節・バネ）」を配置します。
 
@@ -173,7 +242,7 @@ graph TD
         Joint1["Joint (回転バネ)<br>※角度の限界と戻る力を制御"]
         HairCol["髪の剛体<br>※重力や風で揺れる"]
         HairBone["髪のボーン (子)"]
-        
+
         HeadCol --> Joint1
         Joint1 --> HairCol
         HairCol -.->|揺れた結果をボーンへ伝える| HairBone
@@ -190,32 +259,31 @@ graph TD
 
 ---
 
-## 7. 超高速リアルタイム物理ベイクの仕組み
+## 超高速リアルタイム物理ベイクの仕組み
 
-Maya の中で物理シミュレーションを動かすと、1コマ進めるたびに Maya 全体の描画が走るため処理が重くなります。本ツールでは、この計算を **外部の専用アプリ（C# / .NET 8 / Bullet）** に担当させることで高速化しています。
+Maya の中で物理シミュレーションを動かすと、1コマ進めるたびに Maya 画面の再描画が走るため処理が重くなります。本ツールでは、この計算を **外部の専用アプリ（C# / .NET 8 / Bullet）** に担当させることで高速化しています。
 
 - **Bullet のバージョン選択**: 「Bullet 2.75（本家 MMD 採用・挙動再現重視）」と「Bullet 2.83.7（安定性・貫通防止重視）」を GUI から選べます。外部ビューアはバージョンごとに別の実行ファイル（`PhysicsSimulationBakeViewer_275.exe` / `PhysicsSimulationBakeViewer_283.exe`）として用意されています。
 - **複数モデルの順次ベイク**: シーンに複数のモデルがある場合、モデル同士の剛体がぶつかり合わないよう 1 体ずつ独立して計算・ベイクします。
 
 ```mermaid
 sequenceDiagram
-    autonumber
     participant M as Maya (mmd_tools)
     participant B as 外部物理ベイクアプリ (C# / Bullet)
 
-    Note over M, B: 1. 物理の計算を外部の軽い環境で一括実行
+    Note over M, B: 物理の計算を外部の軽い環境で一括実行
     M->>B: モデルとモーションの情報を渡して起動
     B->>B: 超高速に物理シミュレーションを計算<br>(画面でリアルタイムに3D表示)
 
-    Note over M, B: 2. 計算結果だけをリアルタイムに Maya へ転送
+    Note over M, B: 計算結果だけをリアルタイムに Maya へ転送
     loop 毎フレームの揺れデータ
         B-->>M: 「このフレームの髪の毛の角度」を送信 (JSON)
         M->>M: Mayaのボーンにキーフレームを記録 (ベイク)
     end
 
-    Note over M, B: 3. ベイク終了
-    B-->>M: 完了通知
-    M->>M: タイムラインの再生準備完了！
+    Note over M, B: ベイク終了
+    B-->>M: 終了通知
+    M->>M: タイムラインの再生準備終了！
 ```
 
 - **なぜ軽くて速いのか？**: Maya の重い画面描画（高解像度テクスチャや複雑なリグ）から物理計算を切り離し、専用の高速エンジンで計算を行うため、Maya が固まることなくスムーズに処理が進みます。
@@ -228,15 +296,19 @@ sequenceDiagram
 
 ---
 
-## 8. 詳細技術仕様書リンク集
+## 詳細技術仕様書リンク集
 
 本ツールを構成する各技術の詳細な数理モデル、内部アーキテクチャ、ソースコード仕様をご覧になりたい場合は、以下の各専門ドキュメントをご参照ください。
 
 | ドキュメント名 | 概要・専門解説内容 |
 | :--- | :--- |
-| [codebase_architecture_specification.md](codebase_architecture_specification.md) | **コードベース全体構成**: 全ディレクトリ・モジュールの責務と設計原則 |
-| [model_import_specification.md](model_import_specification.md) | **モデルインポート・質感仕様**: PMX構造、SDEFスキニング、材質モーフ連動 |
-| [mmd_material_plugin_specification.md](mmd_material_plugin_specification.md) | **MMD専用シェーダー仕様**: Viewport 2.0 C++ プラグイン、HLSLコード、透過処理 |
+| [codebase_architecture_specification.md](codebase_architecture_specification.md) | **コードベース構成**: 各ディレクトリ・モジュールの責務と設計原則 |
+| [model_import_specification.md](model_import_specification.md) | **モデルインポート総合ポータル**: PMX / PMD / .x 仕様書および共通シーン構築仕様書への案内ハブ |
+| [pmx_model_import_specification.md](pmx_model_import_specification.md) | **PMXモデルインポート仕様**: PMX 2.0/2.1構造、スキニング、モーフ高速直接書き込み、材質モーフ制御 |
+| [pmd_model_import_specification.md](pmd_model_import_specification.md) | **PMDモデルインポート仕様**: PMD構造、剛体拡張、PMD → PMX自動変換パイプライン |
+| [x_model_import_specification.md](x_model_import_specification.md) | **DirectX .xファイル仕様**: トークナイザー、メッシュ・マテリアル抽出、アクセサリアタッチ |
+| [pmx-pmd-x_specification.md](pmx-pmd-x_specification.md) | **共通シーン構築仕様 (フロー図)**: mmd_core ✕ converters連携フロー図、メッシュ・リグ・シェーダー・地面影 |
+| [mmd_material_plugin_specification.md](mmd_material_plugin_specification.md) | **MMD専用シェーダー仕様**: Viewport 2.0 統合プラグイン（mmd_material.mll）、エッジ描画パス、透過処理 |
 | [vmd_import_specification.md](vmd_import_specification.md) | **VMDモーション仕様**: ベジェ補間曲線計算、ひざ優先角度、カメラ・音声同期 |
 | [realtime_physics_bake_specification.md](realtime_physics_bake_specification.md) | **リアルタイム物理ベイク仕様**: `bullet_engine` ✕ `physics_bake_cs` 連携、JSON通信 |
 | [physics_system_specification.md](physics_system_specification.md) | **Maya物理システム仕様**: ビューポートコライダー生成、追従階層、自動再吸着 |
@@ -244,3 +316,4 @@ sequenceDiagram
 | [xpbd_engine_specification.md](xpbd_engine_specification.md) | **自作XPBD物理仕様**: 位置ベース物理（XPBD）ソルバー、サブステップ積分 |
 | [pmx_analyzer_specification.md](pmx_analyzer_specification.md) | **モデル詳細解析 & 辞書仕様**: 内部データ一括保存、未登録漢字の抽出とGUI登録 |
 | [plugin_technical_guide.md](plugin_technical_guide.md) | **プラグイン技術解説ガイド**: 内部スクリプトの役割解説と運用ハンドブック |
+| [pmm_specification.md](pmm_specification.md) | **MMD プロジェクトファイル (PMM) 解析・インポート技術仕様書**: MMD プロジェクトファイルの解説とMaya への一括インポート・連携パイプライン |

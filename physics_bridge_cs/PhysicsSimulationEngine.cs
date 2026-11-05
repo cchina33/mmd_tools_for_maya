@@ -19,6 +19,13 @@ namespace MmdPhysicsBridge
         private readonly List<TypedConstraint> _constraints = new();
         private readonly List<PmxRigidbody> _pmxRigidbodies = new();
 
+        // 剛体本来の質量と慣性モーメントの退避（物理オフ/オン切り替え用）
+        private readonly List<float> _originalMasses = new();
+        private readonly List<Vector3> _originalInertias = new();
+
+        // 物理シミュレーション有効フラグ
+        public bool IsPhysicsEnabled { get; private set; } = true;
+
         // 剛体とボーンの対応マップ
         public IReadOnlyList<RigidBody> RigidBodies => _rigidBodies;
         public IReadOnlyList<PmxRigidbody> PmxRigidbodies => _pmxRigidbodies;
@@ -110,7 +117,7 @@ namespace MmdPhysicsBridge
 #endif
         }
 
-        public void ResetWorld(PmxModelData pmxModel)
+        public void ResetWorld(PmxModelData pmxModel, IReadOnlyList<Matrix>? initialBoneWorldMatrices = null)
         {
             if (_world != null)
             {
@@ -136,10 +143,10 @@ namespace MmdPhysicsBridge
                 _pmxRigidbodies.Clear();
             }
 
-            BuildPhysicsFromPmx(pmxModel);
+            BuildPhysicsFromPmx(pmxModel, initialBoneWorldMatrices);
         }
 
-        public void BuildPhysicsFromPmx(PmxModelData pmxModel)
+        public void BuildPhysicsFromPmx(PmxModelData pmxModel, IReadOnlyList<Matrix>? initialBoneWorldMatrices = null, bool enablePhysicsInitially = true)
         {
             if (_world == null) InitializeWorld();
             if (_world == null) return;
@@ -149,11 +156,17 @@ namespace MmdPhysicsBridge
             _constraints.Clear();
             _jointFrames.Clear();
             _pmxRigidbodies.Clear();
+            _originalMasses.Clear();
+            _originalInertias.Clear();
             _pmxRigidbodies.AddRange(pmxModel.Rigidbodies);
+            IsPhysicsEnabled = enablePhysicsInitially;
+
+            var bones = pmxModel.Bones;
 
             // 剛体の構築
-            foreach (var rbData in pmxModel.Rigidbodies)
+            for (int i = 0; i < pmxModel.Rigidbodies.Count; i++)
             {
+                var rbData = pmxModel.Rigidbodies[i];
                 CollisionShape shape = rbData.Shape switch
                 {
                     PmxColliderShape.Sphere => new SphereShape(rbData.Size[0]),
@@ -162,9 +175,21 @@ namespace MmdPhysicsBridge
                     _ => new SphereShape(rbData.Size[0])
                 };
 
-                // オイラー角(ラジアン)から回転行列を作成
-                Matrix transform = Matrix.RotationYawPitchRoll(rbData.Rotation[1], rbData.Rotation[0], rbData.Rotation[2]);
-                transform.Origin = new Vector3(rbData.Position[0], rbData.Position[1], rbData.Position[2]);
+                // 初期ボーン姿勢（全ての親などの移動後位置）に合わせて剛体を直接配置
+                Matrix transform;
+                if (initialBoneWorldMatrices != null && rbData.BoneIndex >= 0 && rbData.BoneIndex < bones.Count && rbData.BoneIndex < initialBoneWorldMatrices.Count)
+                {
+                    var bone = bones[rbData.BoneIndex];
+                    var boneMat = initialBoneWorldMatrices[rbData.BoneIndex];
+                    Matrix offsetMat = Matrix.RotationYawPitchRoll(rbData.Rotation[1], rbData.Rotation[0], rbData.Rotation[2]);
+                    offsetMat.Origin = new Vector3(rbData.Position[0] - bone.Position[0], rbData.Position[1] - bone.Position[1], rbData.Position[2] - bone.Position[2]);
+                    transform = offsetMat * boneMat;
+                }
+                else
+                {
+                    transform = Matrix.RotationYawPitchRoll(rbData.Rotation[1], rbData.Rotation[0], rbData.Rotation[2]);
+                    transform.Origin = new Vector3(rbData.Position[0], rbData.Position[1], rbData.Position[2]);
+                }
 
                 float mass = (rbData.PhysicsMode == PmxPhysicsMode.FollowBone) ? 0.0f : rbData.Mass;
                 Vector3 localInertia = Vector3.Zero;
@@ -172,6 +197,8 @@ namespace MmdPhysicsBridge
                 {
                     shape.CalculateLocalInertia(mass, out localInertia);
                 }
+                _originalMasses.Add(mass);
+                _originalInertias.Add(localInertia);
 
                 var motionState = new DefaultMotionState(transform);
 
@@ -232,12 +259,22 @@ namespace MmdPhysicsBridge
                 var bodyA = _rigidBodies[jointData.RigidbodyAIndex];
                 var bodyB = _rigidBodies[jointData.RigidbodyBIndex];
 
-                Matrix jointTransform = Matrix.RotationYawPitchRoll(jointData.Rotation[1], jointData.Rotation[0], jointData.Rotation[2]);
-                jointTransform.Origin = new Vector3(jointData.Position[0], jointData.Position[1], jointData.Position[2]);
+                var rbDataA = pmxModel.Rigidbodies[jointData.RigidbodyAIndex];
+                var rbDataB = pmxModel.Rigidbodies[jointData.RigidbodyBIndex];
 
-                // 剛体AおよびBに対するローカル変換行列
-                Matrix frameInA = jointTransform * Matrix.Invert(bodyA.MotionState.WorldTransform);
-                Matrix frameInB = jointTransform * Matrix.Invert(bodyB.MotionState.WorldTransform);
+                // バインドポーズ基準での剛体A・Bに対するジョイントのローカル相対姿勢を算出
+                // 剛体A・Bが開始位置へ移動していても、剛体間の相対接続オフセットは不変に保たれます
+                Matrix jointBind = Matrix.RotationYawPitchRoll(jointData.Rotation[1], jointData.Rotation[0], jointData.Rotation[2]);
+                jointBind.Origin = new Vector3(jointData.Position[0], jointData.Position[1], jointData.Position[2]);
+
+                Matrix bodyABind = Matrix.RotationYawPitchRoll(rbDataA.Rotation[1], rbDataA.Rotation[0], rbDataA.Rotation[2]);
+                bodyABind.Origin = new Vector3(rbDataA.Position[0], rbDataA.Position[1], rbDataA.Position[2]);
+
+                Matrix bodyBBind = Matrix.RotationYawPitchRoll(rbDataB.Rotation[1], rbDataB.Rotation[0], rbDataB.Rotation[2]);
+                bodyBBind.Origin = new Vector3(rbDataB.Position[0], rbDataB.Position[1], rbDataB.Position[2]);
+
+                Matrix frameInA = jointBind * Matrix.Invert(bodyABind);
+                Matrix frameInB = jointBind * Matrix.Invert(bodyBBind);
 
                 var constraint = new Generic6DofSpringConstraint(bodyA, bodyB, frameInA, frameInB, true);
 
@@ -343,13 +380,58 @@ namespace MmdPhysicsBridge
                     body.LinearVelocity = Vector3.Zero;
                     body.AngularVelocity = Vector3.Zero;
                     body.ClearForces();
+                    _world?.UpdateSingleAabb(body);
                 }
             }
+        }
+
+        // 姿勢安定化直前に物理演算をオンにする
+        public void EnablePhysics()
+        {
+            if (IsPhysicsEnabled) return;
+            if (_world == null) return;
+
+            for (int i = 0; i < _rigidBodies.Count && i < _pmxRigidbodies.Count; i++)
+            {
+                var body = _rigidBodies[i];
+                var rbData = _pmxRigidbodies[i];
+
+                body.LinearVelocity = Vector3.Zero;
+                body.AngularVelocity = Vector3.Zero;
+                body.InterpolationLinearVelocity = Vector3.Zero;
+                body.InterpolationAngularVelocity = Vector3.Zero;
+                body.ClearForces();
+
+                if (rbData.PhysicsMode != PmxPhysicsMode.FollowBone)
+                {
+                    body.Activate(true);
+                }
+            }
+
+            IsPhysicsEnabled = true;
+        }
+
+        // 物理演算をオフにする
+        public void DisablePhysics()
+        {
+            if (!IsPhysicsEnabled) return;
+            if (_world == null) return;
+
+            for (int i = 0; i < _rigidBodies.Count; i++)
+            {
+                var body = _rigidBodies[i];
+                body.LinearVelocity = Vector3.Zero;
+                body.AngularVelocity = Vector3.Zero;
+                body.ClearForces();
+            }
+
+            IsPhysicsEnabled = false;
         }
 
         // 物理シミュレーションを1ステップ進める (デフォルト120Hzサブステップで高速移動時の貫通を大幅抑制)
         public void StepSimulation(float timeStep, int maxSubSteps = 16, float fixedTimeStep = 1.0f / 120.0f)
         {
+            if (!IsPhysicsEnabled) return;
             float actualStep = fixedTimeStep > 0.0f ? fixedTimeStep : (1.0f / SubstepHz);
             int actualSubSteps = maxSubSteps > 0 ? maxSubSteps : (int)Math.Ceiling(timeStep / actualStep) + 2;
             _world?.StepSimulation(timeStep, actualSubSteps, actualStep);
@@ -404,6 +486,7 @@ namespace MmdPhysicsBridge
         public int[] SyncPhysicsToBones(List<Matrix> boneWorldMatrices, List<PmxBone> bones)
         {
             var driveMode = new int[bones.Count];
+            if (!IsPhysicsEnabled) return driveMode;
 
             for (int i = 0; i < _rigidBodies.Count && i < _pmxRigidbodies.Count; i++)
             {

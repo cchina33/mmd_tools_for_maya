@@ -155,12 +155,35 @@ MMDとMayaはいずれも右手系（Y-up）ですが、Z軸の向き規則に�
 - **オイラー角連続性維持**:
   `closestSolution` を用いて最短連続回転角を維持し、ジンバルロックや180度反転フリップを防止。
 
+### C++ 高速化プラグイン (`mmd_motion.mll`) によるキーフレーム一括注入
+
+長時間のシミュレーションにおいて、Python ループや `cmds.setKeyframe` によるキーフレーム書き込みは大きな実行遅延の原因となります。これを解消するため、専用の C++ プラグイン `mmd_motion.mll` による一括注入機構を搭載しています。
+
+- **提供コマンド**: `mmdFastBakeBone`
+  - シグネチャ: `mmdFastBakeBone(boneName, frames, tx, ty, tz, rx, ry, rz)`
+  - 引数仕様:
+    - `boneName` (string): 対象ジョイントノード名
+    - `frames` (double array): フレーム番号配列
+    - `tx, ty, tz` (double array): 平行移動値配列（移動ベイクを行わない場合は空配列）
+    - `rx, ry, rz` (double array): 回転角配列（度数単位）
+- **高速化の原理 (`MFnAnimCurve::addKeys`)**:
+  - 対象ノードの `translateX/Y/Z`、`rotateX/Y/Z` アトリビュートに接続されたアニメーションカーブ（`kAnimCurveTL`, `kAnimCurveTA`）を検出（未作成時は自動生成）。
+  - `MFnAnimCurve::addKeys` を呼び出すことで、毎フレームのキー時間と値を Maya 内部配列へネイティブ C++ 速度で直接注入。
+  - Python 実行レイヤーのオーバーヘッドを大幅に削減し、数千フレーム・数十ジョイントに及ぶ大量のキーフレームを瞬時に適用。
+- **堅牢なフォールバック階層**:
+  - 最優先: C++ `mmdFastBakeBone` コマンドによる超高速一括書き込み
+  - 代替案: Maya Python API 2.0 (`maya.api.OpenMayaAnim.MFnAnimCurve`) によるバッチ書き込み
+  - 最終フォールバック: Maya 標準コマンド (`maya.cmds.setKeyframe`) による順次書き込み
+- **機能範囲と役割分担**:
+  - `mmd_motion.mll` は物理演算シミュレーション結果のボーンへの Transform 焼き込みに特化しています。
+  - カメラワークや表情モーフを含む通常の VMD ファイルインポートは、Python モジュール（`converters/vmdpaimaya.py`）が担当し、独立した責務分離を維持しています。
+
 ---
 
 ## クリーンアップと再吸着復元 (`clear_physics_keyframes`)
 
 ベイク処理の終了時、またはユーザーによる「物理キーフレームをクリア」「剛体・Jointをモデルに再吸着」実行時：
-- 動的剛体に対応する全ジョイントの移動・回転キーフレームをクリア。
+- 動的剛体に対応する各ジョイントの移動・回転キーフレームをクリア。
 - 可視化ノード（`MMD_XPBD_VISUALIZERS`）のキーフレームを削除し、モデルボーンへの追従コンストレイントを通常状態（Normal）へ復元。
 
 ---

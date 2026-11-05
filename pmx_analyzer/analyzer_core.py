@@ -165,10 +165,10 @@ def export_pmx_structure(pmx_path, output_json_path=None):
         }
         analysis_data["joints"].append(jt_info)
 
-    # 保存先ファイルの決定 (asset/User_pmx_data フォルダ配下に保存)
+    # 保存先ファイルの決定 (asset/userdata/pmx_data フォルダ配下に保存)
     if not output_json_path:
         plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        user_pmx_dir = os.path.join(plugin_root, "asset", "User_pmx_data")
+        user_pmx_dir = os.path.join(plugin_root, "asset", "userdata", "pmx_data")
         base_name = os.path.splitext(os.path.basename(pmx_path))[0]
         output_json_path = os.path.join(user_pmx_dir, f"{base_name}_pmx_analysis.json")
 
@@ -176,7 +176,7 @@ def export_pmx_structure(pmx_path, output_json_path=None):
     with open(output_json_path, 'w', encoding='utf-8') as f:
         json.dump(analysis_data, f, ensure_ascii=False, indent=2)
 
-    print(f"[PMX解析] 一括保存完了: {output_json_path}")
+    print(f"[PMX解析] 一括保存終了: {output_json_path}")
     print(f"  - 材質: {len(analysis_data['materials'])} 件, ボーン: {len(analysis_data['bones'])} 件")
     print(f"  - モーフ: {len(analysis_data['morphs'])} 件, 剛体: {len(analysis_data['rigid_bodies'])} 件, Joint: {len(analysis_data['joints'])} 件")
     return output_json_path, analysis_data

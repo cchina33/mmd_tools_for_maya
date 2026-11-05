@@ -85,20 +85,206 @@ def _image_has_transparency(img_path):
     except Exception:
         return ext in ['.png', '.tga', '.dds']
 
-def _get_shared_toon_path(toon_idx):
+def _get_shared_toon_path(toon_idx, model_dir=None):
     """
     共有トゥーンテクスチャ (toon01.bmp〜toon10.bmp) の実ファイルパスを解決します。
+    モデルフォルダ内に同梱されている場合はそちらを最優先し、無ければプラグイン内のtoonフォルダを参照します。
     """
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    candidates = [
-        os.path.join(current_dir, "toon", f"toon{toon_idx + 1:02d}.bmp"),
-        os.path.join(current_dir, "asset", "toon", f"toon{toon_idx + 1:02d}.bmp"),
-        os.path.join(os.path.dirname(current_dir), "toon", f"toon{toon_idx + 1:02d}.bmp"),
-    ]
+    plugin_root = os.path.dirname(current_dir)
+    toon_num = toon_idx + 1
+    base_names = [f"toon{toon_num:02d}.bmp", f"toon{toon_num:02d}.png", f"toon{toon_num:02d}.tga"]
+    if toon_idx == 0:
+        base_names.insert(0, "toon0.bmp")
+
+    candidates = []
+    if model_dir and os.path.isdir(model_dir):
+        for b_name in base_names:
+            candidates.append(os.path.join(model_dir, b_name))
+            candidates.append(os.path.join(model_dir, "toon", b_name))
+            candidates.append(os.path.join(model_dir, "tex", b_name))
+            candidates.append(os.path.join(model_dir, "textures", b_name))
+
+    toon_bmp = f"toon{toon_num:02d}.bmp"
+    candidates.extend([
+        os.path.join(plugin_root, "toon", toon_bmp),
+        os.path.join(plugin_root, "asset", "toon", toon_bmp),
+        os.path.join(current_dir, "toon", toon_bmp),
+        os.path.join(current_dir, "asset", "toon", toon_bmp),
+    ])
     for c in candidates:
         if os.path.isfile(c):
-            return c.replace('\\', '/')
+            return os.path.normpath(c).replace('\\', '/')
     return None
+
+
+def _resolve_custom_toon_path(raw_path, model_dir=None):
+    """
+    PMX材質で個別指定されたToonテクスチャパスを解決します。
+    モデルフォルダ内の同梱ファイルを最優先で探索し、見つからない場合のみ共有toonフォルダへフォールバックします。
+    """
+    if not raw_path:
+        return None
+    norm_rel = raw_path.replace('\\', '/').strip().lstrip('/')
+    base_name = os.path.basename(norm_rel)
+    base_lower = base_name.lower()
+
+    if os.path.isabs(norm_rel) and os.path.isfile(norm_rel):
+        return os.path.normpath(norm_rel).replace('\\', '/')
+
+    if model_dir and os.path.isdir(model_dir):
+        direct_candidates = [
+            os.path.join(model_dir, norm_rel),
+            os.path.join(model_dir, base_name),
+            os.path.join(model_dir, "toon", base_name),
+            os.path.join(model_dir, "tex", base_name),
+            os.path.join(model_dir, "texture", base_name),
+            os.path.join(model_dir, "textures", base_name),
+        ]
+        for cand in direct_candidates:
+            if os.path.isfile(cand):
+                return os.path.normpath(cand).replace('\\', '/')
+
+        # 大文字小文字の違いやサブフォルダ階層を考慮してモデルフォルダ内を探索
+        norm_rel_lower = norm_rel.lower()
+        for root_d, _, files in os.walk(model_dir):
+            for f in files:
+                if f.lower() == base_lower:
+                    full_p = os.path.join(root_d, f)
+                    rel_p = os.path.relpath(full_p, model_dir).replace('\\', '/').lower()
+                    if rel_p == norm_rel_lower:
+                        return os.path.normpath(full_p).replace('\\', '/')
+        for root_d, _, files in os.walk(model_dir):
+            for f in files:
+                if f.lower() == base_lower:
+                    return os.path.normpath(os.path.join(root_d, f)).replace('\\', '/')
+
+    # モデルフォルダ内に存在しない場合のみ、共有toonフォルダから探索
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    plugin_root = os.path.dirname(current_dir)
+    for si in range(10):
+        if f"toon{si+1:02d}." in base_lower or f"toon{si+1}." in base_lower:
+            shared_p = _get_shared_toon_path(si, model_dir=None)
+            if shared_p:
+                return shared_p
+    if base_lower.startswith("toon0."):
+        shared_p = _get_shared_toon_path(0, model_dir=None)
+        if shared_p:
+            return shared_p
+
+    fallback_dirs = [
+        os.path.join(plugin_root, "toon", base_name),
+        os.path.join(plugin_root, "asset", "toon", base_name),
+        os.path.join(current_dir, "toon", base_name),
+    ]
+    for fb in fallback_dirs:
+        if os.path.isfile(fb):
+            return os.path.normpath(fb).replace('\\', '/')
+    return None
+
+
+def _extract_toon_shadow_color(img_path):
+    """
+    Toonテクスチャ画像（BMP/PNG/TGA等）の下端（v=0.05付近）のピクセルから
+    影色のsRGB値 (R, G, B) [0.0〜1.0] を抽出します。
+    PILが未導入のMaya環境でも24/32bit BMPバイナリを直接解析して正確に色を取得します。
+    """
+    if not img_path or not os.path.isfile(img_path):
+        return (0.88, 0.88, 0.88)
+
+    # PIL (Pillow) が利用可能な場合は優先使用
+    try:
+        from PIL import Image
+        with Image.open(img_path) as im:
+            rgb_im = im.convert('RGB')
+            w, h = rgb_im.size
+            px = max(0, min(w - 1, int(w * 0.5)))
+            py = max(0, min(h - 1, int(h * 0.95)))
+            r, g, b = rgb_im.getpixel((px, py))
+            return (r / 255.0, g / 255.0, b / 255.0)
+    except Exception:
+        pass
+
+    # 標準BMPバイナリの直接解析 (toon01.bmp〜toon10.bmpおよびカスタムBMP対応)
+    try:
+        import struct
+        with open(img_path, 'rb') as f:
+            header = f.read(54)
+            if len(header) >= 54 and header[:2] == b'BM':
+                pixel_offset = struct.unpack_from('<I', header, 10)[0]
+                width = struct.unpack_from('<i', header, 18)[0]
+                height = struct.unpack_from('<i', header, 22)[0]
+                bpp = struct.unpack_from('<H', header, 28)[0]
+                abs_w = abs(width)
+                abs_h = abs(height)
+                if abs_w > 0 and abs_h > 0 and bpp in (24, 32):
+                    bytes_per_pixel = bpp // 8
+                    row_stride = ((abs_w * bytes_per_pixel + 3) // 4) * 4
+                    # height > 0 の標準ボトムアップBMPでは row=0 が最下端
+                    target_row = int(abs_h * 0.05) if height > 0 else int(abs_h * 0.95)
+                    target_row = max(0, min(abs_h - 1, target_row))
+                    target_col = max(0, min(abs_w - 1, abs_w // 2))
+                    pos = pixel_offset + target_row * row_stride + target_col * bytes_per_pixel
+                    f.seek(pos)
+                    px_bytes = f.read(3)
+                    if len(px_bytes) == 3:
+                        b_val, g_val, r_val = px_bytes[0], px_bytes[1], px_bytes[2]
+                        return (r_val / 255.0, g_val / 255.0, b_val / 255.0)
+    except Exception:
+        pass
+
+    # ファイル名からのMMD標準共有Toonカラーフォールバック
+    base_lower = os.path.basename(img_path).lower()
+    if "toon02" in base_lower:
+        return (0.949, 0.855, 0.859)
+    elif "toon03" in base_lower:
+        return (0.910, 0.835, 0.780)
+    elif "toon04" in base_lower:
+        return (0.855, 0.855, 0.855)
+    return (0.88, 0.88, 0.88)
+
+
+def _compute_mmd_light_colors_from_toon(toon_srgb):
+    """
+    抽出されたToon影色(sRGB)から、Maya Viewport 2.0のカラースペース下で
+    - 明部（平行光＋環境光）が純白 (1.0, 1.0, 1.0) となり元のテクスチャ色を損なわず、
+    - 落ち影領域（セルフシャドウで平行光が遮蔽された領域）がToon本来の影色（toon02.bmp等のピンクベージュ等）
+    になるような環境光RGBおよび平行光RGBのペアを算出します。
+    """
+    r_s, g_s, b_s = toon_srgb
+    # 純白に近いToon（影なし用）の場合は標準の控えめな陰影比率を維持
+    if r_s > 0.98 and g_s > 0.98 and b_s > 0.98:
+        amb_rgb = (0.78, 0.78, 0.78)
+        dir_rgb = (0.22, 0.22, 0.22)
+        return amb_rgb, dir_rgb
+
+    # Mayaのリニア作業空間（Un-tone-mapped sRGBビュー変換）で画面上の落ち影が
+    # MMDのToon乗算色（T_sRGB * Toon_sRGB）と一致するようガンマ2.2換算を適用
+    amb_r = max(0.45, min(0.92, (r_s ** 2.2) * 0.96))
+    amb_g = max(0.45, min(0.92, (g_s ** 2.2) * 0.94))
+    amb_b = max(0.45, min(0.92, (b_s ** 2.2) * 0.94))
+
+    dir_r = max(0.05, 1.0 - amb_r)
+    dir_g = max(0.05, 1.0 - amb_g)
+    dir_b = max(0.05, 1.0 - amb_b)
+    return (amb_r, amb_g, amb_b), (dir_r, dir_g, dir_b)
+
+
+def _apply_toon_color_to_mmd_lights(toon_srgb):
+    """
+    シーン内の mmd_ambient_light にモデルの主要Toon影色を反映し、
+    服や顔に落ちるデプスマップシャドウ（落ち影）に toon02.bmp 等の影色が乗るようにします。
+    平行光源（mmd_directional_light）はMMD本家標準の基準色 (RGB 154) を維持します。
+    """
+    amb_rgb, dir_rgb = _compute_mmd_light_colors_from_toon(toon_srgb)
+    try:
+        amb_shapes = mc.ls("mmd_ambient_light*Shape*", type="ambientLight") or []
+        for a_shape in amb_shapes:
+            mc.setAttr(f"{a_shape}.color", amb_rgb[0], amb_rgb[1], amb_rgb[2], typ='double3')
+            mc.setAttr(f"{a_shape}.intensity", 1.0)
+    except Exception:
+        pass
+    return amb_rgb, dir_rgb
 
 def _get_unique_node_name(base_name):
     """Mayaシーン内で既存のノード名と衝突しない一意な名前を生成します。"""
@@ -141,7 +327,7 @@ def create_mesh(node_name, vertex_positions, face_indices, face_vertex_counts, u
             color_set_name = "mmd_edge_scale"
             actual_set_name = fn_mesh.createColorSet(color_set_name, False, om.MFnMesh.kRGBA)
             fn_mesh.setCurrentColorSetName(actual_set_name)
-            color_array = om.MColorArray([om.MColor((float(s), float(s), float(s), 1.0)) for s in edge_scales])
+            color_array = om.MColorArray([om.MColor((float(s), 1.0, 0.0, 1.0)) for s in edge_scales])
             vertex_indices = om.MIntArray(range(len(edge_scales)))
             fn_mesh.setVertexColors(color_array, vertex_indices)
         except Exception as e:
@@ -534,7 +720,7 @@ def reconnect_visualizers_to_bones():
     print(f"[Visualizer] 剛体・Jointのキーフレームをクリアし、モデルボーンへの追従を復元しました（対象グループ数: {len(vis_groups)}）。")
     return True
 
-def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes=True, create_joints=True, material_type=1, create_light=True, set_untone_mapped=True, enable_toon=True, shadow_mode=1, create_ground_shadow=True, show_completion_message=True, prevent_motion_darkening=True, create_physics=True):
+def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes=True, create_joints=True, material_type=1, create_light=True, set_untone_mapped=True, enable_toon=True, shadow_mode=1, create_ground_shadow=True, show_completion_message=True, prevent_motion_darkening=True, create_physics=True, create_edge_mesh=True):
     """
     MMDモデルファイル (.pmx / .pmd / .x) をMayaにインポートします。
 
@@ -552,6 +738,7 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
         create_ground_shadow (bool): MMD標準の地面影プレーン (Y=0) を作成するかどうか
         prevent_motion_darkening (bool): モーション再生時の暗化を防止（シャッター開度0.01のブレなしHDRパス最適化）するかどうか
         create_physics (bool): 剛体・Jointコライダーのワイヤーフレームを生成しボーン追従バインドするかどうか
+        create_edge_mesh (bool): 反転法線押し出し（Inverted Hull）方式によるエッジ輪郭線メッシュを生成するかどうか
 
     戻り値:
         tuple: (モデルノード名, ルートジョイント一覧, スキンクラスタ名, ブレンドシェイプ名)
@@ -687,12 +874,16 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
             edge_scales=vtx_edge_scales
         )
 
-        # MMD準拠の自然な描画のため、キャラクターメッシュ自身の影受けを無効化（帽子・前髪・スカートによる不快な顔・脚の黒潰れを防止）
-        # 影を落とす機能（castsShadows=True）は維持されるため、地面影プレーンには美しい足元影が投影されます。
+        # キャラクターメッシュで前髪・首元・襟などの落ち影（セルフシャドウ）を受け取るため receiveShadows を有効化
         mesh_shapes = mc.listRelatives(model_mesh_node, shapes=True, fullPath=True) or [model_mesh_node]
         for m_shp in mesh_shapes:
             try:
-                mc.setAttr(f"{m_shp}.receiveShadows", 0)
+                mc.setAttr(f"{m_shp}.receiveShadows", 1)
+                mc.setAttr(f"{m_shp}.castsShadows", 1)
+                # シェーダーの Pass 1（裏面エッジ描画）を破棄させないための設定
+                mc.setAttr(f"{m_shp}.doubleSided", 1)
+                mc.setAttr(f"{m_shp}.opposite", 0)
+                mc.setAttr(f"{m_shp}.backfaceCulling", 0)
             except Exception:
                 pass
 
@@ -712,20 +903,24 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
         if not getattr(mat, 'is_shared_toon_texture', False) and getattr(mat, 'toon_texture', -1) >= 0:
             used_texture_indices.add(mat.toon_texture)
 
-    # オリジナルマテリアルプラグイン (sample_mmd_mat) のロード
-    if material_type == 5:
+    # MMD統合マテリアルプラグイン (mmd_material.mll: mmdMaterial / mmdToonShader 内包) のロード
+    if material_type in (5, 6):
         if not mc.pluginInfo("mmd_material", query=True, loaded=True):
             try:
                 mc.loadPlugin("mmd_material")
                 print("[MMD Tools for Maya] mmd_material プラグインをロードしました。")
+                try:
+                    mc.pluginInfo("mmd_material", edit=True, autoload=True)
+                except Exception:
+                    pass
             except Exception as e:
                 # Maya.env未反映時のフルパスフォールバック
                 plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
                 maya_ver = mc.about(version=True).split()[0] if hasattr(mc, 'about') else '2025'
                 candidate_paths = [
+                    os.path.join(plugin_root, "mmd_material_plugin", "bin", "mmd_material.mll"),
                     os.path.join(plugin_root, "mmd_material_plugin", "bin", maya_ver, "mmd_material.mll"),
                     os.path.join(plugin_root, "mmd_material_plugin", "bin", "2025", "mmd_material.mll"),
-                    os.path.join(plugin_root, "mmd_material_plugin", "bin", "mmd_material.mll"),
                 ]
                 loaded = False
                 for mll_path in candidate_paths:
@@ -734,47 +929,16 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
                             mc.loadPlugin(mll_path)
                             print(f"[MMD Tools for Maya] mmd_material プラグインを絶対パスからロードしました: {mll_path}")
                             loaded = True
-                            break
-                        except Exception:
-                            pass
-                if not loaded:
-                    print(f"[警告] mmd_material プラグインのロードに失敗しました: {e}")
-
-    # 新規MMDトゥーンシェーダープラグイン (mmd_toon_shader) のロード
-    elif material_type == 6:
-        if not mc.pluginInfo("mmd_toon_shader", query=True, loaded=True):
-            try:
-                mc.loadPlugin("mmd_toon_shader")
-                print("[MMD Tools for Maya] mmd_toon_shader プラグインをロードしました。")
-                try:
-                    mc.pluginInfo("mmd_toon_shader", edit=True, autoload=True)
-                except Exception:
-                    pass
-            except Exception as e:
-                plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                maya_ver = mc.about(version=True).split()[0] if hasattr(mc, 'about') else '2025'
-                candidate_paths = [
-                    os.path.join(plugin_root, "mmd_toon_plugin", "bin", maya_ver, "mmd_toon_shader.mll"),
-                    os.path.join(plugin_root, "mmd_toon_plugin", "bin", "2025", "mmd_toon_shader.mll"),
-                    os.path.join(plugin_root, "mmd_toon_plugin", "bin", "mmd_toon_shader.mll"),
-                ]
-                loaded = False
-                for mll_path in candidate_paths:
-                    if os.path.exists(mll_path):
-                        try:
-                            mc.loadPlugin(mll_path)
-                            print(f"[MMD Tools for Maya] mmd_toon_shader プラグインを絶対パスからロードしました: {mll_path}")
-                            loaded = True
                             try:
                                 mc.pluginInfo(mll_path, edit=True, autoload=True)
-                                mc.pluginInfo("mmd_toon_shader", edit=True, autoload=True)
+                                mc.pluginInfo("mmd_material", edit=True, autoload=True)
                             except Exception:
                                 pass
                             break
                         except Exception:
                             pass
                 if not loaded:
-                    print(f"[警告] mmd_toon_shader プラグインのロードに失敗しました: {e}")
+                    print(f"[警告] mmd_material プラグインのロードに失敗しました: {e}")
 
     texture_file_nodes = []
     texture_has_alpha_map = {}
@@ -817,6 +981,7 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
 
     # Toonシェーディング用受光輝度（法線×ライト）ネットワークの生成
     toon_range_node = None
+    toon_bundle_cache = {}
     if enable_toon:
         toon_sampler = mc.shadingNode('samplerInfo', asUtility=True, name=f"toon_sampler_{model_node_name}")
         # カメラ空間法線をワールド空間法線に変換 (視点回転に左右されないMMD互換の不変法線)
@@ -848,35 +1013,112 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
             mc.connectAttr(f"{target_dir_light}.worldMatrix[0]", f"{light_vec_node}.matrix", force=True)
             mc.connectAttr(f"{light_vec_node}.output", f"{toon_vec_prod}.input2", force=True)
         else:
-            # フォールバック: MMD標準の光線到来方向（斜め前方左上）
-            mc.setAttr(f"{toon_vec_prod}.input2", -0.4082, 0.8165, 0.4082, typ='double3')
+            # フォールバック: 顔・首・襟元の落ち影を自然に出す正面斜め上ライト [-25.0, 20.0, 0.0] の単位方向ベクトル
+            mc.setAttr(f"{toon_vec_prod}.input2", 0.3099, 0.4226, 0.8517, typ='double3')
 
         mc.connectAttr(f"{toon_world_norm}.output", f"{toon_vec_prod}.input1", force=True)
 
-        # 内積結果 (-1.0 ~ 1.0) を 0.0 ~ 1.0 に正規化 (MMD公式仕様: Toon画像本来の滑らかな階調にマッピング)
+        # 内積結果をMMD準拠の遷移幅（-0.05〜0.35）から 0.0〜1.0 の連続ブレンド率へマッピングし、
+        # 境目を作らず自然に広がりつつ各材質のToon影色がしっかり発色する陰影を生成
         mc.setAttr(f"{toon_range_node}.minX", 0.0)
         mc.setAttr(f"{toon_range_node}.maxX", 1.0)
-        mc.setAttr(f"{toon_range_node}.oldMinX", -1.0)
-        mc.setAttr(f"{toon_range_node}.oldMaxX", 1.0)
+        mc.setAttr(f"{toon_range_node}.oldMinX", -0.05)
+        mc.setAttr(f"{toon_range_node}.oldMaxX", 0.35)
         mc.connectAttr(f"{toon_vec_prod}.outputX", f"{toon_range_node}.valueX", force=True)
 
-    # 共有トゥーンテクスチャ (toon01.bmp〜toon10.bmp) ファイルノードの生成
+    def _get_or_create_toon_bundle(t_path, tag_prefix):
+        """
+        解決済みのToonテクスチャパスから、本家MMDセルフシャドウ方式に準拠して
+        テクスチャ下端(v=0.05)の影色を抽出し、blendColorsで明部(1,1,1)と連続補間するノード群を生成・キャッシュします。
+        Viewport 2.0でメッシュUV(map1)が自動バインドされて白い上半分(v>0.5)を参照してしまう現象を防ぐため、
+        repeatUV=(0,0), offset=(0.5, 0.05) に固定した専用 place2dTexture を接続します。
+        """
+        if not t_path or not os.path.isfile(t_path):
+            return None
+        norm_key = os.path.normcase(os.path.normpath(t_path))
+        if norm_key in toon_bundle_cache:
+            return toon_bundle_cache[norm_key]
+
+        ramp_node = mc.shadingNode('file', asTexture=True, name=f"{tag_prefix}_file_{model_node_name}")
+        mc.setAttr(f"{ramp_node}.ftn", t_path, typ='string')
+        toon_p2d = mc.shadingNode('place2dTexture', asUtility=True, name=f"{tag_prefix}_place2d_{model_node_name}")
+        for src_attr, dst_attr in PLACE2D_ATTR_CONNECTIONS:
+            try:
+                mc.connectAttr(f"{toon_p2d}.{src_attr}", f"{ramp_node}.{dst_attr}", force=True)
+            except Exception:
+                pass
+        try:
+            # メッシュUVに依存せず常にToon画像最下端(u=0.5, v=0.05)の影色をサンプリングするよう固定
+            mc.setAttr(f"{toon_p2d}.wrapU", False)
+            mc.setAttr(f"{toon_p2d}.wrapV", False)
+            mc.setAttr(f"{toon_p2d}.repeatU", 0.0)
+            mc.setAttr(f"{toon_p2d}.repeatV", 0.0)
+            mc.setAttr(f"{toon_p2d}.offsetU", 0.5)
+            mc.setAttr(f"{toon_p2d}.offsetV", 0.05)
+            mc.setAttr(f"{ramp_node}.wrapU", False)
+            mc.setAttr(f"{ramp_node}.wrapV", False)
+        except Exception:
+            pass
+
+        blend_node = mc.shadingNode('blendColors', asUtility=True, name=f"{tag_prefix}_blend_{model_node_name}")
+        mc.setAttr(f"{blend_node}.color1", 1.0, 1.0, 1.0, typ='double3')
+        mc.connectAttr(f"{ramp_node}.outColor", f"{blend_node}.color2", force=True)
+        if toon_range_node:
+            mc.connectAttr(f"{toon_range_node}.outValueX", f"{blend_node}.blender", force=True)
+        else:
+            mc.setAttr(f"{blend_node}.blender", 1.0)
+
+        shadow_srgb = _extract_toon_shadow_color(t_path)
+        bundle = {
+            'ramp': ramp_node,
+            'place2d': toon_p2d,
+            'blend_toon': blend_node,
+            'path': t_path,
+            'shadow_srgb': shadow_srgb,
+        }
+        toon_bundle_cache[norm_key] = bundle
+        return bundle
+
+    # 共有トゥーンテクスチャ (toon01.bmp〜toon10.bmp、モデル同梱優先) のバンドル生成
     shared_toon_file_nodes = {}
+    shared_toon_bundles = {}
     if enable_toon:
         for i in range(10):
-            t_path = _get_shared_toon_path(i)
+            t_path = _get_shared_toon_path(i, model_dir=model_dir)
             if t_path and os.path.isfile(t_path):
-                t_node_name = f"toon{i+1:02d}_file_{model_node_name}"
-                f_node = mc.shadingNode('file', asTexture=True, name=t_node_name)
-                mc.setAttr(f"{f_node}.ftn", t_path, typ='string')
-                # ポリゴンUVではなく、受光輝度（法線×ライト内積）をV座標に接続
-                if toon_range_node:
-                    try:
-                        mc.setAttr(f"{f_node}.uCoord", 0.5)
-                        mc.connectAttr(f"{toon_range_node}.outValueX", f"{f_node}.vCoord", force=True)
-                    except Exception:
-                        pass
-                shared_toon_file_nodes[i] = f_node
+                bundle = _get_or_create_toon_bundle(t_path, f"toon{i+1:02d}")
+                if bundle:
+                    shared_toon_file_nodes[i] = bundle['ramp']
+                    shared_toon_bundles[i] = bundle
+
+    # モデルの主要材質で使用されているToon影色を特定し、落ち影（セルフシャドウ）用ライトへ反映
+    active_amb_rgb, active_dir_rgb = (0.75, 0.75, 0.75), (0.25, 0.25, 0.25)
+    if enable_toon:
+        toon_weight_counts = {}
+        toon_path_map = {}
+        for m in pmx_model.materials:
+            v_cnt = getattr(m, 'vertex_count', 0)
+            if v_cnt <= 0:
+                continue
+            t_idx = getattr(m, 'toon_texture', -1)
+            is_sh = getattr(m, 'is_shared_toon_texture', False)
+            resolved_tp = None
+            if is_sh:
+                if t_idx in shared_toon_bundles:
+                    resolved_tp = shared_toon_bundles[t_idx]['path']
+                elif (t_idx - 1) in shared_toon_bundles:
+                    resolved_tp = shared_toon_bundles[t_idx - 1]['path']
+            elif not is_sh and 0 <= t_idx < len(pmx_model.textures):
+                resolved_tp = _resolve_custom_toon_path(pmx_model.textures[t_idx].path, model_dir=model_dir)
+            if resolved_tp:
+                n_key = os.path.normcase(os.path.normpath(resolved_tp))
+                toon_weight_counts[n_key] = toon_weight_counts.get(n_key, 0) + v_cnt
+                toon_path_map[n_key] = resolved_tp
+        if toon_weight_counts:
+            dominant_key = max(toon_weight_counts, key=toon_weight_counts.get)
+            dominant_toon_path = toon_path_map[dominant_key]
+            dominant_srgb = _extract_toon_shadow_color(dominant_toon_path)
+            active_amb_rgb, active_dir_rgb = _apply_toon_color_to_mmd_lights(dominant_srgb)
 
     # スフィアマップ用 MatCap UV 変換ノード (カメラ空間法線 -> UV)
     matcap_range_node = None
@@ -895,23 +1137,25 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
         mc.connectAttr(f"{sampler_node}.normalCameraX", f"{matcap_range_node}.valueX", force=True)
         mc.connectAttr(f"{sampler_node}.normalCameraY", f"{matcap_range_node}.valueY", force=True)
 
-    # MMDマテリアルプラグイン選択時は事前にプラグインロードを保証
-    if material_type == 5:
+    # MMDマテリアル・Toonプラグイン選択時は事前にロードを確認
+    if material_type in (5, 6):
         try:
             try:
                 from ..mmd_material_plugin.scripts.mmd_material_setup import ensure_plugin_loaded
             except Exception:
                 from mmd_material_plugin.scripts.mmd_material_setup import ensure_plugin_loaded
             if not ensure_plugin_loaded():
-                print("[MMD Tools] MMDマテリアルプラグインをロードできなかったため、StandardSurfaceにフォールバックします。")
-                material_type = 4
+                is_mat_loaded = mc.pluginInfo("mmd_material", query=True, loaded=True) or mc.pluginInfo("mmd_material.mll", query=True, loaded=True)
+                is_toon_loaded = mc.pluginInfo("mmd_toon_shader", query=True, loaded=True) or mc.pluginInfo("mmd_toon_shader.mll", query=True, loaded=True)
+                if not (is_mat_loaded or is_toon_loaded):
+                    print("[MMD Tools] MMDシェーダープラグイン (mmd_material) をロードできなかったため、StandardSurfaceにフォールバックします。")
+                    material_type = 4
         except Exception as e:
-            print(f"[MMD Tools] プラグインロード確認中にエラーが発生したためフォールバックします: {e}")
-            material_type = 4
-    elif material_type == 6:
-        if not mc.pluginInfo("mmd_toon_shader", query=True, loaded=True):
-            print("[MMD Tools] mmd_toon_shader プラグインをロードできなかったため、StandardSurfaceにフォールバックします。")
-            material_type = 4
+            is_mat_loaded = mc.pluginInfo("mmd_material", query=True, loaded=True) or mc.pluginInfo("mmd_material.mll", query=True, loaded=True)
+            is_toon_loaded = mc.pluginInfo("mmd_toon_shader", query=True, loaded=True) or mc.pluginInfo("mmd_toon_shader.mll", query=True, loaded=True)
+            if not (is_mat_loaded or is_toon_loaded):
+                print(f"[MMD Tools] プラグインロード確認中にエラーが発生したためフォールバックします: {e}")
+                material_type = 4
 
     material_shader_dict = {}
     material_alpha_mult_dict = {}
@@ -931,7 +1175,7 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
         tex_idx = mat.texture
         diffuse_color = mat.diffuse[:3]
         # 白飛び防止: アンビエント過大値（1.0等）の適正化
-        # MMD標準の受光特性に合わせ、アンビエント色の上限を0.60に安全クランプ
+        # MMD標準の受光特性に合わせ、アンビエント色の上限を0.60に保護クランプ
         ambient_color = [min(c, 0.60) for c in mat.ambient]
         specular_color = mat.specular[:3]
         spec_factor = mat.specular[3] if len(mat.specular) > 3 else getattr(mat, 'specular_factor', 5.0)
@@ -1003,7 +1247,7 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
 
         # エッジ描画フラグの取得と初期透明モーフ材質の無効化
         is_edge_enabled = bool(getattr(mat, 'draw_flags', 0x10) & 0x10) if hasattr(mat, 'draw_flags') else (getattr(mat, 'edge_flag', 1) != 0)
-        edge_size_val = float(getattr(mat, 'edge_size', 1.0))
+        edge_size_val = min(10.0, max(0.0, float(getattr(mat, 'edge_size', 1.0))))
         edge_col_val = getattr(mat, 'edge_color', [0.0, 0.0, 0.0, 1.0])
         if is_transparent_morph_mat:
             is_edge_enabled = False
@@ -1048,68 +1292,49 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
                 mc.setAttr(f"{shd}.base", 0.85)
             else:
                 mc.setAttr(f"{shd}.base", 0.95)
-        elif material_type == 5: # sample_mmd_mat (ベータ版: MMDオリジナルマテリアルプラグイン)
+        elif material_type in (5, 6): # MMDオリジナルシェーダー (Viewport 2.0 2パス Inverted Hull 描画エンジン)
             try:
+                # 2パス Inverted Hull エッジ描画エンジン (MMDShaderOverride) を持つ mmdMaterial を優先生成
                 shd = mc.shadingNode('mmdMaterial', asShader=True, name=shader_node_name)
             except Exception:
-                shd = mc.shadingNode('standardSurface', asShader=True, name=shader_node_name)
+                try:
+                    shd = mc.shadingNode('mmdToonShader', asShader=True, name=shader_node_name)
+                except Exception:
+                    shd = mc.shadingNode('standardSurface', asShader=True, name=shader_node_name)
 
             if mc.attributeQuery('diffuseColor', node=shd, exists=True):
                 mc.setAttr(f"{shd}.diffuseColor", *diffuse_color, typ='double3')
                 mc.setAttr(f"{shd}.color", *diffuse_color, typ='double3')
-                # 白飛び防止: Maya Phongでの自己発光的な加算を防止し、インポート直後でも適正な陰影を維持
+                # 白飛び防止: Maya Phongでの自己発光的な加算を排除し、適正な陰影を維持
                 mc.setAttr(f"{shd}.ambientColor", 0.0, 0.0, 0.0, typ='double3')
                 mc.setAttr(f"{shd}.transparency", *transparency, typ='double3')
                 mc.setAttr(f"{shd}.diffuseAlpha", alpha)
-                mc.setAttr(f"{shd}.specularColor", *specular_color, typ='double3')
+                if is_face_material or is_transparent_morph_mat or sum(specular_color) < 0.05:
+                    mc.setAttr(f"{shd}.specularColor", 0.0, 0.0, 0.0, typ='double3')
+                else:
+                    mc.setAttr(f"{shd}.specularColor", *specular_color, typ='double3')
                 mc.setAttr(f"{shd}.specularPower", min(100.0, max(1.0, float(spec_factor))))
                 mc.setAttr(f"{shd}.cosinePower", min(100.0, max(2.0, float(spec_factor))))
                 mc.setAttr(f"{shd}.diffuse", 0.0 if (is_transparent_morph_mat and is_face_overlay_mat) else 1.0)
 
                 sph_idx = getattr(mat, 'sphere_texture', -1)
                 sph_mode = getattr(mat, 'sphere_texture_mode', 0)
-                mc.setAttr(f"{shd}.sphereMode", int(sph_mode))
-                mc.setAttr(f"{shd}.toonMode", 1 if enable_toon else 0)
+                if mc.attributeQuery('sphereMode', node=shd, exists=True):
+                    mc.setAttr(f"{shd}.sphereMode", int(sph_mode))
+                if mc.attributeQuery('toonMode', node=shd, exists=True):
+                    mc.setAttr(f"{shd}.toonMode", 1 if enable_toon else 0)
+                if mc.attributeQuery('lightMode', node=shd, exists=True):
+                    mc.setAttr(f"{shd}.lightMode", 1) # MMD基準輝度モード
+                if mc.attributeQuery('shadowMode', node=shd, exists=True):
+                    mc.setAttr(f"{shd}.shadowMode", 1) # MMD深度差判定モード
 
-                mc.setAttr(f"{shd}.edgeEnable", is_edge_enabled)
-                if len(edge_col_val) >= 3:
+                # エッジ（輪郭線）パラメータの設定
+                if mc.attributeQuery('edgeEnable', node=shd, exists=True):
+                    mc.setAttr(f"{shd}.edgeEnable", is_edge_enabled)
+                if len(edge_col_val) >= 3 and mc.attributeQuery('edgeColor', node=shd, exists=True):
                     mc.setAttr(f"{shd}.edgeColor", edge_col_val[0], edge_col_val[1], edge_col_val[2], typ='double3')
-                mc.setAttr(f"{shd}.edgeSize", edge_size_val)
-            else:
-                # 万が一 mmdMaterial 属性が存在しない場合の安全フォールバック
-                if mc.attributeQuery('baseColor', node=shd, exists=True):
-                    mc.setAttr(f"{shd}.baseColor", *diffuse_color, typ='double3')
-                elif mc.attributeQuery('color', node=shd, exists=True):
-                    mc.setAttr(f"{shd}.color", *diffuse_color, typ='double3')
-        elif material_type == 6: # mmdToonShader (新プラグイン, 忠実再現)
-            try:
-                shd = mc.shadingNode('mmdToonShader', asShader=True, name=shader_node_name)
-            except Exception:
-                shd = mc.shadingNode('standardSurface', asShader=True, name=shader_node_name)
-
-            if mc.attributeQuery('diffuseColor', node=shd, exists=True):
-                mc.setAttr(f"{shd}.diffuseColor", *diffuse_color, typ='double3')
-                mc.setAttr(f"{shd}.color", *diffuse_color, typ='double3')
-                # 白飛び防止: 自己発光的な加算を排除し、受光計算で適正に評価
-                mc.setAttr(f"{shd}.ambientColor", 0.0, 0.0, 0.0, typ='double3')
-                mc.setAttr(f"{shd}.transparency", *transparency, typ='double3')
-                mc.setAttr(f"{shd}.diffuseAlpha", alpha)
-                mc.setAttr(f"{shd}.specularColor", *specular_color, typ='double3')
-                mc.setAttr(f"{shd}.specularPower", min(100.0, max(1.0, float(spec_factor))))
-                mc.setAttr(f"{shd}.cosinePower", min(100.0, max(2.0, float(spec_factor))))
-                mc.setAttr(f"{shd}.diffuse", 0.0 if (is_transparent_morph_mat and is_face_overlay_mat) else 1.0)
-
-                sph_idx = getattr(mat, 'sphere_texture', -1)
-                sph_mode = getattr(mat, 'sphere_texture_mode', 0)
-                mc.setAttr(f"{shd}.sphereMode", int(sph_mode))
-                mc.setAttr(f"{shd}.toonMode", 1 if enable_toon else 0)
-                mc.setAttr(f"{shd}.lightMode", 1) # MMD基準輝度モード
-                mc.setAttr(f"{shd}.shadowMode", 1) # MMD深度差判定モード
-
-                mc.setAttr(f"{shd}.edgeEnable", is_edge_enabled)
-                if len(edge_col_val) >= 3:
-                    mc.setAttr(f"{shd}.edgeColor", edge_col_val[0], edge_col_val[1], edge_col_val[2], typ='double3')
-                mc.setAttr(f"{shd}.edgeSize", edge_size_val)
+                if mc.attributeQuery('edgeSize', node=shd, exists=True):
+                    mc.setAttr(f"{shd}.edgeSize", edge_size_val)
             else:
                 if mc.attributeQuery('baseColor', node=shd, exists=True):
                     mc.setAttr(f"{shd}.baseColor", *diffuse_color, typ='double3')
@@ -1120,17 +1345,16 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
 
         if material_type in [1, 2, 3]:
             mc.setAttr(f"{shd}.color", *diffuse_color, typ='double3')
-            mc.setAttr(f"{shd}.ambientColor", *ambient_color, typ='double3')
+            mc.setAttr(f"{shd}.ambientColor", 0.0, 0.0, 0.0, typ='double3')
             mc.setAttr(f"{shd}.transparency", *transparency, typ='double3')
             if is_transparent_morph_mat and is_face_overlay_mat:
                 if mc.attributeQuery('diffuse', node=shd, exists=True):
                     mc.setAttr(f"{shd}.diffuse", 0.0)
                 if mc.attributeQuery('shadowAttenuation', node=shd, exists=True):
                     mc.setAttr(f"{shd}.shadowAttenuation", 0.0)
-            elif enable_toon:
-                # 2重受光による黒沈み防止: Toonテクスチャ乗算時は受光率を適正化
+            else:
                 if mc.attributeQuery('diffuse', node=shd, exists=True):
-                    mc.setAttr(f"{shd}.diffuse", 0.65)
+                    mc.setAttr(f"{shd}.diffuse", 1.0)
 
         # 日本語・中国語の元名称を保持
         mc.addAttr(shd, longName='originalName', niceName='元の名称', dataType='string')
@@ -1141,7 +1365,7 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
         if 0 <= tex_idx < len(texture_file_nodes) and mc.objExists(texture_file_nodes[tex_idx]):
             current_color_source = f"{texture_file_nodes[tex_idx]}.outColor"
 
-        # スフィアマップの解決と MatCap UV 接続
+        # スフィアマップの解決と MatCap UV 接続 (place2dTextureとのUV競合を解除してカメラ空間法線UVを適用)
         sphere_idx = getattr(mat, 'sphere_texture', -1)
         sphere_mode = getattr(mat, 'sphere_texture_mode', 0)
         sphere_node = None
@@ -1151,6 +1375,21 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
                 sphere_node = candidate_sph
                 if matcap_range_node:
                     try:
+                        # 親複合アトリビュート uvCoord への place2dTexture.outUV 接続を解除して MatCap UV の上書き競合を防止
+                        uv_conns = mc.listConnections(f"{sphere_node}.uvCoord", source=True, destination=False, plugs=True) or []
+                        for src_p in uv_conns:
+                            try:
+                                mc.disconnectAttr(src_p, f"{sphere_node}.uvCoord")
+                            except Exception:
+                                pass
+                        filter_conns = mc.listConnections(f"{sphere_node}.uvFilterSize", source=True, destination=False, plugs=True) or []
+                        for src_f in filter_conns:
+                            try:
+                                mc.disconnectAttr(src_f, f"{sphere_node}.uvFilterSize")
+                            except Exception:
+                                pass
+                        mc.setAttr(f"{sphere_node}.wrapU", False)
+                        mc.setAttr(f"{sphere_node}.wrapV", False)
                         mc.connectAttr(f"{matcap_range_node}.outValueX", f"{sphere_node}.uCoord", force=True)
                         mc.connectAttr(f"{matcap_range_node}.outValueY", f"{sphere_node}.vCoord", force=True)
                     except Exception:
@@ -1167,80 +1406,131 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
             mc.connectAttr(f"{sphere_node}.outColor", f"{mult_node}.input2", force=True)
             current_color_source = f"{mult_node}.output"
 
-        # Toonマップ (セル調陰影グラデーション) の解決とカラー乗算合成
+        # Toonマップ (モデル同梱Toon最優先・共有toonフォルダフォールバック) 
         toon_node = None
+        toon_bundle = None
         if enable_toon:
             toon_idx = getattr(mat, 'toon_texture', -1)
             is_shared_toon = getattr(mat, 'is_shared_toon_texture', False)
             if is_shared_toon:
-                if toon_idx in shared_toon_file_nodes:
-                    toon_node = shared_toon_file_nodes[toon_idx]
-                elif (toon_idx - 1) in shared_toon_file_nodes:
-                    toon_node = shared_toon_file_nodes[toon_idx - 1]
+                if toon_idx in shared_toon_bundles:
+                    toon_bundle = shared_toon_bundles[toon_idx]
+                    toon_node = toon_bundle['ramp']
+                elif (toon_idx - 1) in shared_toon_bundles:
+                    toon_bundle = shared_toon_bundles[toon_idx - 1]
+                    toon_node = toon_bundle['ramp']
             elif not is_shared_toon and 0 <= toon_idx < len(pmx_model.textures):
-                raw_name = os.path.basename(pmx_model.textures[toon_idx].path).lower()
-                matched_shared = False
-                for si in range(10):
-                    if f"toon{si+1:02d}" in raw_name or f"toon{si+1}." in raw_name:
-                        toon_node = shared_toon_file_nodes.get(si)
-                        matched_shared = True
-                        break
-                if not matched_shared:
-                    custom_toon_path = pmx_model.textures[toon_idx].path.replace('\\', '/')
-                    if not os.path.isabs(custom_toon_path):
-                        custom_toon_path = os.path.normpath(os.path.join(model_dir, custom_toon_path)).replace('\\', '/')
-                    if os.path.isfile(custom_toon_path):
-                        ct_name = f"{safe_mat_id}_custoon_file_{model_node_name}"
-                        toon_node = mc.shadingNode('file', asTexture=True, name=ct_name)
-                        mc.setAttr(f"{toon_node}.ftn", custom_toon_path, typ='string')
-                        if toon_range_node:
-                            try:
-                                mc.setAttr(f"{toon_node}.uCoord", 0.5)
-                                mc.connectAttr(f"{toon_range_node}.outValueX", f"{toon_node}.vCoord", force=True)
-                            except Exception:
-                                pass
+                custom_toon_path = _resolve_custom_toon_path(pmx_model.textures[toon_idx].path, model_dir=model_dir)
+                if custom_toon_path and os.path.isfile(custom_toon_path):
+                    toon_bundle = _get_or_create_toon_bundle(custom_toon_path, f"{safe_mat_id}_custoon")
+                    if toon_bundle:
+                        toon_node = toon_bundle['ramp']
+            # 万一Toon指定が未解決の場合でも共有toon01が存在すればフォールバック利用
+            if toon_bundle is None and 0 in shared_toon_bundles:
+                toon_bundle = shared_toon_bundles[0]
+                toon_node = toon_bundle['ramp']
 
-        # 全マテリアル種別（StandardSurface含む）に対してToonをカラー乗算合成 (瞳ハイライト等のみ除外・ユーザー辞書連動)
+        # 各マテリアル種別（mmdToonShader / mmdMaterial / StandardSurface 含む）に対してToonと落ち影を統合合成
+        is_toon_bypass = False
         try:
             try:
                 from ..asset.user_dict_manager import is_toon_bypass_material
             except Exception:
                 from asset.user_dict_manager import is_toon_bypass_material
-            is_highlight_part = is_toon_bypass_material(mat.name, getattr(mat, 'name_e', ''))
+            is_toon_bypass = is_toon_bypass_material(mat.name, getattr(mat, 'name_e', ''))
         except Exception:
-            is_highlight_part = any(k in mat.name.lower() for k in ["瞳-高光", "高光", "眼白", "highlight"])
-        if enable_toon and toon_node and not is_highlight_part:
+            is_toon_bypass = any(k in mat.name.lower() for k in ["瞳-高光", "高光", "眼白", "highlight"])
+
+        # 白目・瞳ハイライト等、前髪の落ち影（セルフシャドウ）による黒沈みを防ぐため意図的に遮断すべき白色極小パーツの判定
+        # 服・肌・髪等の一般メッシュは白ハイライト補色の対象外として安全に保護
+        white_hl_keywords = ["瞳-高光", "高光", "眼白", "白目", "highlight"]
+        general_mesh_keywords = ["服", "cloth", "dress", "shirt", "skirt", "肌", "skin", "body", "髪", "hair", "帽子", "靴", "リボン"]
+        mat_n_lower = (mat.name or "").lower()
+        mat_ne_lower = (getattr(mat, 'name_e', '') or "").lower()
+        is_white_highlight_part = any(k in mat_n_lower or k in mat_ne_lower for k in white_hl_keywords)
+        if any(k in mat_n_lower or k in mat_ne_lower for k in general_mesh_keywords):
+            is_white_highlight_part = False
+
+        cutout_and_overlay_kw = ["まつげ", "睫毛", "lash", "アイライン", "ハイライト", "高光", "涙", "tear", "眉", "brow", "二重"]
+        is_cutout_or_overlay = (
+            any(k in mat_name_for_kw or k in mat_e_for_kw for k in cutout_and_overlay_kw)
+            or is_face_overlay_mat
+            or is_transparent_morph_mat
+            or (alpha < 0.98)
+        )
+        mat_receives_shadow = bool(getattr(mat, 'draw_flags', 0x08) & 0x08)
+
+        base_color_before_toon = current_color_source
+
+        # Toon階調テクスチャの乗算処理（Toon除外設定時はスキップし、本来のテクスチャ色を維持）
+        if enable_toon and toon_bundle and not is_toon_bypass:
             toon_mult = mc.shadingNode('multiplyDivide', asUtility=True, name=f"{safe_mat_id}_toon_mult_{model_node_name}")
             mc.setAttr(f"{toon_mult}.operation", 1) # Multiply
-            if current_color_source:
-                mc.connectAttr(current_color_source, f"{toon_mult}.input1", force=True)
+            if base_color_before_toon:
+                mc.connectAttr(base_color_before_toon, f"{toon_mult}.input1", force=True)
             else:
                 mc.setAttr(f"{toon_mult}.input1", *diffuse_color, typ='double3')
-            mc.connectAttr(f"{toon_node}.outColor", f"{toon_mult}.input2", force=True)
+
+            if toon_bundle.get('blend_toon'):
+                # 本家MMDセルフシャドウ方式: 下端影色(v=0.05)と明部(1,1,1)を連続補間したブレンド出力を乗算
+                mc.connectAttr(f"{toon_bundle['blend_toon']}.output", f"{toon_mult}.input2", force=True)
+            else:
+                mc.connectAttr(f"{toon_node}.outColor", f"{toon_mult}.input2", force=True)
+
             current_color_source = f"{toon_mult}.output"
 
-            # Toonテクスチャはディフューズカラーに乗算合成済みのため、
-            # 白飛び防止のためambientColorへの直接接続は行わない
+        # シェーダーの受光率（diffuse）と環境光（ambientColor）の設定
+        if material_type in [1, 2, 3, 5, 6]:
+            if is_transparent_morph_mat and is_face_overlay_mat:
+                if mc.attributeQuery('ambientColor', node=shd, exists=True):
+                    mc.setAttr(f"{shd}.ambientColor", 0.0, 0.0, 0.0, typ='double3')
+                if mc.attributeQuery('diffuse', node=shd, exists=True):
+                    mc.setAttr(f"{shd}.diffuse", 0.0)
+            elif is_white_highlight_part and not (is_transparent_morph_mat and is_face_overlay_mat):
+                # 瞳ハイライト・白目等は前髪の落ち影で暗くならないよう diffuse=0、環境光と合算で純白になる補色を設定
+                if mc.attributeQuery('ambientColor', node=shd, exists=True):
+                    mc.setAttr(f"{shd}.ambientColor", active_dir_rgb[0], active_dir_rgb[1], active_dir_rgb[2], typ='double3')
+                if mc.attributeQuery('diffuse', node=shd, exists=True):
+                    mc.setAttr(f"{shd}.diffuse", 0.0)
+            elif not mat_receives_shadow and not is_cutout_or_overlay and is_white_highlight_part:
+                if mc.attributeQuery('ambientColor', node=shd, exists=True):
+                    mc.setAttr(f"{shd}.ambientColor", active_dir_rgb[0], active_dir_rgb[1], active_dir_rgb[2], typ='double3')
+                if mc.attributeQuery('diffuse', node=shd, exists=True):
+                    mc.setAttr(f"{shd}.diffuse", 0.0)
+            else:
+                # 服や肌、髪など通常の材質（Toon除外された一般材質を含む）は常に適正な diffuse=1.0 と自己発光しない ambientColor=0.0 を設定
+                if mc.attributeQuery('ambientColor', node=shd, exists=True):
+                    mc.setAttr(f"{shd}.ambientColor", 0.0, 0.0, 0.0, typ='double3')
+                if mc.attributeQuery('diffuse', node=shd, exists=True):
+                    mc.setAttr(f"{shd}.diffuse", 1.0)
+        elif material_type == 4:
+            if mc.attributeQuery('base', node=shd, exists=True):
+                mc.setAttr(f"{shd}.base", 0.0 if (is_transparent_morph_mat and is_face_overlay_mat) else 1.0)
+
+        # 加算スフィア (モード 2: .spa、sp\spa-cloth.bmp等) を本家MMD準拠でカラーパイプラインへ直接加算合成
+        # これにより mmdToonShader / mmdMaterial を含む各シェーダーの Viewport 2.0 描画で加算スフィアが確実に反映される
+        if sphere_node and sphere_mode == 2:
+            sph_add_node = mc.shadingNode('plusMinusAverage', asUtility=True, name=f"{safe_mat_id}_sph_add_{model_node_name}")
+            mc.setAttr(f"{sph_add_node}.operation", 1) # Sum (加算)
+            if current_color_source:
+                mc.connectAttr(current_color_source, f"{sph_add_node}.input3D[0]", force=True)
+            else:
+                mc.setAttr(f"{sph_add_node}.input3D[0]", *diffuse_color, typ='double3')
+            mc.connectAttr(f"{sphere_node}.outColor", f"{sph_add_node}.input3D[1]", force=True)
+            current_color_source = f"{sph_add_node}.output3D"
 
         # カラー出力ソースの保持
         material_color_source_dict[mat_idx] = current_color_source
         if 0 <= tex_idx < len(texture_file_nodes) and mc.objExists(texture_file_nodes[tex_idx]):
             material_tex_node_dict[mat_idx] = texture_file_nodes[tex_idx]
 
-        # 基本カラーのシェーダー接続 (メインテクスチャ × スフィア × Toon の統合出力)
+        # 基本カラーのシェーダー接続
         if current_color_source:
-            if material_type == 4:
+            if material_type == 4 and mc.attributeQuery('baseColor', node=shd, exists=True):
                 mc.connectAttr(current_color_source, f"{shd}.baseColor", force=True)
-            else: # Blinn, Phong, Lambert, sample_mmd_mat
-                mc.connectAttr(current_color_source, f"{shd}.color", force=True)
-
-        # 加算スフィア (モード 2: .spa) の光沢・発光接続
-        if sphere_node and sphere_mode == 2:
-            if material_type == 4:
-                mc.connectAttr(f"{sphere_node}.outColor", f"{shd}.emissionColor", force=True)
-                mc.setAttr(f"{shd}.emission", 1.0)
-            else: # Blinn, Phong, Lambert, sample_mmd_mat
-                mc.connectAttr(f"{sphere_node}.outColor", f"{shd}.incandescence", force=True)
+            else: # Blinn, Phong, Lambert, mmdMaterial, mmdToonShader
+                if mc.attributeQuery('color', node=shd, exists=True):
+                    mc.connectAttr(current_color_source, f"{shd}.color", force=True)
 
         # 材質モーフによるアルファ操作の有無を事前チェック
         has_alpha_morph = False
@@ -1266,7 +1556,17 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
             cutout_keywords = ["まつげ", "睫毛", "lash", "アイライン", "ハイライト", "高光", "涙", "tear"]
             is_cutout_part = any(k in mat_name_for_kw or k in mat_e_for_kw for k in cutout_keywords)
 
-            if alpha < 0.98:
+            # ステージ・床材質の保護判定（床や地面、ステージなどのメッシュ材質は不透明を維持）
+            floor_keywords = ["floor", "床", "ground", "地面", "stage", "ステージ", "tile", "タイル", "checker", "carpet", "絨毯"]
+            is_floor_part = any(k in mat_name_for_kw or k in mat_e_for_kw for k in floor_keywords)
+
+            if is_floor_part and alpha >= 0.90:
+                # ステージ床材質はテクスチャの誤アルファによる透過抜けを防ぎ、不透明として保護
+                if material_type == 4:
+                    mc.setAttr(f"{shd}.opacity", 1.0, 1.0, 1.0, typ='double3')
+                else:
+                    mc.setAttr(f"{shd}.transparency", 0.0, 0.0, 0.0, typ='double3')
+            elif alpha < 0.98:
                 # 半透明材質
                 if 0 <= tex_idx < len(texture_file_nodes) and tex_has_alpha:
                     tex_file_node = texture_file_nodes[tex_idx]
@@ -1359,19 +1659,16 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
                 edge_scales=mat_vtx_edge_scales
             )
             mc.sets(f"{sub_mesh_name}.f[0:{len(mat_face_counts) - 1}]", forceElement=sg_node)
-            # キャラクターメッシュ自身の影受けを無効化（顔・脚の黒潰れ防止）
+            # PMX材質のセルフシャドウフラグに準拠して影受け(receiveShadows)・影落とし(castsShadows)を設定
+            mat_casts_shadow = bool(getattr(mat, 'draw_flags', 0x04) & 0x04) and not is_transparent_morph_mat and not is_cutout_or_overlay
+            mat_recv_shadow = bool(getattr(mat, 'draw_flags', 0x08) & 0x08) and not is_transparent_morph_mat and not is_highlight_part
             try:
                 sub_shapes = mc.listRelatives(sub_mesh_name, shapes=True, fullPath=True) or [sub_mesh_name]
                 for s_shp in sub_shapes:
-                    mc.setAttr(f"{s_shp}.receiveShadows", 0)
+                    mc.setAttr(f"{s_shp}.receiveShadows", 1 if mat_recv_shadow else 0)
+                    mc.setAttr(f"{s_shp}.castsShadows", 1 if mat_casts_shadow else 0)
             except Exception:
                 pass
-
-            if is_transparent_morph_mat:
-                try:
-                    mc.setAttr(f"{sub_mesh_name}.castsShadows", 0)
-                except Exception:
-                    pass
             material_mesh_nodes.append(sub_mesh_name)
         else:
             face_start = sum(valid_face_flags[:face_offset])
@@ -1383,6 +1680,17 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
 
     if split_by_material:
         model_mesh_node = mc.group(material_mesh_nodes, name=model_node_name)
+    else:
+        # 単一メッシュの場合、各材質の edgeEnable / edgeSize を頂点カラーセットへ自動焼き込み
+        try:
+            from . import mmd_edge_bake
+            mmd_edge_bake.bake_edge_scale([model_mesh_node])
+        except Exception:
+            try:
+                import mmd_edge_bake
+                mmd_edge_bake.bake_edge_scale([model_mesh_node])
+            except Exception as e:
+                print(f"[警告] エッジ倍率の自動焼き込みをスキップしました: {e}")
 
     # ブレンドシェイプ（モーフ）の作成
     morph_structure_map = {}
@@ -1520,7 +1828,7 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
                                 'morph_attr': f"{model_mesh_node}.{attr_name}",
                                 'morph_name': morph.name,
                                 'safe_morph_name': safe_m_name,
-                                'calc_op': calc_op, # 0: MUL, 1: ADD
+                                'calc_op': calc_op,  # MULまたはADD演算
                                 'diff_rgb': diff_data[:3],
                                 'diff_a': diff_data[3] if len(diff_data) > 3 else 0.0,
                                 'amb_rgb': amb_data[:3],
@@ -1965,7 +2273,7 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
             'name_jp': rb.name,
             'name_en': getattr(rb, 'name_e', ''),
             'bone_index': rb.bone_index,
-            'shape_type': rb.shape_type, # 0: 球, 1: 箱, 2: カプセル
+            'shape_type': rb.shape_type,  # 形状種別 (球、箱、カプセル)
             'size': [float(s) for s in rb.size],
             'position': [float(p) for p in rb.position],
             'rotation': [float(r) for r in rb.rotation],
@@ -1976,7 +2284,7 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
             'friction': float(rb.friction),
             'group': int(rb.group),
             'collision_mask': int(rb.collision_mask),
-            'physics_mode': int(rb.physics_mode) # 0: Kinematic, 1: Dynamic, 2: Aligned
+            'physics_mode': int(rb.physics_mode)  # 物理モード (Kinematic, Dynamic, Aligned)
         })
 
     # ジョイントリストのシリアライズ
@@ -2078,6 +2386,15 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
     }
 
     try:
+        # 元モデルファイルパスの記録（モデル種別個別指定・連動用）
+        target_nodes_for_src = [model_mesh_node]
+        child_shapes = mc.listRelatives(model_mesh_node, shapes=True, fullPath=True) or []
+        target_nodes_for_src.extend(child_shapes)
+        for tn in target_nodes_for_src:
+            if not mc.attributeQuery('mmdSourceFilePath', node=tn, exists=True):
+                mc.addAttr(tn, longName='mmdSourceFilePath', dataType='string')
+            mc.setAttr(f"{tn}.mmdSourceFilePath", file_path, typ='string')
+
         # 新スキーマ全体のフルデータを格納する専用アトリビュート
         if not mc.attributeQuery('mmdModelStructure', node=model_mesh_node, exists=True):
             mc.addAttr(model_mesh_node, longName='mmdModelStructure', dataType='string')
@@ -2111,6 +2428,30 @@ def import_pmx(file_path, scale=8.0, split_by_material=False, create_blendshapes
             )
         except Exception as e:
             print(f"  [警告] 剛体・Joint生成エラー: {e}")
+
+    # アプローチB（同一メッシュ方式）への移行のため、別メッシュ（_Edge）の生成はスキップ
+    edge_mesh_node = None
+    if False and create_edge_mesh and not split_by_material:
+        try:
+            try:
+                from .edge_mesh_builder import build_edge_mesh_from_pmx, create_inverted_hull_edge_mesh
+            except Exception:
+                from converters.edge_mesh_builder import build_edge_mesh_from_pmx, create_inverted_hull_edge_mesh
+            try:
+                edge_mesh_node = build_edge_mesh_from_pmx(
+                    pmx_model, model_mesh_node, joint_node_names=joint_node_names, blendshape_node=blendshape_node_name, scale=scale
+                )
+            except Exception as e_pmx:
+                print(f"  [情報] PMXダイレクトエッジ生成からフォールバックします: {e_pmx}")
+                edge_mesh_node = create_inverted_hull_edge_mesh(model_mesh_node, scale=scale)
+        except Exception as e:
+            print(f"  [警告] エッジメッシュ生成中にエラーが発生しました: {e}")
+
+    # シーン内のMMDメッシュおよび地面影プレーンのシャドウ・ステージ自動設定を最適化
+    try:
+        optimize_model_meshes_for_mmd_lighting()
+    except Exception:
+        pass
 
     mc.select(model_mesh_node)
     if create_joints and root_joint_names:
@@ -2176,33 +2517,272 @@ def setup_viewport_display(shadow_mode=None, prevent_motion_darkening=True):
             if shadow_mode is not None:
                 edit_kwargs['displayLights'] = 'all'
                 edit_kwargs['shadows'] = (shadow_mode > 0)
+            # MMD Edge Renderer (同一メッシュエッジ描画オーバーライド) の適用
+            try:
+                if mc.pluginInfo("mmd_edge", query=True, loaded=True) or mc.pluginInfo("mmd_edge.mll", query=True, loaded=True):
+                    edit_kwargs['rendererOverrideName'] = "MMDEdgeRenderer"
+            except Exception:
+                pass
             mc.modelEditor(panel, edit=True, **edit_kwargs)
     except Exception:
         pass
 
-    # シーン内のMMDモデルメッシュの影受け(receiveShadows)を0に適正化
+    # シーン内のMMDモデルメッシュおよび地面影プレーンのシャドウ設定を適正化
     optimize_model_meshes_for_mmd_lighting()
 
     # perspカメラの焦点距離をMMD標準画角に設定
     setup_persp_camera_for_mmd()
 
-def optimize_model_meshes_for_mmd_lighting(target_model_root=None):
+def is_skydome_mesh(mesh_node, file_path=None):
     """
-    MMDモデルの全メッシュに対し、自身の影受け(receiveShadows)を無効化して
-    帽子やスカートによる顔・脚の不快な黒潰れを防止しつつ、地面影への影落とし(castsShadows)を維持します。
-    ※ 地面影プレーン (mmd_ground_shadow_plane) は影を受け止めるため receiveShadows=True を維持します。
+    指定されたメッシュが純粋なスカイドーム（天球・背景球・空単体モデル）であるかを判定します。
+    ユーザー定義キーワードおよび個別指定設定（ModelClassifierManager）を参照します。
+    床や階段、建築物を含む大型ステージモデルはスカイドームとは判定しません。
     """
+    if not mesh_node or not mc.objExists(mesh_node):
+        return False
+
+    # 判定マネージャーによる照合
+    try:
+        try:
+            from ..asset.model_classifier_manager import ModelClassifierManager
+        except Exception:
+            from asset.model_classifier_manager import ModelClassifierManager
+        mgr = ModelClassifierManager.get_instance()
+        return mgr.is_skydome_mesh(mesh_node, file_path=file_path)
+    except Exception:
+        pass
+
+    # マネージャー未ロード時のフォールバック処理
+    stage_keywords = [
+        "stage", "ステージ", "floor", "床", "ground", "地面",
+        "room", "館", "hall", "house", "building", "建物", "城", "街",
+        "acute", "plaza", "広場", "checker", "tile", "タイル"
+    ]
+
+    skydome_keywords = [
+        "skydome", "sky_dome", "dome_", "スカイドーム", "天球",
+        "青空", "夜空", "宇宙", "skysphere", "celestial"
+    ]
+
+    full_path = mc.ls(mesh_node, long=True)[0] if mc.ls(mesh_node, long=True) else mesh_node
+    path_lower = full_path.lower()
+
+    if any(k in path_lower for k in stage_keywords):
+        return False
+
+    num_materials = 0
+    try:
+        shading_groups = mc.listConnections(mesh_node, type="shadingEngine") or []
+        num_materials = len(set(shading_groups))
+    except Exception:
+        pass
+
+    if num_materials > 4:
+        return False
+
+    if any(k in path_lower for k in skydome_keywords):
+        return True
+
+    try:
+        bb = mc.exactWorldBoundingBox(mesh_node)
+        width = abs(bb[3] - bb[0])
+        height = abs(bb[4] - bb[1])
+        depth = abs(bb[5] - bb[2])
+        if width >= 200.0 and depth >= 200.0 and height >= 80.0 and num_materials <= 4:
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
+def detect_stage_meshes():
+    """
+    シーン内のメッシュからステージモデル（広大な床メッシュや背景・ステージ建造物）を自動検出します。
+    ユーザー定義キーワードおよび個別指定設定（ModelClassifierManager）を参照します。
+    戻り値: ステージ床またはステージ本体と判定されたメッシュシェイプのリスト
+    """
+    try:
+        try:
+            from ..asset.model_classifier_manager import ModelClassifierManager
+        except Exception:
+            from asset.model_classifier_manager import ModelClassifierManager
+        mgr = ModelClassifierManager.get_instance()
+    except Exception:
+        mgr = None
+
+    stage_meshes = []
+    stage_keywords = [
+        "stage", "ステージ", "floor", "床", "ground", "地面",
+        "room", "hall", "field", "広場", "house", "building", "建物", "城", "街",
+        "bg", "background", "背景", "checker", "tile", "タイル", "acute", "plaza"
+    ]
     try:
         all_meshes = mc.ls(type="mesh", long=True) or []
         for m in all_meshes:
-            # 地面影プレーン自身は影を受ける必要があるためスキップ
+            if "mmd_ground_shadow" in m or any(k in m for k in ["Camera", "Light", "light", "mmd_rigid", "mmd_joint"]):
+                continue
+
+            # マネージャーによるステージ判定
+            if mgr:
+                if mgr.is_stage_mesh(m):
+                    stage_meshes.append(m)
+                    continue
+                if mgr.is_skydome_mesh(m):
+                    continue
+
+            # フォールバック処理
+            if is_skydome_mesh(m):
+                continue
+
+            # スキニング（skinCluster）が存在するメッシュはキャラクターとみなし除外
+            try:
+                skin_clusters = mc.ls(mc.listHistory(m), type="skinCluster") or []
+                if skin_clusters:
+                    continue
+            except Exception:
+                pass
+
+            m_full = m
+            parents = mc.listRelatives(m, parent=True, fullPath=True) or []
+            shading_groups = mc.listConnections(m, type="shadingEngine") or []
+            mat_names = []
+            for sg in shading_groups:
+                mat_names.extend(mc.listConnections(f"{sg}.surfaceShader") or [])
+            path_str = (m_full + " " + " ".join(parents) + " " + " ".join(mat_names)).lower()
+
+            has_keyword = any(k in path_str for k in stage_keywords)
+            is_large_stage = False
+            try:
+                bb = mc.exactWorldBoundingBox(m)
+                width = abs(bb[3] - bb[0])
+                height = abs(bb[4] - bb[1])
+                depth = abs(bb[5] - bb[2])
+
+                # 縦長の人型キャラクタープロポーションは除外
+                if height >= 60.0 and height > width * 0.6 and height > depth * 0.6:
+                    continue
+
+                is_flat_floor = (width >= 80.0 or depth >= 80.0) and (height <= 25.0 or (height <= width * 0.15 and height <= depth * 0.15))
+                num_materials = len(set(shading_groups))
+                is_multi_mat_large = (width >= 250.0 and depth >= 250.0) and num_materials >= 5
+
+                if is_flat_floor or is_multi_mat_large:
+                    is_large_stage = True
+            except Exception:
+                pass
+
+            if has_keyword or is_large_stage:
+                stage_meshes.append(m)
+    except Exception:
+        pass
+    return stage_meshes
+
+
+def set_ground_shadow_mode(stage_mode=None):
+    """
+    MMD地面影プレーンとステージモデル床への影投影モードを切り替えます。
+    引数:
+        stage_mode (bool, optional):
+            True: ステージ影モード（地面影プレーン非表示、ステージ床で影を受け止める）
+            False: 標準地面影プレーンモード（Y=0に影プレーン表示）
+            None: シーン内のステージモデル有無から自動判別
+    戻り値:
+        bool: 適用されたモード (True: ステージ影, False: 地面影プレーン)
+    """
+    detected_stages = detect_stage_meshes()
+    if stage_mode is None:
+        stage_mode = len(detected_stages) > 0
+
+    plane_name = "mmd_ground_shadow_plane"
+    grp_name = "mmd_ground_shadow_grp"
+
+    # 地面影プレーンの表示状態切り替え
+    target_nodes = []
+    if mc.objExists(plane_name):
+        target_nodes.append(plane_name)
+    if mc.objExists(grp_name):
+        target_nodes.append(grp_name)
+
+    for node in target_nodes:
+        try:
+            # ステージ影モード時は非表示 (0)、標準地面影時は表示 (1)
+            mc.setAttr(f"{node}.visibility", 0 if stage_mode else 1)
+        except Exception:
+            pass
+
+    # ステージメッシュ側の受光属性最適化
+    if stage_mode and detected_stages:
+        for s_mesh in detected_stages:
+            try:
+                if mc.attributeQuery("receiveShadows", node=s_mesh, exists=True):
+                    mc.setAttr(f"{s_mesh}.receiveShadows", 1)
+                # 広大なステージメッシュ自身が影を落としてシャドウマップ解像度を奪うのを抑制
+                bb = mc.exactWorldBoundingBox(s_mesh)
+                width = abs(bb[3] - bb[0])
+                depth = abs(bb[5] - bb[2])
+                if width >= 50.0 or depth >= 50.0:
+                    if mc.attributeQuery("castsShadows", node=s_mesh, exists=True):
+                        mc.setAttr(f"{s_mesh}.castsShadows", 0)
+            except Exception:
+                pass
+        print(f"[情報] ステージ影モードを有効化しました (地面影プレーン非表示 / ステージ受光有効: {len(detected_stages)} メッシュ)")
+    else:
+        print("[情報] 標準地面影プレーンモードを有効化しました (Y=0 地面影プレーン表示)")
+
+    return stage_mode
+
+
+def optimize_model_meshes_for_mmd_lighting(target_model_root=None, auto_stage_detect=True):
+    """
+    MMDモデルのメッシュに対し、前髪・首元・服などの落ち影（セルフシャドウ）を受け取るため
+    receiveShadowsを有効化します。
+    また、地面影プレーン (mmd_ground_shadow_plane) の castsShadows を無効化することで、
+    ディレクショナルライトのデプスマップ解像度がキャラクター全身に集中するように最適化します。
+    ステージモデルが検出された場合は、地面影プレーンを自動非表示にしてステージ床へ影を落とします。
+    """
+    try:
+        stage_meshes_set = set(detect_stage_meshes())
+        all_meshes = mc.ls(type="mesh", long=True) or []
+        for m in all_meshes:
+            # 地面影プレーンは影を受け止めるのみで、自身は影を落とさない設定にする（シャドウマップ解像度の分散防止）
             if "mmd_ground_shadow" in m:
+                if mc.attributeQuery("receiveShadows", node=m, exists=True):
+                    mc.setAttr(f"{m}.receiveShadows", 1)
+                if mc.attributeQuery("castsShadows", node=m, exists=True):
+                    mc.setAttr(f"{m}.castsShadows", 0)
                 continue
-            # カメラやライトの補助形状はスキップ
-            if any(k in m for k in ["Camera", "Light", "light"]):
+            # スカイドーム（天球）メッシュの影落とし・受光を無効化
+            # (シャドウマップ解像度の巨大空間への分散抑止、および天球による遮光・黒ずみ防止)
+            if is_skydome_mesh(m):
+                if mc.attributeQuery("castsShadows", node=m, exists=True):
+                    mc.setAttr(f"{m}.castsShadows", 0)
+                if mc.attributeQuery("receiveShadows", node=m, exists=True):
+                    mc.setAttr(f"{m}.receiveShadows", 0)
                 continue
+            # カメラやライト、剛体補助形状はスキップ
+            if any(k in m for k in ["Camera", "Light", "light", "mmd_rigid", "mmd_joint"]):
+                continue
+
+            # ステージメッシュ以外のキャラクター通常メッシュは影落とし (castsShadows) を復元・保証
+            # （過去に誤って0に設定された場合でも確実に1へ戻す）
+            is_stg = (m in stage_meshes_set) if 'stage_meshes_set' in locals() else False
+            if not is_stg and mc.attributeQuery("castsShadows", node=m, exists=True):
+                try:
+                    # 初期透明モーフ板等の特定材質で明示的に0に設定されている場合を除き1を保証
+                    mc.setAttr(f"{m}.castsShadows", 1)
+                except Exception:
+                    pass
+
             if mc.attributeQuery("receiveShadows", node=m, exists=True):
-                mc.setAttr(f"{m}.receiveShadows", 0)
+                # セルフシャドウ受光を有効化
+                mc.setAttr(f"{m}.receiveShadows", 1)
+
+        # ステージモデル自動判別と影プレーン連動
+        if auto_stage_detect:
+            set_ground_shadow_mode(stage_mode=None)
+
     except Exception:
         pass
 
@@ -2260,10 +2840,10 @@ def set_untone_mapped_view_transform():
 def create_mmd_lighting(shadow_mode=1):
     """
     MMD標準のライティング設定（平行光 & 環境光）を構築します。
-    MMD公式仕様準拠:
-      - 光源色: 赤154, 緑154, 青154 (約 0.6039)
-      - 方向角: RotateX: -30.0, RotateY: 30.0, RotateZ: 0.0 (正面・斜め上から優しく照らす光角)
-      - 環境光: 強度 0.65, カラー (0.70, 0.70, 0.70) で陰影面の黒潰れを防止
+    全マテリアル種別（mmdToonShader / mmdMaterial / StandardSurface / Phong等）対応仕様:
+      - 光源方向: MMD標準の照明操作（X: 0.50, Y: -1.00, Z: -0.50）に準拠した Rotate [-54.74, 45.0, 0.0]
+      - 平行光カラー: (1.0, 1.0, 1.0), 強度 0.32 （落ち影とのコントラストを形成）
+      - 環境光カラー: (1.0, 1.0, 1.0), 強度 0.68 （セルフシャドウ領域の黒潰れを防ぎ、Toon影色の自然な発色を維持）
 
     shadow_mode:
       - 0: セルフ影なし (シャドウOFF)
@@ -2274,28 +2854,35 @@ def create_mmd_lighting(shadow_mode=1):
     existing_dir_shapes = mc.ls("mmd_directional_light*Shape*", type="directionalLight") or []
     existing_amb_shapes = mc.ls("mmd_ambient_light*Shape*", type="ambientLight") or []
 
+    # MMD本家標準の初期ライト色: RGB 154 (約 0.60392)
+    mmd_light_val = 154.0 / 255.0
+
     if existing_dir_shapes or existing_amb_shapes:
         if existing_dir_shapes:
             d_shape = existing_dir_shapes[0]
             d_trans = mc.listRelatives(d_shape, parent=True, fullPath=True)[0]
-            # MMD公式仕様準拠: 正面をふんわり照らし、床影を左奥へ伸ばす自然な角度 [-30.0, 30.0, 0.0]
-            mc.setAttr(f"{d_trans}.rotate", -30.0, 30.0, 0.0, typ='double3')
+            mc.setAttr(f"{d_trans}.rotate", -54.74, 45.0, 0.0, typ='double3')
             mc.setAttr(f"{d_trans}.translateY", 200.0)
             mc.setAttr(f"{d_trans}.scale", 5.0, 5.0, 5.0)
-            mc.setAttr(f"{d_shape}.color", 0.6039, 0.6039, 0.6039, typ='double3')
+            mc.setAttr(f"{d_shape}.color", mmd_light_val, mmd_light_val, mmd_light_val, typ='double3')
             mc.setAttr(f"{d_shape}.intensity", 1.0)
+            # MMD照明初期値カスタムアトリビュートの保持
+            for attr_n, attr_v in [('mmdLightX', 0.50), ('mmdLightY', -1.00), ('mmdLightZ', -0.50)]:
+                if not mc.attributeQuery(attr_n, node=d_trans, exists=True):
+                    mc.addAttr(d_trans, longName=attr_n, attributeType='double', defaultValue=attr_v)
+                mc.setAttr(f"{d_trans}.{attr_n}", attr_v)
             _apply_shadow_mode(d_shape, shadow_mode)
         if existing_amb_shapes:
             a_shape = existing_amb_shapes[0]
             a_trans = mc.listRelatives(a_shape, parent=True, fullPath=True)[0]
             mc.setAttr(f"{a_trans}.translateY", 200.0)
             mc.setAttr(f"{a_trans}.scale", 5.0, 5.0, 5.0)
-            mc.setAttr(f"{a_shape}.ambientShade", 0.05)
-            mc.setAttr(f"{a_shape}.color", 0.70, 0.70, 0.70, typ='double3')
-            mc.setAttr(f"{a_shape}.intensity", 0.65)
+            mc.setAttr(f"{a_shape}.ambientShade", 0.0)
+            mc.setAttr(f"{a_shape}.color", 1.0, 1.0, 1.0, typ='double3')
+            mc.setAttr(f"{a_shape}.intensity", 0.75)
         # ビューポートのテクスチャ表示とアンチエイリアシングを最適化
         setup_viewport_display(shadow_mode=shadow_mode)
-        print("[情報] 既存のMMD標準ライティングを適正化しました（MMD公式準拠パラメータ適用）。")
+        print("[情報] 既存のMMD標準ライティングを適正化しました（MMD Toon & セルフシャドウ対応）。")
         return "mmd_lighting_grp"
 
     print(f"[情報] MMD標準ライティング（シャドウモード: {shadow_mode}）を作成中...")
@@ -2307,17 +2894,22 @@ def create_mmd_lighting(shadow_mode=1):
     amb_shape_name = _get_unique_node_name(f"{amb_light_name}Shape")
     grp_name = _get_unique_node_name("mmd_lighting_grp")
 
-    # 平行光源 (MMDデフォルトキーライト: 強度1.0、RGB 154/255=0.6039)
+    # 平行光源 (MMD本家基準: 強度 1.0, カラー RGB 154)
     dir_shape_raw = mc.directionalLight(intensity=1.0)
     dir_transform_nodes = mc.listRelatives(dir_shape_raw, parent=True, fullPath=True) or [dir_shape_raw]
     dir_light = mc.rename(dir_transform_nodes[0], dir_light_name)
     actual_dir_shapes = mc.listRelatives(dir_light, shapes=True, fullPath=True) or []
     dir_shape = actual_dir_shapes[0] if actual_dir_shapes else dir_shape_raw
 
-    # MMDデフォルト値: 正面・斜め上から優しく照らす角度 [-30.0, 30.0, 0.0]
-    mc.setAttr(f"{dir_light}.rotate", -30.0, 30.0, 0.0, typ='double3')
-    mc.setAttr(f"{dir_shape}.color", 0.6039, 0.6039, 0.6039, typ='double3')
+    # MMD標準の照明操作（X: 0.50, Y: -1.00, Z: -0.50）に準拠した角度 [-54.74, 45.0, 0.0]
+    mc.setAttr(f"{dir_light}.rotate", -54.74, 45.0, 0.0, typ='double3')
+    mc.setAttr(f"{dir_shape}.color", mmd_light_val, mmd_light_val, mmd_light_val, typ='double3')
     mc.setAttr(f"{dir_shape}.intensity", 1.0)
+    # MMD照明初期値カスタムアトリビュートの保持 (X: 0.50, Y: -1.00, Z: -0.50)
+    for attr_n, attr_v in [('mmdLightX', 0.50), ('mmdLightY', -1.00), ('mmdLightZ', -0.50)]:
+        if not mc.attributeQuery(attr_n, node=dir_light, exists=True):
+            mc.addAttr(dir_light, longName=attr_n, attributeType='double', defaultValue=attr_v)
+        mc.setAttr(f"{dir_light}.{attr_n}", attr_v)
     # 頭上への配置（Y=200）および視認性向上のための拡大（スケール=5）
     mc.setAttr(f"{dir_light}.translateY", 200.0)
     mc.setAttr(f"{dir_light}.scale", 5.0, 5.0, 5.0)
@@ -2325,16 +2917,16 @@ def create_mmd_lighting(shadow_mode=1):
     # シャドウモードの適用
     _apply_shadow_mode(dir_shape, shadow_mode)
 
-    # アンビエントライト (MMD材質Ambient=0.7準拠: 強度0.65、Color 0.70に設定して黒沈みを解消)
-    amb_shape_raw = mc.ambientLight(intensity=0.65)
+    # アンビエントライト (セルフシャドウ領域の下限輝度 0.75 を維持し、黒潰れを防止)
+    amb_shape_raw = mc.ambientLight(intensity=0.75)
     amb_transform_nodes = mc.listRelatives(amb_shape_raw, parent=True, fullPath=True) or [amb_shape_raw]
     amb_light = mc.rename(amb_transform_nodes[0], amb_light_name)
     actual_amb_shapes = mc.listRelatives(amb_light, shapes=True, fullPath=True) or []
     amb_shape = actual_amb_shapes[0] if actual_amb_shapes else amb_shape_raw
 
-    mc.setAttr(f"{amb_shape}.ambientShade", 0.05)
-    mc.setAttr(f"{amb_shape}.color", 0.70, 0.70, 0.70, typ='double3')
-    mc.setAttr(f"{amb_shape}.intensity", 0.65)
+    mc.setAttr(f"{amb_shape}.ambientShade", 0.0)
+    mc.setAttr(f"{amb_shape}.color", 1.0, 1.0, 1.0, typ='double3')
+    mc.setAttr(f"{amb_shape}.intensity", 0.75)
     mc.setAttr(f"{amb_light}.translateY", 200.0)
     mc.setAttr(f"{amb_light}.scale", 5.0, 5.0, 5.0)
 
@@ -2361,6 +2953,13 @@ def create_mmd_ground_shadow(size=500.0, shadow_intensity=0.5):
     plane_name = "mmd_ground_shadow_plane"
 
     if mc.objExists(plane_name):
+        shapes = mc.listRelatives(plane_name, shapes=True, fullPath=True) or []
+        for s in shapes:
+            try:
+                mc.setAttr(f"{s}.castsShadows", 0)
+                mc.setAttr(f"{s}.receiveShadows", 1)
+            except Exception:
+                pass
         return plane_name
 
     # シャドウキャッチャー用シェーダーの構築 (useBackground)
@@ -2386,12 +2985,15 @@ def create_mmd_ground_shadow(size=500.0, shadow_intensity=0.5):
     mc.sets(plane, forceElement=sg)
 
     # 煽りアングル（下から見上げた際）にモデルが隠れないよう、片面描画＆バックフェイスカリングを設定
+    # また、広大な地面プレーンがシャドウマップの投影範囲を広げないよう castsShadows=0 に設定
     shapes = mc.listRelatives(plane, shapes=True) or []
     if shapes:
         plane_shape = shapes[0]
         try:
             mc.setAttr(f"{plane_shape}.doubleSided", 0)
             mc.setAttr(f"{plane_shape}.backfaceCulling", 3)
+            mc.setAttr(f"{plane_shape}.castsShadows", 0)
+            mc.setAttr(f"{plane_shape}.receiveShadows", 1)
         except Exception:
             pass
 
@@ -2406,6 +3008,8 @@ def create_mmd_ground_shadow(size=500.0, shadow_intensity=0.5):
         grp = mc.parent(plane, grp_name)[0]
 
     print(f"[情報] MMD標準地面影プレーンを作成しました ({plane_name})。")
+    # ステージモデルが存在する場合は自動でステージ影モード（プレーン非表示）に切り替え
+    set_ground_shadow_mode(stage_mode=None)
     return plane
 
 def _apply_shadow_mode(dir_shape, shadow_mode):
@@ -2417,19 +3021,19 @@ def _apply_shadow_mode(dir_shape, shadow_mode):
             # セルフ影なし
             mc.setAttr(f"{dir_shape}.useDepthMapShadows", 0)
         elif shadow_mode == 1:
-            # モード1 (標準セルフ影) - MMD準拠の自然で柔らかい半透明影
-            mc.setAttr(f"{dir_shape}.useDepthMapShadows", 1)
-            mc.setAttr(f"{dir_shape}.dmapResolution", 2048)
-            mc.setAttr(f"{dir_shape}.dmapFilterSize", 5)
-            mc.setAttr(f"{dir_shape}.dmapBias", 0.005)
-            mc.setAttr(f"{dir_shape}.shadowColor", 0.75, 0.75, 0.75, typ='double3')
-        elif shadow_mode == 2:
-            # モード2 (高精細セルフ影) - MMD準拠の自然で柔らかい半透明影
+            # モード1 (標準セルフ影) - シャドウアクネを抑止しつつ境界を柔らかく馴染ませた落ち影を生成
             mc.setAttr(f"{dir_shape}.useDepthMapShadows", 1)
             mc.setAttr(f"{dir_shape}.dmapResolution", 4096)
-            mc.setAttr(f"{dir_shape}.dmapFilterSize", 5)
-            mc.setAttr(f"{dir_shape}.dmapBias", 0.005)
-            mc.setAttr(f"{dir_shape}.shadowColor", 0.75, 0.75, 0.75, typ='double3')
+            mc.setAttr(f"{dir_shape}.dmapFilterSize", 6)
+            mc.setAttr(f"{dir_shape}.dmapBias", 0.006)
+            mc.setAttr(f"{dir_shape}.shadowColor", 0.0, 0.0, 0.0, typ='double3')
+        elif shadow_mode == 2:
+            # モード2 (高精細セルフ影) - 柔らかい境界フィルタリング付きセルフ影
+            mc.setAttr(f"{dir_shape}.useDepthMapShadows", 1)
+            mc.setAttr(f"{dir_shape}.dmapResolution", 4096)
+            mc.setAttr(f"{dir_shape}.dmapFilterSize", 8)
+            mc.setAttr(f"{dir_shape}.dmapBias", 0.006)
+            mc.setAttr(f"{dir_shape}.shadowColor", 0.0, 0.0, 0.0, typ='double3')
 
         # ビューポート連動（影とテクスチャ表示）
         model_panels = mc.getPanel(type='modelPanel') or []
@@ -2448,19 +3052,17 @@ def fix_toon_shading_in_scene(shadow_mode=1):
     """
     fixed_count = 0
 
-    # モデルメッシュの影受け適正化（帽子や前髪による顔・脚の黒潰れを解消）
+    # モデルメッシュおよび地面影プレーンのシャドウ属性を適正化
     optimize_model_meshes_for_mmd_lighting()
 
     # ライティングとシャドウモードの更新
-    dir_shapes = mc.ls("mmd_directional_lightShape", type="directionalLight") or []
+    dir_shapes = mc.ls("mmd_directional_light*Shape*", type="directionalLight") or []
     if dir_shapes:
         dir_shape = dir_shapes[0]
         dir_transform = mc.listRelatives(dir_shape, parent=True, fullPath=True)[0]
-        mc.setAttr(f"{dir_transform}.rotate", -30.0, 30.0, 0.0, typ='double3')
+        mc.setAttr(f"{dir_transform}.rotate", -25.0, 20.0, 0.0, typ='double3')
         mc.setAttr(f"{dir_transform}.translateY", 200.0)
         mc.setAttr(f"{dir_transform}.scale", 5.0, 5.0, 5.0)
-        mc.setAttr(f"{dir_shape}.color", 0.6039, 0.6039, 0.6039, typ='double3')
-        mc.setAttr(f"{dir_shape}.intensity", 1.0)
         _apply_shadow_mode(dir_shape, shadow_mode)
     elif mc.objExists("mmd_lighting_grp"):
         _apply_shadow_mode("mmd_directional_lightShape", shadow_mode)
@@ -2470,9 +3072,51 @@ def fix_toon_shading_in_scene(shadow_mode=1):
         amb_transform = mc.listRelatives(amb_shapes[0], parent=True, fullPath=True)[0]
         mc.setAttr(f"{amb_transform}.translateY", 200.0)
         mc.setAttr(f"{amb_transform}.scale", 5.0, 5.0, 5.0)
-        mc.setAttr(f"{amb_shapes[0]}.ambientShade", 0.05)
-        mc.setAttr(f"{amb_shapes[0]}.color", 0.70, 0.70, 0.70, typ='double3')
-        mc.setAttr(f"{amb_shapes[0]}.intensity", 0.65)
+        mc.setAttr(f"{amb_shapes[0]}.ambientShade", 0.0)
+
+    # シーン内のToonテクスチャノードから最頻出のToon影色を抽出してライトおよび固定UVサンプリングを適正化
+    toon_file_nodes = (mc.ls("toon*_file_*", type="file") or []) + (mc.ls("*_custoon_file_*", type="file") or [])
+    best_toon_path = None
+    max_conns = -1
+    for tf_node in toon_file_nodes:
+        try:
+            ftn_val = mc.getAttr(f"{tf_node}.ftn")
+            if ftn_val and os.path.isfile(ftn_val):
+                # Viewport 2.0でメッシュUVがバインドされないよう専用place2dTextureを保証
+                uv_in = mc.listConnections(f"{tf_node}.uvCoord", source=True, destination=False) or []
+                if not uv_in:
+                    p2d = mc.shadingNode('place2dTexture', asUtility=True, name=f"{tf_node}_place2d")
+                    for s_a, d_a in PLACE2D_ATTR_CONNECTIONS:
+                        try:
+                            mc.connectAttr(f"{p2d}.{s_a}", f"{tf_node}.{d_a}", force=True)
+                        except Exception:
+                            pass
+                    mc.setAttr(f"{p2d}.wrapU", False)
+                    mc.setAttr(f"{p2d}.wrapV", False)
+                    mc.setAttr(f"{p2d}.repeatU", 0.0)
+                    mc.setAttr(f"{p2d}.repeatV", 0.0)
+                    mc.setAttr(f"{p2d}.offsetU", 0.5)
+                    mc.setAttr(f"{p2d}.offsetV", 0.05)
+                out_c = mc.listConnections(f"{tf_node}.outColor", source=False, destination=True) or []
+                conn_cnt = len(out_c)
+                for b_n in out_c:
+                    b_outs = mc.listConnections(f"{b_n}.output", source=False, destination=True) or []
+                    conn_cnt += len(b_outs)
+                if conn_cnt > max_conns:
+                    max_conns = conn_cnt
+                    best_toon_path = ftn_val
+        except Exception:
+            pass
+
+    if best_toon_path:
+        _apply_toon_color_to_mmd_lights(_extract_toon_shadow_color(best_toon_path))
+    else:
+        if dir_shapes:
+            mc.setAttr(f"{dir_shapes[0]}.color", 1.0, 1.0, 1.0, typ='double3')
+            mc.setAttr(f"{dir_shapes[0]}.intensity", 0.25)
+        if amb_shapes:
+            mc.setAttr(f"{amb_shapes[0]}.color", 1.0, 1.0, 1.0, typ='double3')
+            mc.setAttr(f"{amb_shapes[0]}.intensity", 0.75)
 
     # Toon計算ネットワークのワールド空間化 (視点回転に左右されないMMD互換設定)
     vecprod_nodes = mc.ls("toon_vecprod_*", type="vectorProduct") or []
@@ -2515,8 +3159,8 @@ def fix_toon_shading_in_scene(shadow_mode=1):
                 mc.connectAttr(f"{target_dir_light}.worldMatrix[0]", f"{lvec_node}.matrix", force=True)
                 mc.connectAttr(f"{lvec_node}.output", f"{vp}.input2", force=True)
             else:
-                # MMD標準のワールド光線方向に設定 (斜め前方左上)
-                mc.setAttr(f"{vp}.input2", -0.40825, 0.81650, 0.40825, typ='double3')
+                # 顔・首・襟元の落ち影を自然に出す正面斜め上ライト [-25.0, 20.0, 0.0] の単位方向ベクトル
+                mc.setAttr(f"{vp}.input2", 0.3099, 0.4226, 0.8517, typ='double3')
 
             fixed_count += 1
         except Exception:
@@ -2528,14 +3172,26 @@ def fix_toon_shading_in_scene(shadow_mode=1):
     except Exception:
         pass
 
-    # toon_range ノードのしきい値更新 (正面は白、側面〜裏面が自然に陰るMMD最適化)
+    # toon_range ノードのしきい値更新（MMD準拠の遷移幅かつ境目なく自然に広がる設定）
     range_nodes = mc.ls("toon_range_*", type="setRange") or []
     for r_node in range_nodes:
         try:
             mc.setAttr(f"{r_node}.minX", 0.0)
             mc.setAttr(f"{r_node}.maxX", 1.0)
-            mc.setAttr(f"{r_node}.oldMinX", -1.0)
-            mc.setAttr(f"{r_node}.oldMaxX", 1.0)
+            mc.setAttr(f"{r_node}.oldMinX", -0.05)
+            mc.setAttr(f"{r_node}.oldMaxX", 0.35)
+            fixed_count += 1
+        except Exception:
+            pass
+
+    # 旧シーンに存在する受光分母除算ノードの無効化（落ち影内部の逆グラデーション白縁を解消）
+    denom_nodes = mc.ls("toon_denom_range_*", type="setRange") or []
+    for d_node in denom_nodes:
+        try:
+            mc.setAttr(f"{d_node}.minX", 1.0)
+            mc.setAttr(f"{d_node}.maxX", 1.0)
+            mc.setAttr(f"{d_node}.oldMinX", 0.0)
+            mc.setAttr(f"{d_node}.oldMaxX", 1.0)
             fixed_count += 1
         except Exception:
             pass

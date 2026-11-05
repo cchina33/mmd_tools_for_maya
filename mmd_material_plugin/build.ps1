@@ -1,6 +1,14 @@
 # MMD Material Plugin (.mll) PowerShell Build Script
 param(
-    [string]$DevkitLocation = if ($env:USERPROFILE) { "$env:USERPROFILE\devkitBase" } else { "C:\Users\<ユーザー名>\devkitBase" },
+    [string]$DevkitLocation = $(
+        if (Test-Path "C:\Autodesk_devkit\devkitBase_2025") {
+            "C:\Autodesk_devkit\devkitBase_2025"
+        } elseif ($env:USERPROFILE -and (Test-Path "$env:USERPROFILE\devkitBase")) {
+            "$env:USERPROFILE\devkitBase"
+        } else {
+            "C:\Autodesk_devkit\devkitBase_2025"
+        }
+    ),
     [string]$Config = "Release"
 )
 

@@ -139,9 +139,20 @@ namespace PhysicsSimulationBakeViewer
                     _vmd = new VmdMotionData { ModelName = _pmx.ModelName, MaxFrame = 0 };
                 }
 
-                _physics.InitializeWorld();
-                _physics.BuildPhysicsFromPmx(_pmx);
+                int actualStart = _startFrame ?? 0;
+                int actualEnd = _endFrame ?? _vmd.MaxFrame;
+                actualStart = Math.Clamp(actualStart, 0, _vmd.MaxFrame);
+                actualEnd = Math.Clamp(actualEnd, actualStart, _vmd.MaxFrame);
+                int totalBakeFrames = actualEnd - actualStart + 1;
+
+                // 開始フレームにおけるボーン姿勢（全ての親などの移動・回転を含む）を先行評価
                 _evaluator = new PoseEvaluator(_pmx, _vmd, _physics);
+                _evaluator.EvaluateFkOnly(actualStart);
+
+                // 評価された開始姿勢の位置に合わせて剛体とジョイントを直接初期生成（原点からの瞬間移動を排除）
+                _physics.InitializeWorld();
+                _physics.BuildPhysicsFromPmx(_pmx, _evaluator.BoneWorldMatrices);
+                _physics.EnablePhysics();
 
                 Title = $"MMD リアルタイム物理ベイクビューア [{_physics.EngineVersionName}] - {_pmx.ModelName}";
 
@@ -151,13 +162,7 @@ namespace PhysicsSimulationBakeViewer
                 // stdin リスナーを開始
                 _ = Task.Run(ListenStdinAsync);
 
-                int actualStart = _startFrame ?? 0;
-                int actualEnd = _endFrame ?? _vmd.MaxFrame;
-                actualStart = Math.Clamp(actualStart, 0, _vmd.MaxFrame);
-                actualEnd = Math.Clamp(actualEnd, actualStart, _vmd.MaxFrame);
-                int totalBakeFrames = actualEnd - actualStart + 1;
-
-                // 安定化より前に開始フレームの姿勢をモデル・剛体に先行セット
+                // 剛体をボーン位置へ吸着し、初速ゼロ・張力ゼロの安定姿勢を確定
                 _evaluator.EvaluateFkAndSyncBodies(actualStart, resetAllBodies: true);
                 _evaluator.ApplyPhysicsToBones();
                 _update_camera_tracking(_evaluator.BoneWorldMatrices, immediate: true);
@@ -273,9 +278,10 @@ namespace PhysicsSimulationBakeViewer
                 bakedVmd.BoneTracks[bones[idx].Name] = new List<VmdBoneKeyframe>();
             }
 
-            // 安定化より前に開始フレームの姿勢をモデル・剛体に確実にセット（全剛体をスナップ）
+            // 安定化より前に開始フレームの姿勢をモデル・剛体に確実にセット（各剛体をスナップ）
             _evaluator.EvaluateFkAndSyncBodies(actualStart, resetAllBodies: true);
             _evaluator.ApplyPhysicsToBones();
+            _physics.EnablePhysics();
             _update_viewport_display(actualStart);
 
             // ベイク開始前の初期姿勢安定化 (ウォームアップ)

@@ -16,7 +16,12 @@ def get_plugin_path():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     plugin_dir = os.path.abspath(os.path.join(script_dir, "..", "bin"))
 
-    # 実行中のMayaバージョン（例: 2025, 2026）を取得して対応バイナリを優先
+    # 直下の最新統合バイナリを最優先で確認
+    default_path = os.path.join(plugin_dir, PLUGIN_NAME)
+    if os.path.exists(default_path):
+        return default_path
+
+    # 直下に存在しない場合は実行中のMayaバージョン別バイナリをフォールバック
     try:
         ver_str = str(cmds.about(version=True))
         import re
@@ -29,8 +34,8 @@ def get_plugin_path():
     except Exception:
         pass
 
-    # バージョン別バイナリがない場合は直下のデフォルトをフォールバック
-    return os.path.join(plugin_dir, PLUGIN_NAME)
+    # フォールバック
+    return default_path
 
 def setup_hypershade_callbacks():
     """
@@ -411,16 +416,12 @@ def convert_shader_to_mmd_material(shader_node, inherit_textures=True):
     except Exception:
         pass
 
-    # 反射・環境光・拡散反射係数 (MMD本来の明るく鮮やかな発色に最適化)
+    # 反射・環境光・拡散反射係数 (白飛び・黒沈みを防ぎMMD本来の発色に最適化)
     sc = info["specular_val"]
-    ac = info["ambient_val"]
-    # 環境光が未設定または極小の場合は MMD標準環境光 (0.5, 0.5, 0.5) を適用
-    if sum(ac) < 0.15:
-        ac = (0.5, 0.5, 0.5)
     try:
         cmds.setAttr(mmd_node + ".diffuse", 1.0)
         cmds.setAttr(mmd_node + ".specularColor", sc[0], sc[1], sc[2], type="double3")
-        cmds.setAttr(mmd_node + ".ambientColor", ac[0], ac[1], ac[2], type="double3")
+        cmds.setAttr(mmd_node + ".ambientColor", 0.0, 0.0, 0.0, type="double3")
     except Exception:
         pass
 
@@ -428,6 +429,8 @@ def convert_shader_to_mmd_material(shader_node, inherit_textures=True):
     if inherit_textures and info["color_plug"]:
         try:
             cmds.connectAttr(info["color_plug"], mmd_node + ".color", force=True)
+            if cmds.attributeQuery("diffuseColor", node=mmd_node, exists=True):
+                cmds.connectAttr(info["color_plug"], mmd_node + ".diffuseColor", force=True)
         except Exception as e:
             cmds.warning("カラーテクスチャの引き継ぎ接続に失敗しました: {}".format(e))
 
@@ -530,29 +533,29 @@ def ensure_mmd_lighting(shadow_mode=1):
 
     # フォールバック: 直接 Maya コマンドで MMD 標準ライトを作成
     try:
-        dir_shape_raw = cmds.directionalLight(intensity=1.0)
+        dir_shape_raw = cmds.directionalLight(intensity=0.25)
         dir_transform_nodes = cmds.listRelatives(dir_shape_raw, parent=True, fullPath=True) or [dir_shape_raw]
         dir_light = cmds.rename(dir_transform_nodes[0], "mmd_directional_light")
         actual_dir_shapes = cmds.listRelatives(dir_light, shapes=True, fullPath=True) or []
         dir_shape = actual_dir_shapes[0] if actual_dir_shapes else dir_shape_raw
 
-        # MMD公式仕様準拠: 正面をふんわり照らし、床影を左奥へ伸ばす自然な角度 [-30.0, 30.0, 0.0]
-        cmds.setAttr(f"{dir_light}.rotate", -30.0, 30.0, 0.0, type="double3")
-        cmds.setAttr(f"{dir_shape}.color", 0.6039, 0.6039, 0.6039, type="double3")
-        cmds.setAttr(f"{dir_shape}.intensity", 1.0)
+        # 顔・首・襟元の落ち影を自然に出す正面斜め上角度 [-25.0, 20.0, 0.0]
+        cmds.setAttr(f"{dir_light}.rotate", -25.0, 20.0, 0.0, type="double3")
+        cmds.setAttr(f"{dir_shape}.color", 1.0, 1.0, 1.0, type="double3")
+        cmds.setAttr(f"{dir_shape}.intensity", 0.25)
         cmds.setAttr(f"{dir_light}.translateY", 200.0)
         cmds.setAttr(f"{dir_light}.scale", 5.0, 5.0, 5.0)
 
-        # アンビエントライト (MMD材質Ambient=0.7準拠: 強度0.65、Color 0.70に設定して黒沈みを解消)
-        amb_shape_raw = cmds.ambientLight(intensity=0.65)
+        # アンビエントライト (セルフシャドウ領域の下限輝度 0.75 を維持し、黒潰れを防止)
+        amb_shape_raw = cmds.ambientLight(intensity=0.75)
         amb_transform_nodes = cmds.listRelatives(amb_shape_raw, parent=True, fullPath=True) or [amb_shape_raw]
         amb_light = cmds.rename(amb_transform_nodes[0], "mmd_ambient_light")
         actual_amb_shapes = cmds.listRelatives(amb_light, shapes=True, fullPath=True) or []
         amb_shape = actual_amb_shapes[0] if actual_amb_shapes else amb_shape_raw
 
-        cmds.setAttr(f"{amb_shape}.ambientShade", 0.05)
-        cmds.setAttr(f"{amb_shape}.color", 0.70, 0.70, 0.70, type="double3")
-        cmds.setAttr(f"{amb_shape}.intensity", 0.65)
+        cmds.setAttr(f"{amb_shape}.ambientShade", 0.0)
+        cmds.setAttr(f"{amb_shape}.color", 1.0, 1.0, 1.0, type="double3")
+        cmds.setAttr(f"{amb_shape}.intensity", 0.75)
         cmds.setAttr(f"{amb_light}.translateY", 200.0)
         cmds.setAttr(f"{amb_light}.scale", 5.0, 5.0, 5.0)
 

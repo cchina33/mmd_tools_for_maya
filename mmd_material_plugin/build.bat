@@ -31,7 +31,11 @@ call "%VS_VCVARS%" x64 >nul
 set "CMAKE_EXE=cmake"
 where cmake >nul 2>nul
 if errorlevel 1 (
-    set "CMAKE_EXE=C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+    if exist "C:\Program Files\CMake\bin\cmake.exe" (
+        set "CMAKE_EXE=C:\Program Files\CMake\bin\cmake.exe"
+    ) else (
+        set "CMAKE_EXE=C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+    )
 )
 
 :: Navigate to script directory

@@ -640,18 +640,18 @@ class BulletMayaBridge:
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         maya_ver = "2025"
         try:
-            about_ver = mc.about(version=True)
-            if "2026" in about_ver:
-                maya_ver = "2026"
-            elif "2025" in about_ver:
-                maya_ver = "2025"
+            import re
+            ver_str = str(mc.about(version=True))
+            m = re.search(r"20\d{2}", ver_str)
+            if m:
+                maya_ver = m.group(0)
         except Exception:
             pass
 
         candidates = [
             os.path.join(base_dir, "mmd_motion_plugin", "bin", maya_ver, "mmd_motion.mll"),
             os.path.join(base_dir, "mmd_motion_plugin", "bin", "2025", "mmd_motion.mll"),
-            os.path.join(base_dir, "mmd_motion_plugin", "build_2025", "Release", "mmd_motion.mll"),
+            os.path.join(base_dir, "mmd_motion_plugin", "bin", "mmd_motion.mll"),
         ]
 
         for path in candidates:

@@ -1,25 +1,37 @@
 // ==============================================================================
-// MMD Material Hypershade Integration Script
-// Hypershade のノード作成ツリーに独自カテゴリ MmdMat > Material を登録し、
-// Maya 標準の Surface カテゴリから mmdMaterial を除外するためのコールバック群
+// MMD Material & Toon Shader Hypershade Integration Script
+// Hypershade のノード作成ツリーに独自カテゴリ (MmdMat, MmdToon) を登録し、
+// Maya 標準の Surface カテゴリから mmdMaterial / mmdToonShader を除外するためのコールバック群
 // ==============================================================================
 
-// Maya標準のSurfaceツリーから独自分類のノードを除外するための分類識別子を返却
+// Maya標準のSurfaceツリーから独自分類のノードを除外するための分類識別子を返却 (mmdMaterial用)
 global proc string mmdMaterial_RenderNodeClassificationCallback()
 {
     return "rendernode/MmdMat";
 }
 
-// Hypershade の Create メニューに独自サブメニューを追加
+// Maya標準のSurfaceツリーから独自分類のノードを除外するための分類識別子を返却 (mmdToonShader用)
+global proc string mmdToonShader_RenderNodeClassificationCallback()
+{
+    return "rendernode/MmdToon";
+}
+
+// Hypershade の Create メニューに独自サブメニューを追加 (mmdMaterial用)
 global proc string mmdMaterial_HyperShadePanelBuildCreateSubMenuCallback()
 {
     return "rendernode/MmdMat";
 }
 
+// Hypershade の Create メニューに独自サブメニューを追加 (mmdToonShader用)
+global proc string mmdToonShader_HyperShadePanelBuildCreateSubMenuCallback()
+{
+    return "rendernode/MmdToon";
+}
+
 // プラグイン変更時の判定コールバック
 global proc int mmdMaterial_HyperShadePanelPluginChangeCallback(string $classification, string $changeType)
 {
-    if (startsWith($classification, "rendernode/MmdMat"))
+    if (startsWith($classification, "rendernode/MmdMat") || startsWith($classification, "rendernode/MmdToon"))
     {
         return 1;
     }
@@ -28,14 +40,14 @@ global proc int mmdMaterial_HyperShadePanelPluginChangeCallback(string $classifi
 
 global proc int mmdMaterial_CreateRenderNodePluginChangeCallback(string $classification)
 {
-    if (startsWith($classification, "rendernode/MmdMat"))
+    if (startsWith($classification, "rendernode/MmdMat") || startsWith($classification, "rendernode/MmdToon"))
     {
         return 1;
     }
     return 0;
 }
 
-// Hypershade のノード作成ツリー (TreeLister) に MmdMat > Material を追加構築
+// Hypershade のノード作成ツリー (TreeLister) に MMD マテリアル群を追加構築
 global proc mmdMaterial_BuildRenderNodeTreeListerContentCallback(
     string $renderNodeTreeLister,
     string $postCommand,
@@ -46,6 +58,7 @@ global proc mmdMaterial_BuildRenderNodeTreeListerContentCallback(
 
     if (size($filterClassArray) == 0)
     {
+        // フィルタ指定がない場合は両方を無条件に追加
         addToRenderNodeTreeLister(
             $renderNodeTreeLister,
             $postCommand,
@@ -54,9 +67,18 @@ global proc mmdMaterial_BuildRenderNodeTreeListerContentCallback(
             "-asShader",
             "surfaceShader"
         );
+        addToRenderNodeTreeLister(
+            $renderNodeTreeLister,
+            $postCommand,
+            "MmdToon/Material",
+            "rendernode/MmdToon/Material",
+            "-asShader",
+            "surfaceShader"
+        );
     }
     else
     {
+        // MmdMat のフィルタ判定
         for ($filterClass in $filterClassArray)
         {
             if (startsWith($filterClass, "rendernode/MmdMat") ||
@@ -74,6 +96,25 @@ global proc mmdMaterial_BuildRenderNodeTreeListerContentCallback(
                 break;
             }
         }
+
+        // MmdToon のフィルタ判定
+        for ($filterClass in $filterClassArray)
+        {
+            if (startsWith($filterClass, "rendernode/MmdToon") ||
+                startsWith("rendernode/MmdToon", $filterClass) ||
+                $filterClass == "shader/surface")
+            {
+                addToRenderNodeTreeLister(
+                    $renderNodeTreeLister,
+                    $postCommand,
+                    "MmdToon/Material",
+                    "rendernode/MmdToon/Material",
+                    "-asShader",
+                    "surfaceShader"
+                );
+                break;
+            }
+        }
     }
 }
 
@@ -83,19 +124,32 @@ global proc mmdMaterial_RegisterCallbacks()
     // 二重登録を避けるため事前に解除を実行
     mmdMaterial_UnregisterCallbacks();
 
+    // MMD Material 用コールバック登録
     callbacks
         -hook "renderNodeClassification"
         -addCallback "mmdMaterial_RenderNodeClassificationCallback"
         -owner "MmdMaterial";
 
     callbacks
-        -hook "buildRenderNodeTreeListerContent"
-        -addCallback "mmdMaterial_BuildRenderNodeTreeListerContentCallback"
+        -hook "hyperShadePanelBuildCreateSubMenu"
+        -addCallback "mmdMaterial_HyperShadePanelBuildCreateSubMenuCallback"
         -owner "MmdMaterial";
+
+    // MMD Toon Shader 用コールバック登録
+    callbacks
+        -hook "renderNodeClassification"
+        -addCallback "mmdToonShader_RenderNodeClassificationCallback"
+        -owner "MmdToonShader";
 
     callbacks
         -hook "hyperShadePanelBuildCreateSubMenu"
-        -addCallback "mmdMaterial_HyperShadePanelBuildCreateSubMenuCallback"
+        -addCallback "mmdToonShader_HyperShadePanelBuildCreateSubMenuCallback"
+        -owner "MmdToonShader";
+
+    // 共通ツリー構築およびプラグイン変更コールバック登録
+    callbacks
+        -hook "buildRenderNodeTreeListerContent"
+        -addCallback "mmdMaterial_BuildRenderNodeTreeListerContentCallback"
         -owner "MmdMaterial";
 
     callbacks
@@ -112,9 +166,16 @@ global proc mmdMaterial_RegisterCallbacks()
 // コールバックの一括解除
 global proc mmdMaterial_UnregisterCallbacks()
 {
+    // MMD Material 用コールバック解除
     catchQuiet(`callbacks -hook "renderNodeClassification" -removeCallback "mmdMaterial_RenderNodeClassificationCallback" -owner "MmdMaterial"`);
-    catchQuiet(`callbacks -hook "buildRenderNodeTreeListerContent" -removeCallback "mmdMaterial_BuildRenderNodeTreeListerContentCallback" -owner "MmdMaterial"`);
     catchQuiet(`callbacks -hook "hyperShadePanelBuildCreateSubMenu" -removeCallback "mmdMaterial_HyperShadePanelBuildCreateSubMenuCallback" -owner "MmdMaterial"`);
+
+    // MMD Toon Shader 用コールバック解除
+    catchQuiet(`callbacks -hook "renderNodeClassification" -removeCallback "mmdToonShader_RenderNodeClassificationCallback" -owner "MmdToonShader"`);
+    catchQuiet(`callbacks -hook "hyperShadePanelBuildCreateSubMenu" -removeCallback "mmdToonShader_HyperShadePanelBuildCreateSubMenuCallback" -owner "MmdToonShader"`);
+
+    // 共通コールバック解除
+    catchQuiet(`callbacks -hook "buildRenderNodeTreeListerContent" -removeCallback "mmdMaterial_BuildRenderNodeTreeListerContentCallback" -owner "MmdMaterial"`);
     catchQuiet(`callbacks -hook "hyperShadePanelPluginChange" -removeCallback "mmdMaterial_HyperShadePanelPluginChangeCallback" -owner "MmdMaterial"`);
     catchQuiet(`callbacks -hook "createRenderNodePluginChange" -removeCallback "mmdMaterial_CreateRenderNodePluginChangeCallback" -owner "MmdMaterial"`);
 }

@@ -1034,20 +1034,24 @@ class MMDMorphWindow(QWidget):
             except Exception:
                 pass
 
-        # User_pmx_data からカレントモデル名に一致する解析JSONを最優先探索
+        # pmx_data からカレントモデル名に一致する解析JSONを最優先探索
         if not json_morphs:
-            user_pmx_dir = os.path.join(plugin_root, "asset", "User_pmx_data")
+            pmx_dirs = [
+                os.path.join(plugin_root, "asset", "userdata", "pmx_data"),
+                os.path.join(plugin_root, "asset", "User_pmx_data"),
+            ]
             candidate_files = []
             model_name_lower = self.current_model.lower() if self.current_model else ""
 
-            if os.path.exists(user_pmx_dir):
-                for fname in os.listdir(user_pmx_dir):
-                    if fname.endswith(".json"):
-                        full_path = os.path.join(user_pmx_dir, fname)
-                        score = os.path.getmtime(full_path)
-                        if model_name_lower and model_name_lower in fname.lower():
-                            score += 1000000000.0
-                        candidate_files.append((score, full_path))
+            for user_pmx_dir in pmx_dirs:
+                if os.path.exists(user_pmx_dir):
+                    for fname in os.listdir(user_pmx_dir):
+                        if fname.endswith(".json"):
+                            full_path = os.path.join(user_pmx_dir, fname)
+                            score = os.path.getmtime(full_path)
+                            if model_name_lower and model_name_lower in fname.lower():
+                                score += 1000000000.0
+                            candidate_files.append((score, full_path))
 
             if not candidate_files:
                 tes_dir = os.path.join(plugin_root, "tes_model")

@@ -1,0 +1,38 @@
+{
+  "skydome_keywords": [
+    "skydome",
+    "sky_dome",
+    "dome_",
+    "スカイドーム",
+    "天球",
+    "青空",
+    "夜空",
+    "宇宙",
+    "skysphere",
+    "celestial",
+    "Dome_"
+  ],
+  "stage_keywords": [
+    "stage",
+    "ステージ",
+    "floor",
+    "床",
+    "ground",
+    "地面",
+    "room",
+    "hall",
+    "house",
+    "building",
+    "建物",
+    "城",
+    "街",
+    "acute",
+    "plaza",
+    "広場",
+    "checker",
+    "tile",
+    "タイル",
+    "ST"
+  ],
+  "file_overrides": {}
+}

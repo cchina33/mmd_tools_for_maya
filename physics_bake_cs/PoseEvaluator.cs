@@ -83,7 +83,7 @@ namespace PhysicsSimulationBakeViewer
         }
 
         // 指定フレームのFK・IK姿勢を計算し、物理剛体へ同期
-        public void EvaluateFkAndSyncBodies(float frame, bool resetAllBodies = false)
+        public void EvaluateFkAndSyncBodies(float frame, bool resetAllBodies = false, bool syncPhysics = true)
         {
             var bones = _pmx.Bones;
             int n = bones.Count;
@@ -317,6 +317,8 @@ namespace PhysicsSimulationBakeViewer
                 _cachedLocalMatrices.Add(LocalMatrix(i));
             }
 
+            if (!syncPhysics) return;
+
             for (int i = 0; i < bones.Count; i++)
             {
                 var bone = bones[i];
@@ -333,6 +335,12 @@ namespace PhysicsSimulationBakeViewer
             {
                 _physics.UpdateKinematicBodies(boneWorldPositions, boneWorldRotations, bones);
             }
+        }
+
+        // 物理エンジンへの同期を行わずに、純粋にボーン姿勢（FK/IK/付与親）のみを先行評価
+        public void EvaluateFkOnly(float frame)
+        {
+            EvaluateFkAndSyncBodies(frame, resetAllBodies: false, syncPhysics: false);
         }
 
 #if BULLET_275

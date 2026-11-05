@@ -10,8 +10,11 @@ vmd/
 wav/
 *.pmx
 *.pmd
+*.pmm
 *.x
 tes_model/
+tes_pmm/
+pmm_vmd_data/
 tests/
 
 # バックアップおよびスクラッチ作業領域
@@ -24,6 +27,7 @@ dist/
 asset/last_imported_structure.json
 last_imported_structure.json
 asset/User_pmx_data/
+asset/userdata/
 asset/vmd_bake_data/
 asset/bone_motion_export.json
 
@@ -103,7 +107,6 @@ x64/
 !bullet_engine/bin/*.dll
 !cpp_engine/bin/*.dll
 !mmd_material_plugin/bin/**
-!mmd_toon_plugin/bin/**
 !mmd_motion_plugin/bin/**
 
 # ただしデバッグシンボル・バックアップ等は保護対象内でも除外
@@ -111,3 +114,11 @@ x64/
 *_old_*.dll
 *.FileListAbsolute.txt
 *.sourcelink.json
+
+# タスク・作業用フォルダ除外
+_ai_specification/
+_ex-tools/
+_package/
+_cla/
+_bk/
+_bk*/
