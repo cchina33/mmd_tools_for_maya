@@ -165,9 +165,9 @@ class BoneStateExportDialog(QtWidgets.QDialog):
 
         try:
             try:
-                from ..converters.vmdpaimaya import get_available_mmd_models
+                from ..maya_maya_converters.vmdpaimaya import get_available_mmd_models
             except Exception:
-                from converters.vmdpaimaya import get_available_mmd_models
+                from maya_converters.vmdpaimaya import get_available_mmd_models
             models = get_available_mmd_models()
             for node, label in models:
                 self.cmb_model.addItem(label, node)

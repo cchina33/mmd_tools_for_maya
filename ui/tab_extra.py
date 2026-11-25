@@ -200,9 +200,9 @@ class ExtraTabWidget(QWidget):
 
         try:
             try:
-                from ..converters.pmd2pmx import convert_pmd_to_pmx
+                from ..maya_maya_converters.pmd2pmx import convert_pmd_to_pmx
             except Exception:
-                from converters.pmd2pmx import convert_pmd_to_pmx
+                from maya_converters.pmd2pmx import convert_pmd_to_pmx
 
             converted_pmx_path = convert_pmd_to_pmx(file_path)
             QMessageBox.information(
@@ -237,7 +237,10 @@ class ExtraTabWidget(QWidget):
 
         # physics_bridge_cs フォルダー内の実行ファイルおよびDLLパスを取得
         plugin_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        physics_dir = os.path.join(plugin_dir, "physics")
         bridge_candidates = [
+            os.path.join(physics_dir, "physics_bridge_cs", "bin", "Release", "net8.0-windows", "MmdPhysicsBridge.exe"),
+            os.path.join(physics_dir, "physics_bridge_cs", "bin", "Debug", "net8.0-windows", "MmdPhysicsBridge.exe"),
             os.path.join(plugin_dir, "physics_bridge_cs", "bin", "Release", "net8.0-windows", "MmdPhysicsBridge.exe"),
             os.path.join(plugin_dir, "physics_bridge_cs", "bin", "Debug", "net8.0-windows", "MmdPhysicsBridge.exe"),
         ]
@@ -250,6 +253,8 @@ class ExtraTabWidget(QWidget):
             exe_path = bridge_candidates[0]
 
         dll_candidates = [
+            os.path.join(physics_dir, "physics_bridge_cs", "bin", "Release", "net8.0-windows", "MmdPhysicsBridge.dll"),
+            os.path.join(physics_dir, "physics_bridge_cs", "bin", "Debug", "net8.0-windows", "MmdPhysicsBridge.dll"),
             os.path.join(plugin_dir, "physics_bridge_cs", "bin", "Release", "net8.0-windows", "MmdPhysicsBridge.dll"),
             os.path.join(plugin_dir, "physics_bridge_cs", "bin", "Debug", "net8.0-windows", "MmdPhysicsBridge.dll"),
         ]
@@ -420,9 +425,9 @@ class ExtraTabWidget(QWidget):
         """VPDポーズ適用対象のMMDモデル一覧を更新"""
         self.cbb_vpd_target_model.clear()
         try:
-            from ..converters import vmdpaimaya
+            from ..maya_maya_converters import vmdpaimaya
         except Exception:
-            from converters import vmdpaimaya
+            from maya_converters import vmdpaimaya
         try:
             models = vmdpaimaya.get_available_mmd_models()
             for node_name, label in models:
@@ -450,15 +455,15 @@ class ExtraTabWidget(QWidget):
         set_key = self.cb_vpd_keyframe.isChecked()
 
         try:
-            from ..converters import vmdpaimaya
+            from ..maya_maya_converters import vmdpaimaya
         except Exception:
-            from converters import vmdpaimaya
+            from maya_converters import vmdpaimaya
 
         try:
             res = vmdpaimaya.import_vpd(path, target_model_node=target_model, scale=scale, set_keyframe=set_key)
             QMessageBox.information(
                 self,
-                "VPDインポート完了",
+                "VPDポーズ適用",
                 f"VPDポーズを適用しました。\n"
                 f"・ボーン: {res['bones_applied']} 本\n"
                 f"・モーフ: {res['morphs_applied']} 個\n"

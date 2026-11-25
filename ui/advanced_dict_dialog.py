@@ -120,7 +120,7 @@ class AdvancedDictDialog(QtWidgets.QDialog):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(12)
 
-        # 1. 顔・肌・表情保護キーワードグループ (左右2列)
+        # 顔・肌・表情保護キーワードグループ (左右2列)
         grp_skin = QtWidgets.QGroupBox("顔・肌・表情マテリアル判定キーワード (テカリ・スペキュラ除去対象)")
         grp_skin_layout = QtWidgets.QHBoxLayout(grp_skin)
         grp_skin_layout.setSpacing(12)
@@ -169,7 +169,7 @@ class AdvancedDictDialog(QtWidgets.QDialog):
 
         layout.addWidget(grp_skin)
 
-        # 2. Toon乗算除外キーワードグループ (左右2列)
+        # Toon乗算除外キーワードグループ (左右2列)
         grp_toon = QtWidgets.QGroupBox("Toon乗算除外キーワード (瞳ハイライト等、明るさを常に維持する材質)")
         grp_toon_layout = QtWidgets.QHBoxLayout(grp_toon)
         grp_toon_layout.setSpacing(12)

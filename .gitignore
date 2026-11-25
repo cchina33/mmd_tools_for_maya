@@ -2,6 +2,10 @@
 # MMD Tools for Maya - Git Ignore Configuration
 # ==============================================================================
 
+# 原則として先頭に "_" が付く作業用・アーカイブ・外部ツールフォルダを除外
+_*/
+**/_*/
+
 # ドキュメント・仕様書・作業ログ
 ai-task-docs/
 
@@ -12,26 +16,36 @@ wav/
 *.pmd
 *.pmm
 *.x
+*.vrm
+*.glb
+*_textures/
 tes_model/
 tes_pmm/
+tes_vmd/
+tes_wav/
 pmm_vmd_data/
 tests/
 
-# バックアップおよびスクラッチ作業領域
-_old/
+# バックアップ・スクラッチ作業領域・配布アーカイブ
 scratch/
 *_old_*.dll
+*.old
+*.zip
 dist/
 
-# キャッシュ・自動生成構造データ・ユーザー解析・ベイクデータ
+# ローカル設定・ユーザー辞書・自動生成構造データ・ベイクデータ
+asset/settings/
+asset/dictionary/user/
 asset/last_imported_structure.json
 last_imported_structure.json
 asset/User_pmx_data/
+asset/old_User_pmx_data/
 asset/userdata/
 asset/vmd_bake_data/
+asset/old_vmd_bake_data/
 asset/bone_motion_export.json
 
-# ローカル設定・ログファイル・一時出力
+# ローカルログファイル・一時出力
 asset/khatangton.txt
 asset/*.txt
 test_out.txt
@@ -101,24 +115,22 @@ x64/
 *.recipe
 *.pdb
 
-# 配布およびプラグイン実行に必要なバイナリの保護例外設定
-!physics_bake_cs/bin/Release/**
-!physics_bridge_cs/bin/Release/**
-!bullet_engine/bin/*.dll
-!cpp_engine/bin/*.dll
-!mmd_material_plugin/bin/**
-!mmd_motion_plugin/bin/**
+# 配布およびプラグイン実行に必要なバイナリの保護例外設定 (現行 physics/・plugins/ 構成)
+!physics/physics_bake_cs/bin/Release/**
+!physics/physics_bake_gpu_cs/bin/Release/**
+!physics/physics_bridge_cs/bin/Release/**
+!physics/bullet_engine/bin/*.dll
+!physics/cpp_engine/bin/*.dll
+!plugins/mmd_material_plugin/bin/**
+!plugins/mmd_fast_plugin/bin/**
+!plugins/mmd_motion_plugin/bin/**
 
-# ただしデバッグシンボル・バックアップ等は保護対象内でも除外
+# 保護対象内でも除外する不要バイナリ・大容量ランタイム・デバッグシンボル
 *.pdb
+*.old
 *_old_*.dll
 *.FileListAbsolute.txt
 *.sourcelink.json
-
-# タスク・作業用フォルダ除外
-_ai_specification/
-_ex-tools/
-_package/
-_cla/
-_bk/
-_bk*/
+libbulletc-linux-*.so
+nvrtc64_120_0.dll
+nvrtc-builtins64_129.dll

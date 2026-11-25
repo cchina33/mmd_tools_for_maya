@@ -68,6 +68,31 @@ graph LR
 
 ---
 
+## その他モデル（VRM）のインポートと組み立て（試験的機能・ベータ版）
+
+v1.0.6 から追加された「その他モデルインポート」ウィンドウ（`ui_other_importer/`）と解析・構築エンジン（`other_converters/vrm_importer.py`）により、MMD 形式以外の 3D アバター形式として **VRM 0.x / VRM 1.0（glTF 2.0 GLB コンテナ）** を Maya へ展開できます。
+
+```mermaid
+flowchart LR
+    VRM["VRM ファイル (.vrm)\nVRM 0.x / VRM 1.0"] --> Meta["メタデータ・サムネイル高速読込\n(JSONチャンク + 部分シーク)"]
+    VRM --> Build["Maya シーン構築\n(スケール変換・Z軸反転)"]
+    Build --> Skel["Humanoid スケルトン構築\n(ワールド行列事前計算)"]
+    Build --> Mat["テクスチャ書き出し & マテリアル\n(mmdToonShader / 透過接続)"]
+    Build --> Mesh["ポリゴンメッシュ & スキニング\n(面順序スワップ・UV変換)"]
+    Build --> Env["MMD標準ライティング・地面影\n& 一括クリーンアップ対応"]
+```
+
+- **ファイル選択時の高速プレビュー**: 巨大なバイナリ全体を展開せず、先頭の JSON チャンクとサムネイル画像領域だけを部分読み込みして、タイトル・作者・VRM 仕様（0.x / 1.0）・ライセンス・サムネイル画像を即座に表示します。
+- **MMD 座標系への統一（Z軸反転・スケール変換）**: glTF（メートル単位）から Maya（センチメートル単位: 既定 100 倍）へ変換し、Z 軸反転時には三角形ポリゴンの頂点順序を入れ替えて裏返りを防ぎます。
+- **質感と環境の統一**: 埋め込みテクスチャを自動書き出ししたうえで `mmdToonShader` / `standardSurface` / `lambert` を選択でき、透過素材（瞳・眉・飾り等）の透過配線や MMD 標準ライティング・地面影もあわせて自動構築します。
+- **一括クリーンアップタブ**: インポートした VRM モデルと関連ノード（ボーン・マテリアル・テクスチャ・照明・地面影）をまとめて整理できます。
+
+> [!TIP]
+> **VRM の GLB バイナリ解析、アクセサ展開、Maya 構築パイプラインの詳細はこちらをご覧ください:**  
+> [vrm_model_import_specification.md](vrm_model_import_specification.md)
+
+---
+
 ## 表情モーフと材質モーフの仕組み
 
 キャラクターの豊かな感情表現やパーツの切り替えは、「頂点モーフ」と「材質モーフ」の仕組みで再現されます。
@@ -296,6 +321,20 @@ sequenceDiagram
 
 ---
 
+## 3D 数学・座標系の背景知識（テクニカルアーティスト向けガイド）
+
+モデルインポート、モーション変換、シェーディング、物理演算の裏側では、**右手座標系（Maya）と左手座標系（MMD）の変換**や、回転表現・メッシュ変形を支える 3D 数学が働いています。本ツールの仕組みを数式レベルで理解したい方向けに、実践的な学習ガイドを用意しています。
+
+- **座標系変換と幾何学**: 右手系／左手系の違い、Z 軸反転に伴うポリゴン巻き順（Winding Order）と法線裏返りの原理、単位系スケール換算。
+- **回転とアニメーション数理**: クォータニオン（四元数）とオイラー角の相互変換、ジンバルロック対策、ベジェ補間曲線。
+- **シェーディングと物理の数理**: トゥーン陰影・法線押し出しエッジの計算モデル、剛体姿勢の逆算ロジック。
+
+> [!TIP]
+> **例題と解答を交えた TA 向け 3D 数学・座標系の詳細解説はこちらをご覧ください:**  
+> [ta_math_coordinate_systems_guide.md](ta_math_coordinate_systems_guide.md)
+
+---
+
 ## 詳細技術仕様書リンク集
 
 本ツールを構成する各技術の詳細な数理モデル、内部アーキテクチャ、ソースコード仕様をご覧になりたい場合は、以下の各専門ドキュメントをご参照ください。
@@ -307,13 +346,15 @@ sequenceDiagram
 | [pmx_model_import_specification.md](pmx_model_import_specification.md) | **PMXモデルインポート仕様**: PMX 2.0/2.1構造、スキニング、モーフ高速直接書き込み、材質モーフ制御 |
 | [pmd_model_import_specification.md](pmd_model_import_specification.md) | **PMDモデルインポート仕様**: PMD構造、剛体拡張、PMD → PMX自動変換パイプライン |
 | [x_model_import_specification.md](x_model_import_specification.md) | **DirectX .xファイル仕様**: トークナイザー、メッシュ・マテリアル抽出、アクセサリアタッチ |
-| [pmx-pmd-x_specification.md](pmx-pmd-x_specification.md) | **共通シーン構築仕様 (フロー図)**: mmd_core ✕ converters連携フロー図、メッシュ・リグ・シェーダー・地面影 |
+| [vrm_model_import_specification.md](vrm_model_import_specification.md) | **VRMモデル解析・構築仕様**: VRM 0.x / 1.0 (glTF 2.0 GLB) バイナリ解析、サムネイル高速抽出、Maya構築パイプライン |
+| [pmx-pmd-x_specification.md](pmx-pmd-x_specification.md) | **共通シーン構築仕様 (フロー図)**: `mmd_parser` × `maya_converters` 連携フロー図、メッシュ・リグ・シェーダー・地面影 |
 | [mmd_material_plugin_specification.md](mmd_material_plugin_specification.md) | **MMD専用シェーダー仕様**: Viewport 2.0 統合プラグイン（mmd_material.mll）、エッジ描画パス、透過処理 |
 | [vmd_import_specification.md](vmd_import_specification.md) | **VMDモーション仕様**: ベジェ補間曲線計算、ひざ優先角度、カメラ・音声同期 |
-| [realtime_physics_bake_specification.md](realtime_physics_bake_specification.md) | **リアルタイム物理ベイク仕様**: `bullet_engine` ✕ `physics_bake_cs` 連携、JSON通信 |
+| [realtime_physics_bake_specification.md](realtime_physics_bake_specification.md) | **リアルタイム物理ベイク仕様**: `bullet_engine` × `physics_bake_cs` 連携、JSON通信 |
 | [physics_system_specification.md](physics_system_specification.md) | **Maya物理システム仕様**: ビューポートコライダー生成、追従階層、自動再吸着 |
 | [bullet_engine_specification.md](bullet_engine_specification.md) | **Bullet物理エンジン仕様**: Bullet 2.75 / 2.83.7 C++ エンジン、剛体・拘束パラメータ |
 | [xpbd_engine_specification.md](xpbd_engine_specification.md) | **自作XPBD物理仕様**: 位置ベース物理（XPBD）ソルバー、サブステップ積分 |
 | [pmx_analyzer_specification.md](pmx_analyzer_specification.md) | **モデル詳細解析 & 辞書仕様**: 内部データ一括保存、未登録漢字の抽出とGUI登録 |
 | [plugin_technical_guide.md](plugin_technical_guide.md) | **プラグイン技術解説ガイド**: 内部スクリプトの役割解説と運用ハンドブック |
 | [pmm_specification.md](pmm_specification.md) | **MMD プロジェクトファイル (PMM) 解析・インポート技術仕様書**: MMD プロジェクトファイルの解説とMaya への一括インポート・連携パイプライン |
+| [ta_math_coordinate_systems_guide.md](ta_math_coordinate_systems_guide.md) | **TA向け 3D数学・座標系マスターガイド**: 右手系／左手系変換、ポリゴン巻き順、クォータニオン、シェーダー・物理数理の実践学習書 |

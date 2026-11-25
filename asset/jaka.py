@@ -205,8 +205,24 @@ def reload_kanji_dict():
     global MMD_KANJI_DICT
     try:
         import os, json
-        json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jaka_dict.json")
-        if os.path.exists(json_path):
+        # user_dict_manager からの解決パスを優先使用
+        json_path = None
+        try:
+            from .user_dict_manager import get_jaka_dict_file_path
+            json_path = get_jaka_dict_file_path(for_save=False)
+        except Exception:
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            candidates = [
+                os.path.join(current_dir, "dictionary", "user", "jaka_dict.json"),
+                os.path.join(current_dir, "dictionary", "default", "jaka_dict.json"),
+                os.path.join(current_dir, "jaka_dict.json")
+            ]
+            for p in candidates:
+                if os.path.exists(p):
+                    json_path = p
+                    break
+
+        if json_path and os.path.exists(json_path):
             with open(json_path, "r", encoding="utf-8") as f:
                 loaded = json.load(f)
                 if isinstance(loaded, dict) and loaded:

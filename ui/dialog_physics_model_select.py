@@ -37,10 +37,10 @@ except Exception:
         ModelClassifierManager = None
 
 try:
-    from ..converters import vmdpaimaya
+    from ..maya_maya_converters import vmdpaimaya
 except Exception:
     try:
-        from converters import vmdpaimaya
+        from maya_converters import vmdpaimaya
     except Exception:
         vmdpaimaya = None
 

@@ -116,10 +116,10 @@ class HikTabWidget(QWidget):
         found = False
         try:
             try:
-                from ..converters import vmdpaimaya
+                from ..maya_maya_converters import vmdpaimaya
             except Exception:
                 try:
-                    from converters import vmdpaimaya
+                    from maya_converters import vmdpaimaya
                 except Exception:
                     import vmdpaimaya
 

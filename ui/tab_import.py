@@ -8,20 +8,20 @@ from .multi_model_dialog import MultiModelImportDialog
 from .pmm_dialog import PmmAnalysisDialog, PmmModelImportSelectDialog
 
 try:
-    from ..mmd_core import pmx, pmd, vmd, pmm
-    from ..converters import pmxpaimaya, vmdpaimaya, pmd2pmx
+    from ..mmd_parser import pmx, pmd, vmd, pmm
+    from ..maya_maya_converters import pmxpaimaya, vmdpaimaya, pmd2pmx
 except Exception:
     try:
-        from mmd_core import pmx, pmd, vmd, pmm
-        from converters import pmxpaimaya, vmdpaimaya, pmd2pmx
+        from mmd_parser import pmx, pmd, vmd, pmm
+        from maya_converters import pmxpaimaya, vmdpaimaya, pmd2pmx
     except Exception:
-        import mmd_core.pmx as pmx
-        import mmd_core.pmd as pmd
-        import mmd_core.vmd as vmd
-        import mmd_core.pmm as pmm
-        import converters.pmxpaimaya as pmxpaimaya
-        import converters.vmdpaimaya as vmdpaimaya
-        import converters.pmd2pmx as pmd2pmx
+        import mmd_parser.pmx as pmx
+        import mmd_parser.pmd as pmd
+        import mmd_parser.vmd as vmd
+        import mmd_parser.pmm as pmm
+        import maya_converters.pmxpaimaya as pmxpaimaya
+        import maya_converters.vmdpaimaya as vmdpaimaya
+        import maya_converters.pmd2pmx as pmd2pmx
 
 
 # ==============================================================================
@@ -37,7 +37,14 @@ class ImportTabWidget(QWidget):
         except Exception:
             pass
         plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        self.config_file = os.path.join(plugin_root, 'asset', 'khatangton1.txt')
+        self.settings_dir = os.path.join(plugin_root, 'asset', 'settings')
+        if not os.path.exists(self.settings_dir):
+            try:
+                os.makedirs(self.settings_dir)
+            except Exception:
+                pass
+        self.config_file = os.path.join(self.settings_dir, 'import_tab_settings.json')
+        self.legacy_config_file = os.path.join(plugin_root, 'asset', 'khatangton1.txt')
         
         self._init_ui()
         self._load_settings()
@@ -82,8 +89,8 @@ class ImportTabWidget(QWidget):
         self.btn_multi_import.clicked.connect(self._open_multi_model_import_window)
         file_layout.addWidget(self.btn_multi_import)
 
-        # pmmから読み込めるボタン (試験的機能)
-        self.btn_pmm_import = QPushButton("pmmから読み込む (試験的機能)...")
+        # pmmから読み込めるボタン
+        self.btn_pmm_import = QPushButton("pmmから読み込む...")
         self.btn_pmm_import.setStyleSheet("font-weight: bold; padding: 6px;")
         self.btn_pmm_import.clicked.connect(self._open_pmm_analysis_window)
         file_layout.addWidget(self.btn_pmm_import)
@@ -263,36 +270,82 @@ class ImportTabWidget(QWidget):
     def _load_settings(self):
         """前回のインポート設定を復元"""
         try:
+            settings_loaded = False
+            file_path = ""
+            scale = "8.0"
+            split = 0
+            bs = 1
+            bones = 1
+            mat = 6
+            close = 0
+            light = 1
+            untone = 1
+            toon = 1
+            physics = 1
+            shadow_mode = 1
+            check_mb = 1
+            prevent_darkening = 1
+            switch_renderer = 1
+
+            # 新仕様 JSON 設定ファイルの読み込み
             if os.path.exists(self.config_file):
-                settings = {}
-                ordered_lines = []
-                with open(self.config_file, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        line_str = line.strip()
-                        if not line_str:
-                            continue
-                        if '=' in line_str:
-                            k, v = line_str.split('=', 1)
-                            settings[k.strip()] = v.strip()
-                        ordered_lines.append(line_str)
+                try:
+                    with open(self.config_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    file_path = data.get("file_path", "")
+                    scale = str(data.get("scale", "8.0"))
+                    split = int(data.get("split_poly", 0))
+                    bs = int(data.get("create_bs", 1))
+                    bones = int(data.get("create_bones", 1))
+                    mat = int(data.get("material_id", 6))
+                    close = int(data.get("close_on_finish", 0))
+                    light = int(data.get("create_light", 1))
+                    untone = int(data.get("untone_mapped", 1))
+                    toon = int(data.get("enable_toon", 1))
+                    physics = int(data.get("create_physics", 1))
+                    shadow_mode = int(data.get("shadow_mode", 1))
+                    check_mb = int(data.get("check_morph_bone", 1))
+                    prevent_darkening = int(data.get("prevent_motion_darkening", 1))
+                    switch_renderer = int(data.get("switch_mmd_renderer", 1))
+                    settings_loaded = True
+                except Exception:
+                    settings_loaded = False
 
-                # キー照合、またはフォールバックとして順序照合
-                file_path = settings.get("ファイルの名前", ordered_lines[0].split('=')[-1].strip() if len(ordered_lines) > 0 else "")
-                scale = settings.get("尺度", ordered_lines[1].split('=')[-1].strip() if len(ordered_lines) > 1 else "8.0")
-                split = int(settings.get("ポリゴンの分割", ordered_lines[2].split('=')[-1].strip() if len(ordered_lines) > 2 else 0))
-                bs = int(settings.get("ブレンドシェープ", ordered_lines[3].split('=')[-1].strip() if len(ordered_lines) > 3 else 1))
-                bones = int(settings.get("ジョイント", ordered_lines[4].split('=')[-1].strip() if len(ordered_lines) > 4 else 1))
-                mat = int(settings.get("材質", ordered_lines[5].split('=')[-1].strip() if len(ordered_lines) > 5 else 6))
-                close = int(settings.get("閉じる", ordered_lines[6].split('=')[-1].strip() if len(ordered_lines) > 6 else 0))
-                light = int(settings.get("ライト", ordered_lines[7].split('=')[-1].strip() if len(ordered_lines) > 7 else 1))
-                untone = int(settings.get("アントーンマップ", ordered_lines[8].split('=')[-1].strip() if len(ordered_lines) > 8 else 1))
-                toon = int(settings.get("トゥーン", 1))
-                physics = int(settings.get("剛体物理", 1))
-                shadow_mode = int(settings.get("シャドウモード", 1))
-                check_mb = int(settings.get("モーフボーンチェック", 1))
-                prevent_darkening = int(settings.get("モーション暗化防止", 1))
-                switch_renderer = int(settings.get("MMDレンダラー切替", settings.get("エッジメッシュ", 1)))
+            # 従来テキスト設定ファイルのフォールバック読み込み
+            if not settings_loaded and hasattr(self, 'legacy_config_file') and os.path.exists(self.legacy_config_file):
+                try:
+                    settings = {}
+                    ordered_lines = []
+                    with open(self.legacy_config_file, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            line_str = line.strip()
+                            if not line_str:
+                                continue
+                            if '=' in line_str:
+                                k, v = line_str.split('=', 1)
+                                settings[k.strip()] = v.strip()
+                            ordered_lines.append(line_str)
 
+                    file_path = settings.get("ファイルの名前", ordered_lines[0].split('=')[-1].strip() if len(ordered_lines) > 0 else "")
+                    scale = settings.get("尺度", ordered_lines[1].split('=')[-1].strip() if len(ordered_lines) > 1 else "8.0")
+                    split = int(settings.get("ポリゴンの分割", ordered_lines[2].split('=')[-1].strip() if len(ordered_lines) > 2 else 0))
+                    bs = int(settings.get("ブレンドシェープ", ordered_lines[3].split('=')[-1].strip() if len(ordered_lines) > 3 else 1))
+                    bones = int(settings.get("ジョイント", ordered_lines[4].split('=')[-1].strip() if len(ordered_lines) > 4 else 1))
+                    mat = int(settings.get("材質", ordered_lines[5].split('=')[-1].strip() if len(ordered_lines) > 5 else 6))
+                    close = int(settings.get("閉じる", ordered_lines[6].split('=')[-1].strip() if len(ordered_lines) > 6 else 0))
+                    light = int(settings.get("ライト", ordered_lines[7].split('=')[-1].strip() if len(ordered_lines) > 7 else 1))
+                    untone = int(settings.get("アントーンマップ", ordered_lines[8].split('=')[-1].strip() if len(ordered_lines) > 8 else 1))
+                    toon = int(settings.get("トゥーン", 1))
+                    physics = int(settings.get("剛体物理", 1))
+                    shadow_mode = int(settings.get("シャドウモード", 1))
+                    check_mb = int(settings.get("モーフボーンチェック", 1))
+                    prevent_darkening = int(settings.get("モーション暗化防止", 1))
+                    switch_renderer = int(settings.get("MMDレンダラー切替", settings.get("エッジメッシュ", 1)))
+                    settings_loaded = True
+                except Exception:
+                    settings_loaded = False
+
+            if settings_loaded:
                 self.le_file_path.setText(file_path)
                 self.le_scale.setText(scale)
                 self.cb_split_poly.setChecked(bool(split))
@@ -305,7 +358,6 @@ class ImportTabWidget(QWidget):
                 if idx >= 0:
                     self.cbb_material.setCurrentIndex(idx)
                 elif mat in (5, 6):
-                    # 過去の保存値（5: 旧MMD, 6: 新Toon）の場合は推奨シェーダーを選択
                     idx = self.cbb_material.findData(6)
                     if idx >= 0:
                         self.cbb_material.setCurrentIndex(idx)
@@ -328,7 +380,7 @@ class ImportTabWidget(QWidget):
             pass
 
         # デフォルト値
-        self.le_scale.setText("8.0") # インポート時 スケールサイズ
+        self.le_scale.setText("8.0")
         self.cb_create_bones.setChecked(True)
         self.cb_create_physics.setChecked(True)
         self.cb_create_bs.setChecked(True)
@@ -350,23 +402,52 @@ class ImportTabWidget(QWidget):
     def _save_settings(self):
         """現在の設定を保存"""
         try:
+            if hasattr(self, 'settings_dir') and not os.path.exists(self.settings_dir):
+                os.makedirs(self.settings_dir)
+
+            mat_id = self.cbb_material.currentData()
+            mat_val = mat_id if mat_id is not None else 6
+
+            data = {
+                "file_path": self.le_file_path.text(),
+                "scale": self.le_scale.text(),
+                "split_poly": int(self.cb_split_poly.isChecked()),
+                "create_bs": int(self.cb_create_bs.isChecked()),
+                "create_bones": int(self.cb_create_bones.isChecked()),
+                "material_id": mat_val,
+                "close_on_finish": int(self.cb_close_on_finish.isChecked()),
+                "create_light": int(self.cb_create_light.isChecked()),
+                "untone_mapped": int(self.cb_untone_mapped.isChecked()),
+                "prevent_motion_darkening": int(self.cb_prevent_motion_darkening.isChecked()),
+                "enable_toon": int(self.cb_enable_toon.isChecked()),
+                "create_physics": int(self.cb_create_physics.isChecked()),
+                "switch_mmd_renderer": int(self.cb_switch_mmd_renderer.isChecked()),
+                "shadow_mode": self.get_shadow_mode(),
+                "check_morph_bone": int(self.cb_check_morph_bone.isChecked()),
+            }
+
+            # JSON設定ファイルへ保存
             with open(self.config_file, 'w', encoding='utf-8') as f:
-                f.write(f"ファイルの名前 = {self.le_file_path.text()}\n")
-                f.write(f"尺度 = {self.le_scale.text()}\n")
-                f.write(f"ポリゴンの分割 = {int(self.cb_split_poly.isChecked())}\n")
-                f.write(f"ブレンドシェープ = {int(self.cb_create_bs.isChecked())}\n")
-                f.write(f"ジョイント = {int(self.cb_create_bones.isChecked())}\n")
-                mat_id = self.cbb_material.currentData()
-                f.write(f"材質 = {mat_id if mat_id is not None else 6}\n")
-                f.write(f"閉じる = {int(self.cb_close_on_finish.isChecked())}\n")
-                f.write(f"ライト = {int(self.cb_create_light.isChecked())}\n")
-                f.write(f"アントーンマップ = {int(self.cb_untone_mapped.isChecked())}\n")
-                f.write(f"モーション暗化防止 = {int(self.cb_prevent_motion_darkening.isChecked())}\n")
-                f.write(f"トゥーン = {int(self.cb_enable_toon.isChecked())}\n")
-                f.write(f"剛体物理 = {int(self.cb_create_physics.isChecked())}\n")
-                f.write(f"MMDレンダラー切替 = {int(self.cb_switch_mmd_renderer.isChecked())}\n")
-                f.write(f"シャドウモード = {self.get_shadow_mode()}\n")
-                f.write(f"モーフボーンチェック = {int(self.cb_check_morph_bone.isChecked())}\n")
+                json.dump(data, f, indent=4, ensure_ascii=False)
+
+            # 従来形式テキストファイルへの互換保存
+            if hasattr(self, 'legacy_config_file'):
+                with open(self.legacy_config_file, 'w', encoding='utf-8') as f:
+                    f.write(f"ファイルの名前 = {self.le_file_path.text()}\n")
+                    f.write(f"尺度 = {self.le_scale.text()}\n")
+                    f.write(f"ポリゴンの分割 = {int(self.cb_split_poly.isChecked())}\n")
+                    f.write(f"ブレンドシェープ = {int(self.cb_create_bs.isChecked())}\n")
+                    f.write(f"ジョイント = {int(self.cb_create_bones.isChecked())}\n")
+                    f.write(f"材質 = {mat_val}\n")
+                    f.write(f"閉じる = {int(self.cb_close_on_finish.isChecked())}\n")
+                    f.write(f"ライト = {int(self.cb_create_light.isChecked())}\n")
+                    f.write(f"アントーンマップ = {int(self.cb_untone_mapped.isChecked())}\n")
+                    f.write(f"モーション暗化防止 = {int(self.cb_prevent_motion_darkening.isChecked())}\n")
+                    f.write(f"トゥーン = {int(self.cb_enable_toon.isChecked())}\n")
+                    f.write(f"剛体物理 = {int(self.cb_create_physics.isChecked())}\n")
+                    f.write(f"MMDレンダラー切替 = {int(self.cb_switch_mmd_renderer.isChecked())}\n")
+                    f.write(f"シャドウモード = {self.get_shadow_mode()}\n")
+                    f.write(f"モーフボーンチェック = {int(self.cb_check_morph_bone.isChecked())}\n")
         except Exception:
             pass
 
@@ -589,9 +670,9 @@ class ImportTabWidget(QWidget):
                 print(f"[PMD変換] PMDからPMXへの自動変換を開始します: {os.path.basename(file_path)}")
                 try:
                     try:
-                        from ..converters.pmd2pmx import convert_pmd_to_pmx
+                        from ..maya_maya_converters.pmd2pmx import convert_pmd_to_pmx
                     except Exception:
-                        from converters.pmd2pmx import convert_pmd_to_pmx
+                        from maya_converters.pmd2pmx import convert_pmd_to_pmx
 
                     converted_pmx_path = convert_pmd_to_pmx(file_path)
                     print(f"[PMD変換] 変換が完了しました: {converted_pmx_path}")

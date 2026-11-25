@@ -44,10 +44,10 @@ except ImportError:
         wrapInstance = None
 
 try:
-    from ..mmd_core import pmm
+    from ..mmd_parser import pmm
 except Exception:
     try:
-        from mmd_core import pmm
+        from mmd_parser import pmm
     except Exception:
         pmm = None
 
@@ -57,13 +57,13 @@ import maya.OpenMaya as om
 import maya.OpenMayaUI as omui
 
 try:
-    from ..converters import pmxpaimaya, mayapaipmx, vmdpaimaya, physics_stream, pmd2pmx
+    from ..maya_maya_converters import pmxpaimaya, mayapaipmx, vmdpaimaya, physics_stream, pmd2pmx
     from ..asset.hik import dic_hik, kangkhaen, setup_leg_stance_and_angles, normalize_bone_name, get_bone_matching_candidates
     from ..asset.jaka import safe_node_name
     from ..pmx_analyzer import export_pmx_structure, check_and_prompt_user_dict
 except Exception:
     try:
-        from converters import pmxpaimaya, mayapaipmx, vmdpaimaya, physics_stream, pmd2pmx
+        from maya_converters import pmxpaimaya, mayapaipmx, vmdpaimaya, physics_stream, pmd2pmx
         from asset.hik import dic_hik, kangkhaen, setup_leg_stance_and_angles, normalize_bone_name, get_bone_matching_candidates
         from asset.jaka import safe_node_name
         from pmx_analyzer import export_pmx_structure, check_and_prompt_user_dict
@@ -93,15 +93,21 @@ except Exception:
 
 # MMシェーダープラグイン用セットアップモジュールのインポート
 try:
-    from ..mmd_material_plugin.scripts import mmd_material_setup
+    from ..plugins.mmd_material_plugin.scripts import mmd_material_setup
 except Exception:
     try:
-        from mmd_material_plugin.scripts import mmd_material_setup
+        from plugins.mmd_material_plugin.scripts import mmd_material_setup
     except Exception:
         try:
-            import mmd_material_setup
+            from ..mmd_material_plugin.scripts import mmd_material_setup
         except Exception:
-            mmd_material_setup = None
+            try:
+                from mmd_material_plugin.scripts import mmd_material_setup
+            except Exception:
+                try:
+                    import mmd_material_setup
+                except Exception:
+                    mmd_material_setup = None
 
 def get_maya_main_window():
     """MayaのメインウィンドウQWidgetを取得します。"""
@@ -135,10 +141,10 @@ def restore_viewport_lighting(force_reset=False, prevent_motion_darkening=True):
     # MMDモデルメッシュの影受け適正化（顔・脚の黒潰れ防止設定を維持）
     try:
         try:
-            from ..converters import pmxpaimaya
+            from ..maya_maya_converters import pmxpaimaya
         except Exception:
             try:
-                from converters import pmxpaimaya
+                from maya_converters import pmxpaimaya
             except Exception:
                 import pmxpaimaya
         if hasattr(pmxpaimaya, "optimize_model_meshes_for_mmd_lighting"):
@@ -222,6 +228,12 @@ class ExecutionLogDialog(QDialog):
         self.lb_status.setStyleSheet("font-weight: bold; font-size: 15px; color: #52b7ff;")
         layout.addWidget(self.lb_status)
 
+        # 現在適用中のボーン・対象情報表示 (フレーム情報の上に配置)
+        self.lb_target_bone = QLabel("")
+        self.lb_target_bone.setStyleSheet("font-size: 13px; color: #f1c40f; font-weight: bold;")
+        self.lb_target_bone.setVisible(False)
+        layout.addWidget(self.lb_target_bone)
+
         # 進捗詳細情報（フレーム数 / 残りフレーム / ETA）
         h_info = QHBoxLayout()
         self.lb_frame_info = QLabel("進捗: 待機中")
@@ -294,8 +306,23 @@ class ExecutionLogDialog(QDialog):
         QApplication.processEvents()
         return self.is_cancelled
 
-    def update_progress(self, current, total=None, step_idx=None, total_steps=None, label_prefix="進捗", unit=""):
+    def set_target_bone(self, bone_name):
+        """現在適用中のボーン名を表示更新"""
+        if hasattr(self, 'lb_target_bone') and self.lb_target_bone:
+            if bone_name:
+                self.lb_target_bone.setText(f"適用中ボーン: {bone_name}")
+                self.lb_target_bone.setVisible(True)
+            else:
+                self.lb_target_bone.setText("")
+                self.lb_target_bone.setVisible(False)
+            QApplication.processEvents()
+
+    def update_progress(self, current, total=None, step_idx=None, total_steps=None, label_prefix="進捗", unit="", target_name=None, bone_name=None):
         """進捗の更新および推定残り時間(ETA)の算出・表示"""
+        b_name = bone_name or target_name
+        if b_name is not None:
+            self.set_target_bone(b_name)
+
         if self._start_time is None:
             self._start_time = time.time()
 
@@ -463,6 +490,18 @@ def set_viewport_renderer_override(override_name="mmdRenderOverride"):
             mmd_material_setup.ensure_plugin_loaded()
         except Exception:
             pass
+
+    # 透過アルゴリズムが Object Sorting (1) に設定されている場合は Depth Peeling (3) に修復
+    try:
+        if mc.objExists("hardwareRenderingGlobals"):
+            cur_algo = mc.getAttr("hardwareRenderingGlobals.transparencyAlgorithm")
+            if cur_algo != 3:
+                mc.setAttr("hardwareRenderingGlobals.transparencyAlgorithm", 3)
+            cur_qual = mc.getAttr("hardwareRenderingGlobals.transparencyQuality")
+            if cur_qual < 0.95:
+                mc.setAttr("hardwareRenderingGlobals.transparencyQuality", 1.0)
+    except Exception:
+        pass
 
     panels = mc.getPanel(type="modelPanel") or []
     success = False

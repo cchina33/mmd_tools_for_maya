@@ -122,17 +122,44 @@ BASE_BONE_MAP_JA_TO_EN = {
 BASE_BONE_MAP_EN_TO_JA = {v: k for k, v in BASE_BONE_MAP_JA_TO_EN.items()}
 
 def reload_bone_map():
-    """bone_dict.json から最新のボーン対応表を再読み込みします"""
+    """bone_dict.json および default_model_dictionary.json から最新のボーン対応表を再読み込みします"""
     global BASE_BONE_MAP_JA_TO_EN, BASE_BONE_MAP_EN_TO_JA
     try:
         import os, json
-        json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bone_dict.json")
-        if os.path.exists(json_path):
+        # user_dict_manager からの解決パスを優先使用
+        json_path = None
+        try:
+            from .user_dict_manager import get_bone_dict_file_path
+            json_path = get_bone_dict_file_path(for_save=False)
+        except Exception:
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            candidates = [
+                os.path.join(current_dir, "dictionary", "user", "bone_dict.json"),
+                os.path.join(current_dir, "dictionary", "default", "bone_dict.json"),
+                os.path.join(current_dir, "bone_dict.json")
+            ]
+            for p in candidates:
+                if os.path.exists(p):
+                    json_path = p
+                    break
+
+        if json_path and os.path.exists(json_path):
             with open(json_path, "r", encoding="utf-8") as f:
                 loaded = json.load(f)
                 if isinstance(loaded, dict) and loaded:
-                    BASE_BONE_MAP_JA_TO_EN = loaded
-                    BASE_BONE_MAP_EN_TO_JA = {v: k for k, v in BASE_BONE_MAP_JA_TO_EN.items()}
+                    BASE_BONE_MAP_JA_TO_EN = dict(loaded)
+
+        # モデル解析辞書 (default_model_dictionary.json) のボーンも補完統合
+        try:
+            from .user_dict_manager import get_model_bone_dict
+            model_bones = get_model_bone_dict()
+            for k, v in model_bones.items():
+                if k not in BASE_BONE_MAP_JA_TO_EN:
+                    BASE_BONE_MAP_JA_TO_EN[k] = v
+        except Exception:
+            pass
+
+        BASE_BONE_MAP_EN_TO_JA = {v: k for k, v in BASE_BONE_MAP_JA_TO_EN.items()}
     except Exception:
         pass
 
@@ -147,20 +174,36 @@ def get_english_bone_name(japanese_name):
     if not japanese_name:
         return ""
         
-    jp = unicodedata.normalize('NFKC', str(japanese_name).strip())
+    raw_name = str(japanese_name).strip()
+    jp = unicodedata.normalize('NFKC', raw_name)
     
     # ユーザーカスタム辞書の確認
     try:
         from .user_dict_manager import load_user_settings
         custom_dict = load_user_settings().get("custom_bone_dict", {})
+        if raw_name in custom_dict:
+            return custom_dict[raw_name]
         if jp in custom_dict:
             return custom_dict[jp]
     except Exception:
         pass
 
-    # 直接一致の探索
+    # 直接一致の探索 (生文字列およびNFKC正規化文字列)
+    if raw_name in BASE_BONE_MAP_JA_TO_EN:
+        return BASE_BONE_MAP_JA_TO_EN[raw_name]
     if jp in BASE_BONE_MAP_JA_TO_EN:
         return BASE_BONE_MAP_JA_TO_EN[jp]
+
+    # 数字全角・半角の相互フォールバック
+    num_to_zen = str.maketrans('0123456789', '０１２３４５６７８９')
+    zen_name = raw_name.translate(num_to_zen)
+    if zen_name in BASE_BONE_MAP_JA_TO_EN:
+        return BASE_BONE_MAP_JA_TO_EN[zen_name]
+
+    num_to_han = str.maketrans('０１２３４５６７８９', '0123456789')
+    han_name = raw_name.translate(num_to_han)
+    if han_name in BASE_BONE_MAP_JA_TO_EN:
+        return BASE_BONE_MAP_JA_TO_EN[han_name]
         
     # 左右プレフィックス ("左", "右") の解決
     side = None

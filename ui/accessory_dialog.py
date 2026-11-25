@@ -148,9 +148,9 @@ class AccessoryAttachDialog(QDialog):
         maintain = self.cb_maintain_offset.isChecked()
 
         try:
-            from ..converters import pmxpaimaya
+            from ..maya_maya_converters import pmxpaimaya
         except Exception:
-            from converters import pmxpaimaya
+            from maya_converters import pmxpaimaya
 
         try:
             res = pmxpaimaya.attach_accessory_to_bone(
@@ -181,9 +181,9 @@ class AccessoryAttachDialog(QDialog):
                 return
 
         try:
-            from ..converters import pmxpaimaya
+            from ..maya_maya_converters import pmxpaimaya
         except Exception:
-            from converters import pmxpaimaya
+            from maya_converters import pmxpaimaya
 
         try:
             success = pmxpaimaya.detach_accessory(acc)

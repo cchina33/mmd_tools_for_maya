@@ -387,15 +387,15 @@ class ExportTabWidget(QWidget):
             scale = 8.0
 
         try:
-            from ..converters import vmdpaimaya
+            from ..maya_maya_converters import vmdpaimaya
         except Exception:
-            from converters import vmdpaimaya
+            from maya_converters import vmdpaimaya
 
         try:
             res = vmdpaimaya.export_vpd(path, target_model_node=target_model, scale=scale)
             QMessageBox.information(
                 self,
-                "VPD保存完了",
+                "VPDポーズ保存",
                 f"現在の姿勢をVPDポーズファイルとして保存しました。\n"
                 f"・ボーン数: {res['bones_exported']} 本\n"
                 f"・モーフ数: {res['morphs_exported']} 個\n"
@@ -441,9 +441,9 @@ class ExportTabWidget(QWidget):
         simplify = self.cb_vmd_exp_simplify.isChecked()
 
         try:
-            from ..converters import vmdpaimaya
+            from ..maya_maya_converters import vmdpaimaya
         except Exception:
-            from converters import vmdpaimaya
+            from maya_converters import vmdpaimaya
 
         try:
             res = vmdpaimaya.export_vmd(

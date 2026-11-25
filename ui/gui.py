@@ -126,7 +126,7 @@ class MmdMayaMainWindow(QWidget):
             parent = get_maya_main_window()
         super(MmdMayaMainWindow, self).__init__(parent)
         
-        self.setWindowTitle("MMD Tools for Maya v1.0.5")
+        self.setWindowTitle("MMD Tools for Maya v1.0.6")
         self.setObjectName("MmdToolsForMayaMainWindow")
 
         # メインウィンドウサイズ設定 (小画面縮小時の全タブスクロールに対応)
@@ -167,7 +167,7 @@ class MmdMayaMainWindow(QWidget):
         main_layout.addWidget(self.tabs)
 
         # フッタークレジット
-        footer = QLabel("MMD Tools for Maya v1.0.5 | Developer: Hina33")
+        footer = QLabel("MMD Tools for Maya v1.0.6 | Developer: Hina33")
         footer.setAlignment(Qt.AlignCenter)
         footer.setStyleSheet("color: #777; font-size: 13px; padding: 4px;")
         main_layout.addWidget(footer)
@@ -180,7 +180,12 @@ class MmdMayaMainWindow(QWidget):
             self.tab_material._check_plugin_status()
         if getattr(self, "tab_physics", None):
             self.tab_physics._refresh_bullet_status()
+        if getattr(self, "tab_vmd", None) and self.tabs.currentWidget() == self.tab_vmd:
+            if not self.tab_vmd.le_file_path.text().strip() or not self.tab_vmd.le_camera_path.text().strip() or not self.tab_vmd.le_audio_path.text().strip():
+                self.tab_vmd._load_settings()
         if getattr(self, "tab_physics_gui", None) and self.tabs.currentWidget() == self.tab_physics_gui:
+            if not self.tab_physics_gui.le_vmd_source_path.text().strip():
+                self.tab_physics_gui._load_settings()
             self.tab_physics_gui.refresh_all_tab_info()
         if getattr(self, "tab_extra", None):
             self.tab_extra._sync_pmx_path()
@@ -194,7 +199,12 @@ class MmdMayaMainWindow(QWidget):
             self.tab_material._check_plugin_status()
         if getattr(self, "tab_physics", None):
             self.tab_physics._refresh_bullet_status()
+        if getattr(self, "tab_vmd", None):
+            if not self.tab_vmd.le_file_path.text().strip() or not self.tab_vmd.le_camera_path.text().strip() or not self.tab_vmd.le_audio_path.text().strip():
+                self.tab_vmd._load_settings()
         if getattr(self, "tab_physics_gui", None) and self.tabs.currentWidget() == self.tab_physics_gui:
+            if not self.tab_physics_gui.le_vmd_source_path.text().strip():
+                self.tab_physics_gui._load_settings()
             self.tab_physics_gui.refresh_all_tab_info()
         if getattr(self, "tab_extra", None):
             self.tab_extra._sync_pmx_path()
@@ -240,11 +250,18 @@ def show_ui():
         pass
     try:
         try:
-            from ..bullet_engine import bullet_maya_bridge
+            from ..physics.bullet_engine import bullet_maya_bridge
         except Exception:
-            from bullet_engine import bullet_maya_bridge
-        bridge = bullet_maya_bridge.BulletMayaBridge.__new__(bullet_maya_bridge.BulletMayaBridge)
-        bridge._ensure_motion_plugin_loaded()
+            try:
+                from ..bullet_engine import bullet_maya_bridge
+            except Exception:
+                try:
+                    from bullet_engine import bullet_maya_bridge
+                except Exception:
+                    bullet_maya_bridge = None
+        if bullet_maya_bridge:
+            bridge = bullet_maya_bridge.BulletMayaBridge.__new__(bullet_maya_bridge.BulletMayaBridge)
+            bridge._ensure_motion_plugin_loaded()
     except Exception:
         pass
 

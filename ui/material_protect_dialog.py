@@ -31,12 +31,12 @@ except Exception:
     )
 
 try:
-    from ..converters.pmxpaimaya import (
+    from ..maya_maya_converters.pmxpaimaya import (
         get_scene_mmd_materials, apply_material_protection_to_scene
     )
 except Exception:
     try:
-        from converters.pmxpaimaya import (
+        from maya_converters.pmxpaimaya import (
             get_scene_mmd_materials, apply_material_protection_to_scene
         )
     except Exception:
@@ -392,9 +392,9 @@ class MaterialProtectDialog(QtWidgets.QDialog):
 
         try:
             try:
-                from ..converters.vmdpaimaya import get_available_mmd_models
+                from ..maya_maya_converters.vmdpaimaya import get_available_mmd_models
             except Exception:
-                from converters.vmdpaimaya import get_available_mmd_models
+                from maya_converters.vmdpaimaya import get_available_mmd_models
             models = get_available_mmd_models()
             for node, label in models:
                 self.cmb_model.addItem(label, node)

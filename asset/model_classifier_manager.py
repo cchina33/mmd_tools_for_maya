@@ -23,10 +23,30 @@ DEFAULT_STAGE_KEYWORDS = [
     "acute", "plaza", "広場", "checker", "tile", "タイル"
 ]
 
-def _get_settings_file_path():
-    """設定JSONファイルの保存先パスを返します"""
+def _get_settings_file_path(for_save=False):
+    """
+    モデル種別判定設定JSON (model_classifier_settings.json) のパスを返します。
+    - 読み込み時: asset/dictionary/user -> asset/dictionary/default -> 旧パス (asset/settings, asset)
+    - 保存時: asset/dictionary/user/model_classifier_settings.json（フォルダ自動生成）
+    """
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(current_dir, "model_classifier_settings.json")
+    user_dir = os.path.join(current_dir, "dictionary", "user")
+    default_dir = os.path.join(current_dir, "dictionary", "default")
+    legacy_settings_dir = os.path.join(current_dir, "settings")
+
+    user_path = os.path.join(user_dir, "model_classifier_settings.json")
+    default_path = os.path.join(default_dir, "model_classifier_settings.json")
+    legacy_settings_path = os.path.join(legacy_settings_dir, "model_classifier_settings.json")
+    legacy_root_path = os.path.join(current_dir, "model_classifier_settings.json")
+
+    if for_save:
+        os.makedirs(user_dir, exist_ok=True)
+        return user_path
+
+    for cand in (user_path, default_path, legacy_settings_path, legacy_root_path):
+        if os.path.exists(cand):
+            return cand
+    return default_path
 
 
 class ModelClassifierManager:
@@ -75,6 +95,7 @@ class ModelClassifierManager:
 
     def save_settings(self):
         """現在の設定をJSONファイルへ保存します"""
+        self.settings_path = _get_settings_file_path(for_save=True)
         data = {
             "skydome_keywords": self.skydome_keywords,
             "stage_keywords": self.stage_keywords,

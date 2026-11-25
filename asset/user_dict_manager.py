@@ -35,10 +35,61 @@ DEFAULT_SETTINGS = {
     "custom_name_translations": {}
 }
 
-def get_settings_file_path():
-    """設定ファイルの保存先パスを返します"""
+# 辞書ファイルの格納ディレクトリ構成
+# - default: 開発者提供の標準辞書
+# - user: ユーザーによる個別追加・オーバーライド辞書
+def get_dictionary_base_dir():
+    """辞書格納ルートディレクトリ (asset/dictionary) のパスを返します"""
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(current_dir, "user_dictionary.json")
+    return os.path.join(current_dir, "dictionary")
+
+def get_default_dict_dir():
+    """開発者標準辞書ディレクトリ (asset/dictionary/default) のパスを返します"""
+    return os.path.join(get_dictionary_base_dir(), "default")
+
+def get_user_dict_dir():
+    """ユーザー用辞書ディレクトリ (asset/dictionary/user) のパスを返します"""
+    return os.path.join(get_dictionary_base_dir(), "user")
+
+def resolve_dict_path(filename, for_save=False, for_user=False):
+    """
+    辞書ファイルの参照パスを解決します。
+    - 読み込み時 (for_save=False):
+        user/ に存在すればそれを優先
+        無ければ default/ を参照
+        旧パス (asset/) に存在すれば後方互換として参照
+    - 保存時 (for_save=True):
+        for_user=True の場合は user/ へ保存
+        for_user=False の場合は default/ へ保存
+    """
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    default_dir = get_default_dict_dir()
+    user_dir = get_user_dict_dir()
+
+    if for_save:
+        target_dir = user_dir if for_user else default_dir
+        os.makedirs(target_dir, exist_ok=True)
+        return os.path.join(target_dir, filename)
+
+    # 読み込み時の優先度: user -> default -> 旧ルート
+    user_path = os.path.join(user_dir, filename)
+    if os.path.exists(user_path):
+        return user_path
+
+    default_path = os.path.join(default_dir, filename)
+    if os.path.exists(default_path):
+        return default_path
+
+    legacy_path = os.path.join(current_dir, filename)
+    if os.path.exists(legacy_path):
+        return legacy_path
+
+    # いずれも存在しない場合は default 側を標準パスとして返却
+    return default_path
+
+def get_settings_file_path(for_save=False, for_user=False):
+    """設定ファイル (user_dictionary.json) のパスを返します"""
+    return resolve_dict_path("user_dictionary.json", for_save=for_save, for_user=for_user)
 
 def _is_mostly_ascii(text):
     """英数字・記号のみで構成されているかを判定します"""
@@ -50,7 +101,7 @@ def load_user_settings():
     ファイルが存在しないか壊れている場合はデフォルト設定を返します。
     旧形式の一体型リストが存在する場合は自動で日本語と英語に振り分けます。
     """
-    filepath = get_settings_file_path()
+    filepath = get_settings_file_path(for_save=False)
     if not os.path.exists(filepath):
         return get_default_settings()
 
@@ -94,10 +145,11 @@ def load_user_settings():
         print(f"[警告] ユーザー辞書の読み込みに失敗しました。デフォルト値を使用します: {e}")
         return get_default_settings()
 
-def save_user_settings(settings):
+def save_user_settings(settings, for_user=False):
     """設定をJSONファイルへ保存します"""
-    filepath = get_settings_file_path()
+    filepath = get_settings_file_path(for_save=True, for_user=for_user)
     try:
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(settings, f, ensure_ascii=False, indent=2)
         return True
@@ -140,16 +192,15 @@ def is_toon_bypass_material(mat_name, orig_name=""):
 
 
 # ==============================================================================
-# ボーン日英辞書・HumanIK辞書・日本語ローマ字変換辞書のJSON管理
+# ボーン日英辞書・HumanIK辞書・日本語ローマ字変換辞書・モデル辞書のJSON管理
 # ==============================================================================
-def get_bone_dict_file_path():
+def get_bone_dict_file_path(for_save=False, for_user=False):
     """ボーン日英対応表JSONのパスを返します"""
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(current_dir, "bone_dict.json")
+    return resolve_dict_path("bone_dict.json", for_save=for_save, for_user=for_user)
 
 def load_bone_dict_json():
     """ボーン日英対応表JSONを読み込みます"""
-    filepath = get_bone_dict_file_path()
+    filepath = get_bone_dict_file_path(for_save=False)
     if os.path.exists(filepath):
         try:
             with open(filepath, "r", encoding="utf-8") as f:
@@ -162,10 +213,11 @@ def load_bone_dict_json():
     except Exception:
         return {}
 
-def save_bone_dict_json(data):
+def save_bone_dict_json(data, for_user=False):
     """ボーン日英対応表JSONを保存します"""
-    filepath = get_bone_dict_file_path()
+    filepath = get_bone_dict_file_path(for_save=True, for_user=for_user)
     try:
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         # モジュール内のメモリキャッシュも更新
@@ -179,14 +231,13 @@ def save_bone_dict_json(data):
         print(f"[エラー] bone_dict.json の保存に失敗しました: {e}")
         return False
 
-def get_hik_dict_file_path():
+def get_hik_dict_file_path(for_save=False, for_user=False):
     """HumanIK辞書JSONのパスを返します"""
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(current_dir, "hik_dict.json")
+    return resolve_dict_path("hik_dict.json", for_save=for_save, for_user=for_user)
 
 def load_hik_dict_json():
     """HumanIK辞書JSONを読み込みます (ID文字列をintにマッピング)"""
-    filepath = get_hik_dict_file_path()
+    filepath = get_hik_dict_file_path(for_save=False)
     if os.path.exists(filepath):
         try:
             with open(filepath, "r", encoding="utf-8") as f:
@@ -204,10 +255,11 @@ def load_hik_dict_json():
     except Exception:
         return {}
 
-def save_hik_dict_json(data):
+def save_hik_dict_json(data, for_user=False):
     """HumanIK辞書JSONを保存します"""
-    filepath = get_hik_dict_file_path()
+    filepath = get_hik_dict_file_path(for_save=True, for_user=for_user)
     try:
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
         json_obj = {}
         for k, v in sorted(data.items(), key=lambda x: int(x[0])):
             item_id = int(k)
@@ -231,14 +283,13 @@ def save_hik_dict_json(data):
         print(f"[エラー] hik_dict.json の保存に失敗しました: {e}")
         return False
 
-def get_jaka_dict_file_path():
+def get_jaka_dict_file_path(for_save=False, for_user=False):
     """日本語ローマ字変換辞書JSONのパスを返します"""
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(current_dir, "jaka_dict.json")
+    return resolve_dict_path("jaka_dict.json", for_save=for_save, for_user=for_user)
 
 def load_jaka_dict_json():
     """日本語ローマ字変換辞書JSONを読み込みます"""
-    filepath = get_jaka_dict_file_path()
+    filepath = get_jaka_dict_file_path(for_save=False)
     if os.path.exists(filepath):
         try:
             with open(filepath, "r", encoding="utf-8") as f:
@@ -251,10 +302,11 @@ def load_jaka_dict_json():
     except Exception:
         return {}
 
-def save_jaka_dict_json(data):
+def save_jaka_dict_json(data, for_user=False):
     """日本語ローマ字変換辞書JSONを保存します"""
-    filepath = get_jaka_dict_file_path()
+    filepath = get_jaka_dict_file_path(for_save=True, for_user=for_user)
     try:
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         # モジュール内のメモリキャッシュも更新
@@ -268,14 +320,13 @@ def save_jaka_dict_json(data):
         print(f"[エラー] jaka_dict.json の保存に失敗しました: {e}")
         return False
 
-def get_morph_dict_file_path():
+def get_morph_dict_file_path(for_save=False, for_user=False):
     """モーフ日英対応表JSONのパスを返します"""
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(current_dir, "morph_dict.json")
+    return resolve_dict_path("morph_dict.json", for_save=for_save, for_user=for_user)
 
 def load_morph_dict_json():
     """モーフ日英対応表JSONを読み込みます"""
-    filepath = get_morph_dict_file_path()
+    filepath = get_morph_dict_file_path(for_save=False)
     if os.path.exists(filepath):
         try:
             with open(filepath, "r", encoding="utf-8") as f:
@@ -312,14 +363,52 @@ def load_morph_dict_json():
         "光下": "light_down"
     }
 
-def save_morph_dict_json(data):
+def save_morph_dict_json(data, for_user=False):
     """モーフ日英対応表JSONを保存します"""
-    filepath = get_morph_dict_file_path()
+    filepath = get_morph_dict_file_path(for_save=True, for_user=for_user)
     try:
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         return True
     except Exception as e:
         print(f"[エラー] morph_dict.json の保存に失敗しました: {e}")
+        return False
+
+def get_default_model_dict_file_path(for_save=False, for_user=False):
+    """モデル解析辞書JSON (default_model_dictionary.json) のパスを返します"""
+    return resolve_dict_path("default_model_dictionary.json", for_save=for_save, for_user=for_user)
+
+def load_default_model_dict_json():
+    """モデル解析辞書JSONを読み込みます"""
+    filepath = get_default_model_dict_file_path(for_save=False)
+    if os.path.exists(filepath):
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"[警告] default_model_dictionary.json の読み込みに失敗しました: {e}")
+    return {"bones": {}, "morphs": {}}
+
+def get_model_bone_dict():
+    """モデル解析辞書からボーン辞書を取得します"""
+    data = load_default_model_dict_json()
+    return data.get("bones", {})
+
+def get_model_morph_dict():
+    """モデル解析辞書からモーフ辞書を取得します"""
+    data = load_default_model_dict_json()
+    return data.get("morphs", {})
+
+def save_default_model_dict_json(data, for_user=False):
+    """モデル解析辞書JSONを保存します"""
+    filepath = get_default_model_dict_file_path(for_save=True, for_user=for_user)
+    try:
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        print(f"[エラー] default_model_dictionary.json の保存に失敗しました: {e}")
         return False
 

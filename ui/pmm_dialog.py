@@ -6,20 +6,20 @@ MMD Tools for Maya - PMM プロジェクト解析およびモデルインポー�
 from .common import *
 
 try:
-    from ..mmd_core import pmx, pmd, vmd, pmm
-    from ..converters import pmxpaimaya, vmdpaimaya, pmd2pmx
+    from ..mmd_parser import pmx, pmd, vmd, pmm
+    from ..maya_maya_converters import pmxpaimaya, vmdpaimaya, pmd2pmx
 except Exception:
     try:
-        from mmd_core import pmx, pmd, vmd, pmm
-        from converters import pmxpaimaya, vmdpaimaya, pmd2pmx
+        from mmd_parser import pmx, pmd, vmd, pmm
+        from maya_converters import pmxpaimaya, vmdpaimaya, pmd2pmx
     except Exception:
-        import mmd_core.pmx as pmx
-        import mmd_core.pmd as pmd
-        import mmd_core.vmd as vmd
-        import mmd_core.pmm as pmm
-        import converters.pmxpaimaya as pmxpaimaya
-        import converters.vmdpaimaya as vmdpaimaya
-        import converters.pmd2pmx as pmd2pmx
+        import mmd_parser.pmx as pmx
+        import mmd_parser.pmd as pmd
+        import mmd_parser.vmd as vmd
+        import mmd_parser.pmm as pmm
+        import maya_converters.pmxpaimaya as pmxpaimaya
+        import maya_converters.vmdpaimaya as vmdpaimaya
+        import maya_converters.pmd2pmx as pmd2pmx
 
 # ==============================================================================
 # PMM (Polygon Movie Maker) プロジェクト解析ダイアログ (試験的機能)

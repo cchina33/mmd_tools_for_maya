@@ -32,9 +32,9 @@ except Exception:
     from asset.model_classifier_manager import ModelClassifierManager
 
 try:
-    from ..converters import pmxpaimaya
+    from ..maya_maya_converters import pmxpaimaya
 except Exception:
-    from converters import pmxpaimaya
+    from maya_converters import pmxpaimaya
 
 
 class ModelClassifierDialog(QDialog):

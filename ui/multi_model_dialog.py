@@ -604,10 +604,10 @@ class MultiModelImportDialog(QDialog):
 
                 # 剛体およびJointビジュアライザのボーン再吸着
                 try:
-                    from ..converters.pmxpaimaya import reconnect_visualizers_to_bones
+                    from ..maya_maya_converters.pmxpaimaya import reconnect_visualizers_to_bones
                 except Exception:
                     try:
-                        from converters.pmxpaimaya import reconnect_visualizers_to_bones
+                        from maya_converters.pmxpaimaya import reconnect_visualizers_to_bones
                     except Exception:
                         reconnect_visualizers_to_bones = None
 
@@ -682,9 +682,9 @@ class MultiModelImportDialog(QDialog):
             if file_path.lower().endswith('.pmd'):
                 try:
                     try:
-                        from ..converters.pmd2pmx import convert_pmd_to_pmx
+                        from ..maya_maya_converters.pmd2pmx import convert_pmd_to_pmx
                     except Exception:
-                        from converters.pmd2pmx import convert_pmd_to_pmx
+                        from maya_converters.pmd2pmx import convert_pmd_to_pmx
                     self.append_log("  - PMD形式を検出: PMXへ自動変換中...\n")
                     file_path = convert_pmd_to_pmx(file_path)
                     self.append_log(f"  - PMX変換終了: {os.path.basename(file_path)}\n")
@@ -877,10 +877,10 @@ class MultiModelPhysicsBakeDialog(QDialog):
     def _refresh_models_from_scene(self):
         """シーン内のMMDモデル一覧およびベイク対象状態を取得し、テーブルを更新"""
         try:
-            from ..converters import vmdpaimaya
+            from ..maya_maya_converters import vmdpaimaya
         except Exception:
             try:
-                from converters import vmdpaimaya
+                from maya_converters import vmdpaimaya
             except Exception:
                 import vmdpaimaya
 

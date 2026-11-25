@@ -316,9 +316,12 @@ class PhysicsTabWidget(QWidget):
         """mmd_motion.mll プラグインを強制リロード"""
         try:
             try:
-                from ..bullet_engine import bullet_maya_bridge
+                from ..physics.bullet_engine import bullet_maya_bridge
             except Exception:
-                from bullet_engine import bullet_maya_bridge
+                try:
+                    from ..bullet_engine import bullet_maya_bridge
+                except Exception:
+                    from bullet_engine import bullet_maya_bridge
             bridge = bullet_maya_bridge.BulletMayaBridge.__new__(bullet_maya_bridge.BulletMayaBridge)
             success = bridge._ensure_motion_plugin_loaded()
             if success:
@@ -342,7 +345,11 @@ class PhysicsTabWidget(QWidget):
         """Bullet物理モジュール (bullet_engine) が存在し利用可能か判定"""
         try:
             plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            bullet_dir = os.path.join(plugin_root, "bullet_engine")
+            bullet_dirs = [
+                os.path.join(plugin_root, "physics", "bullet_engine"),
+                os.path.join(plugin_root, "bullet_engine"),
+            ]
+            bullet_dir = next((d for d in bullet_dirs if os.path.exists(d)), bullet_dirs[0])
             bin_dir = os.path.join(bullet_dir, "bin")
             dll_275 = os.path.join(bin_dir, "mmd_bullet_275.dll")
             dll_283 = os.path.join(bin_dir, "mmd_bullet_283.dll")
@@ -381,12 +388,12 @@ class PhysicsTabWidget(QWidget):
         target_nodes = self._selected_model_nodes
         if not target_nodes:
             try:
-                from ..converters import vmdpaimaya
+                from ..maya_maya_converters import vmdpaimaya
                 models = vmdpaimaya.get_available_mmd_models()
                 target_nodes = [node for node, _ in models]
             except Exception:
                 try:
-                    from converters import vmdpaimaya
+                    from maya_converters import vmdpaimaya
                     models = vmdpaimaya.get_available_mmd_models()
                     target_nodes = [node for node, _ in models]
                 except Exception:
@@ -438,10 +445,10 @@ class PhysicsTabWidget(QWidget):
             return
 
         try:
-            from ..converters import vmdpaimaya
+            from ..maya_maya_converters import vmdpaimaya
         except Exception:
             try:
-                from converters import vmdpaimaya
+                from maya_converters import vmdpaimaya
             except Exception:
                 import vmdpaimaya
 
@@ -483,10 +490,10 @@ class PhysicsTabWidget(QWidget):
         self.cbb_target_model.clear()
         self.cbb_target_model.addItem("自動検出 (シーン内のMMDモデル)", "")
         try:
-            from ..converters import vmdpaimaya
+            from ..maya_maya_converters import vmdpaimaya
         except Exception:
             try:
-                from converters import vmdpaimaya
+                from maya_converters import vmdpaimaya
             except Exception:
                 import vmdpaimaya
         try:
@@ -625,15 +632,18 @@ class PhysicsTabWidget(QWidget):
         bullet_ver = "2.83.7" if self.rb_bullet_283.isChecked() else "2.75"
 
         try:
-            from ..bullet_engine import bullet_maya_bridge
-        except Exception:
-            from bullet_engine import bullet_maya_bridge
-
-        try:
-            from ..converters import vmdpaimaya
+            from ..physics.bullet_engine import bullet_maya_bridge
         except Exception:
             try:
-                from converters import vmdpaimaya
+                from ..bullet_engine import bullet_maya_bridge
+            except Exception:
+                from bullet_engine import bullet_maya_bridge
+
+        try:
+            from ..maya_maya_converters import vmdpaimaya
+        except Exception:
+            try:
+                from maya_converters import vmdpaimaya
             except Exception:
                 import vmdpaimaya
 
@@ -811,9 +821,12 @@ class PhysicsTabWidget(QWidget):
 
         def run_physics_task():
             try:
-                from ..cpp_engine import xpbd_maya_bridge
+                from ..physics.cpp_engine import xpbd_maya_bridge
             except Exception:
-                from cpp_engine import xpbd_maya_bridge
+                try:
+                    from ..cpp_engine import xpbd_maya_bridge
+                except Exception:
+                    from cpp_engine import xpbd_maya_bridge
             self.bridge = xpbd_maya_bridge.XpbdMayaBridge(scale=scale)
             ok = self.bridge.initialize_from_pmx(pmx_path)
             if not ok:
@@ -853,9 +866,12 @@ class PhysicsTabWidget(QWidget):
 
         try:
             try:
-                from ..cpp_engine import xpbd_maya_bridge
+                from ..physics.cpp_engine import xpbd_maya_bridge
             except Exception:
-                from cpp_engine import xpbd_maya_bridge
+                try:
+                    from ..cpp_engine import xpbd_maya_bridge
+                except Exception:
+                    from cpp_engine import xpbd_maya_bridge
             bridge = xpbd_maya_bridge.XpbdMayaBridge()
             if bridge.initialize_from_pmx(pmx_path):
                 bridge.clear_physics_keyframes()
@@ -870,9 +886,9 @@ class PhysicsTabWidget(QWidget):
     def _execute_reconnect(self):
         try:
             try:
-                from ..converters import reconnect_visualizers_to_bones
+                from ..maya_maya_converters import reconnect_visualizers_to_bones
             except Exception:
-                from converters import reconnect_visualizers_to_bones
+                from maya_converters import reconnect_visualizers_to_bones
             ok = reconnect_visualizers_to_bones()
             if ok:
                 mc.inViewMessage(
@@ -898,9 +914,9 @@ class PhysicsTabWidget(QWidget):
 
         try:
             try:
-                from ..converters import create_rigidbody_visualizers
+                from ..maya_maya_converters import create_rigidbody_visualizers
             except Exception:
-                from converters import create_rigidbody_visualizers
+                from maya_converters import create_rigidbody_visualizers
             create_rigidbody_visualizers(pmx_path, scale=scale)
             mc.inViewMessage(
                 amg='<span style="color:#2ecc71;">MMD Tools for Maya:</span> 剛体とJointの可視化を生成しました。',
@@ -920,7 +936,16 @@ class PhysicsGuiTabWidget(QWidget):
         self.parent_window = parent
         self.setAcceptDrops(True)
         self._selected_model_nodes = None
+        plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.settings_dir = os.path.join(plugin_root, 'asset', 'settings')
+        if not os.path.exists(self.settings_dir):
+            try:
+                os.makedirs(self.settings_dir)
+            except Exception:
+                pass
+        self.config_file = os.path.join(self.settings_dir, 'physics_bake_gui_settings.json')
         self._init_ui()
+        self._load_settings()
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
@@ -983,16 +1008,16 @@ class PhysicsGuiTabWidget(QWidget):
         self.btn_stream_select_models.clicked.connect(self._open_stream_model_select_dialog)
         h_model_btn.addWidget(self.btn_stream_select_models)
 
+        self.btn_open_multi_bake = QPushButton("ベイクするモデルの確認...")
+        self.btn_open_multi_bake.setFixedHeight(36)
+        self.btn_open_multi_bake.clicked.connect(self._open_multi_stream_bake_dialog)
+        h_model_btn.addWidget(self.btn_open_multi_bake)
+
         self.btn_stream_refresh_models = QPushButton("更新")
         self.btn_stream_refresh_models.setFixedWidth(70)
         self.btn_stream_refresh_models.setFixedHeight(36)
         self.btn_stream_refresh_models.clicked.connect(self._refresh_stream_target_models)
         h_model_btn.addWidget(self.btn_stream_refresh_models)
-
-        self.btn_open_multi_bake = QPushButton("ベイクするモデルの確認...")
-        self.btn_open_multi_bake.setFixedHeight(36)
-        self.btn_open_multi_bake.clicked.connect(self._open_multi_stream_bake_dialog)
-        h_model_btn.addWidget(self.btn_open_multi_bake)
 
         model_layout.addLayout(h_model_btn)
 
@@ -1009,9 +1034,6 @@ class PhysicsGuiTabWidget(QWidget):
         h_vmd_src.addWidget(QLabel("VMDモーション:"))
         self.le_vmd_source_path = QLineEdit()
         self.le_vmd_source_path.setPlaceholderText("ベイク元となるVMDモーションファイルパスを指定")
-        last_vmd = mc.optionVar(q="MMDToolsForMaya_LastModelVmdPath") if (mc and mc.optionVar(exists="MMDToolsForMaya_LastModelVmdPath")) else ""
-        if last_vmd and os.path.exists(last_vmd):
-            self.le_vmd_source_path.setText(last_vmd)
         self.le_vmd_source_path.textChanged.connect(self._on_vmd_changed)
         h_vmd_src.addWidget(self.le_vmd_source_path)
 
@@ -1064,6 +1086,19 @@ class PhysicsGuiTabWidget(QWidget):
         h_stream_bullet_ver.addWidget(self.rb_stream_bullet_283)
         h_stream_bullet_ver.addStretch()
         stream_bake_layout.addLayout(h_stream_bullet_ver)
+
+        # アクセラレータ選択 (ハードウェアベイク(GPU) / CPU)
+        h_stream_accel = QHBoxLayout()
+        h_stream_accel.addWidget(QLabel("アクセラレータ:"))
+        self.cb_stream_use_gpu = QCheckBox("ハードウェアベイク(GPU)")
+        init_use_gpu = bool(mc.optionVar(q="MMDToolsForMaya_StreamUseGpu")) if mc.optionVar(exists="MMDToolsForMaya_StreamUseGpu") else True
+        self.cb_stream_use_gpu.setChecked(init_use_gpu)
+        self.cb_stream_use_gpu.toggled.connect(lambda chk: mc.optionVar(iv=("MMDToolsForMaya_StreamUseGpu", int(chk))))
+        self.cb_stream_use_gpu.setToolTip("GPU ネイティブアクセラレータ (physics_bake_gpu_cs) を起動し、NVIDIA GPU (CUDA) の並列計算能力を活用してハードウェアベイクを行います。")
+        self.cb_stream_use_gpu.setStyleSheet("QCheckBox { color: #2ecc71; font-weight: bold; }")
+        h_stream_accel.addWidget(self.cb_stream_use_gpu)
+        h_stream_accel.addStretch()
+        stream_bake_layout.addLayout(h_stream_accel)
 
         # VMDファイル出力オプション
         vmd_out_box = QGroupBox("物理ベイク済みモーションの書き出し設定")
@@ -1246,6 +1281,71 @@ class PhysicsGuiTabWidget(QWidget):
             base_name = os.path.splitext(os.path.basename(pmx_path))[0] + "_physics_baked"
         self.le_vmd_output_path.setText(os.path.join(bake_dir, f"{base_name}.vmd").replace("\\", "/"))
 
+    def _load_settings(self):
+        """前回の物理ベイク設定を復元"""
+        self._is_initializing = True
+        try:
+            bake_vmd = ""
+            vmd_out = ""
+
+            # 新仕様 JSON 設定ファイルからの読み込み
+            if os.path.exists(self.config_file):
+                try:
+                    with open(self.config_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    bake_vmd = data.get("bake_vmd_path", "")
+                    vmd_out = data.get("vmd_output_path", "")
+                except Exception:
+                    pass
+
+            # optionVar からのフォールバック読み込み (ベイク専用キー優先)
+            if not bake_vmd and mc and mc.optionVar(exists="MMDToolsForMaya_LastBakeVmdPath"):
+                cand = mc.optionVar(q="MMDToolsForMaya_LastBakeVmdPath")
+                if cand:
+                    bake_vmd = cand
+            if not bake_vmd and mc and mc.optionVar(exists="MMDToolsForMaya_LastModelVmdPath"):
+                cand = mc.optionVar(q="MMDToolsForMaya_LastModelVmdPath")
+                if cand:
+                    bake_vmd = cand
+
+            if bake_vmd and os.path.exists(bake_vmd):
+                self.le_vmd_source_path.setText(bake_vmd.replace("\\", "/"))
+            if vmd_out and hasattr(self, 'le_vmd_output_path'):
+                self.le_vmd_output_path.setText(vmd_out.replace("\\", "/"))
+        except Exception:
+            pass
+        finally:
+            self._is_initializing = False
+            self._update_default_vmd_output_path()
+            self._check_scene_import_status()
+
+    def _save_settings(self):
+        """現在の物理ベイク設定を保存"""
+        if getattr(self, "_is_initializing", False):
+            return
+        try:
+            if hasattr(self, 'settings_dir') and not os.path.exists(self.settings_dir):
+                os.makedirs(self.settings_dir)
+
+            bake_vmd = self.le_vmd_source_path.text().strip().replace("\\", "/")
+            vmd_out = self.le_vmd_output_path.text().strip().replace("\\", "/") if hasattr(self, 'le_vmd_output_path') else ""
+
+            data = {
+                "bake_vmd_path": bake_vmd,
+                "vmd_output_path": vmd_out,
+            }
+
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
+
+            # optionVar へも二重保存
+            if mc:
+                mc.optionVar(sv=("MMDToolsForMaya_LastBakeVmdPath", bake_vmd))
+                if bake_vmd and os.path.exists(bake_vmd):
+                    mc.optionVar(sv=("MMDToolsForMaya_LastModelVmdPath", bake_vmd))
+        except Exception:
+            pass
+
     def _on_pmx_changed(self, text=""):
         """PMXファイルパス変更時の連動処理"""
         self._update_default_vmd_output_path()
@@ -1253,6 +1353,7 @@ class PhysicsGuiTabWidget(QWidget):
 
     def _on_vmd_changed(self, text=""):
         """VMDファイルパス変更時の連動処理"""
+        self._save_settings()
         self._update_default_vmd_output_path()
         self._check_scene_import_status()
 
@@ -1275,10 +1376,10 @@ class PhysicsGuiTabWidget(QWidget):
         """シーン内のPMXモデルおよびモーションのインポート状態を確認"""
         # PMXモデル確認
         try:
-            from ..converters import vmdpaimaya
+            from ..maya_maya_converters import vmdpaimaya
         except Exception:
             try:
-                from converters import vmdpaimaya
+                from maya_converters import vmdpaimaya
             except Exception:
                 import vmdpaimaya
 
@@ -1290,15 +1391,15 @@ class PhysicsGuiTabWidget(QWidget):
 
         if models:
             model_names = [m[1] for m in models]
-            self.lbl_scene_pmx_status.setText(f"✔ PMXモデル: インポート済み ({len(models)} 体検出: {model_names[0]})")
+            self.lbl_scene_pmx_status.setText(f"[OK] PMXモデル: インポート済み ({len(models)} 体検出: {model_names[0]})")
             self.lbl_scene_pmx_status.setStyleSheet("color: #2ecc71; font-weight: bold;")
         else:
             joints = mc.ls(type="joint") or []
             if joints:
-                self.lbl_scene_pmx_status.setText(f"✔ PMXモデル: ジョイント検出済み (計 {len(joints)} 本)")
+                self.lbl_scene_pmx_status.setText(f"[OK] PMXモデル: ジョイント検出済み (計 {len(joints)} 本)")
                 self.lbl_scene_pmx_status.setStyleSheet("color: #2ecc71; font-weight: bold;")
             else:
-                self.lbl_scene_pmx_status.setText("✖ PMXモデル: 未インポート (「MMD → Maya」タブからインポートしてください)")
+                self.lbl_scene_pmx_status.setText("[未検出] PMXモデル: 未インポート (「MMD → Maya」タブからインポートしてください)")
                 self.lbl_scene_pmx_status.setStyleSheet("color: #e67e22; font-weight: bold;")
 
         # モーション確認
@@ -1307,13 +1408,13 @@ class PhysicsGuiTabWidget(QWidget):
             try:
                 min_t = mc.playbackOptions(query=True, minTime=True)
                 max_t = mc.playbackOptions(query=True, maxTime=True)
-                self.lbl_scene_motion_status.setText(f"✔ モーション: インポート済み (タイムライン: {int(min_t)} ～ {int(max_t)} フレーム)")
+                self.lbl_scene_motion_status.setText(f"[OK] モーション: インポート済み (タイムライン: {int(min_t)} ～ {int(max_t)} フレーム)")
                 self.lbl_scene_motion_status.setStyleSheet("color: #2ecc71; font-weight: bold;")
             except Exception:
-                self.lbl_scene_motion_status.setText(f"✔ モーション: キーフレーム検出済み ({len(anim_curves)} カーブ)")
+                self.lbl_scene_motion_status.setText(f"[OK] モーション: キーフレーム検出済み ({len(anim_curves)} カーブ)")
                 self.lbl_scene_motion_status.setStyleSheet("color: #2ecc71; font-weight: bold;")
         else:
-            self.lbl_scene_motion_status.setText("✖ モーション: 未インポート (「モーション(VMD)」タブからインポートしてください)")
+            self.lbl_scene_motion_status.setText("[未検出] モーション: 未インポート (「モーション(VMD)」タブからインポートしてください)")
             self.lbl_scene_motion_status.setStyleSheet("color: #e67e22; font-weight: bold;")
 
     def _get_effective_pmx_path(self):
@@ -1321,12 +1422,12 @@ class PhysicsGuiTabWidget(QWidget):
         target_nodes = self._selected_model_nodes
         if not target_nodes:
             try:
-                from ..converters import vmdpaimaya
+                from ..maya_maya_converters import vmdpaimaya
                 models = vmdpaimaya.get_available_mmd_models()
                 target_nodes = [node for node, _ in models]
             except Exception:
                 try:
-                    from converters import vmdpaimaya
+                    from maya_converters import vmdpaimaya
                     models = vmdpaimaya.get_available_mmd_models()
                     target_nodes = [node for node, _ in models]
                 except Exception:
@@ -1378,10 +1479,10 @@ class PhysicsGuiTabWidget(QWidget):
             return
 
         try:
-            from ..converters import vmdpaimaya
+            from ..maya_maya_converters import vmdpaimaya
         except Exception:
             try:
-                from converters import vmdpaimaya
+                from maya_converters import vmdpaimaya
             except Exception:
                 import vmdpaimaya
 
@@ -1432,10 +1533,10 @@ class PhysicsGuiTabWidget(QWidget):
         self.cbb_stream_target_model.clear()
         self.cbb_stream_target_model.addItem("自動検出 (シーン内のMMDモデル)", "")
         try:
-            from ..converters import vmdpaimaya
+            from ..maya_maya_converters import vmdpaimaya
         except Exception:
             try:
-                from converters import vmdpaimaya
+                from maya_converters import vmdpaimaya
             except Exception:
                 import vmdpaimaya
         try:
@@ -1467,22 +1568,27 @@ class PhysicsGuiTabWidget(QWidget):
             QMessageBox.information(self, "情報", "インポートタブにPMXパスが設定されていません。")
 
     def _sync_vmd_from_motion_tab(self, silent=False):
-        """モーションタブから現在設定されているVMDパスを取得"""
+        """モーションタブから現在設定されているVMDパスを取得（未設定時のみ自動補完）"""
+        current_bake_vmd = self.le_vmd_source_path.text().strip()
         path = ""
         if self.parent_window and hasattr(self.parent_window, "tab_vmd"):
             path = self.parent_window.tab_vmd.le_file_path.text().strip()
-        if not path and mc.optionVar(exists="MMDToolsForMaya_LastModelVmdPath"):
+        if not path and mc and mc.optionVar(exists="MMDToolsForMaya_LastModelVmdPath"):
             path = mc.optionVar(q="MMDToolsForMaya_LastModelVmdPath")
+
+        # 手動または明示的取得時（silent=False）は強制同期、自動同期（silent=True）時は空の場合のみ反映
         if path:
-            if self.le_vmd_source_path.text().strip() != path:
-                self.le_vmd_source_path.setText(path)
-                self._update_default_vmd_output_path()
-            if not silent:
-                mc.inViewMessage(
-                    amg=f'<span style="color:#52b7ff;">MMD Tools for Maya:</span> VMDモーションパスを取得しました: {os.path.basename(path)}',
-                    pos='topCenter',
-                    fade=True
-                )
+            if not current_bake_vmd or not silent:
+                if current_bake_vmd != path:
+                    self.le_vmd_source_path.setText(path)
+                    self._update_default_vmd_output_path()
+                    self._save_settings()
+                if not silent and mc:
+                    mc.inViewMessage(
+                        amg=f'<span style="color:#52b7ff;">MMD Tools for Maya:</span> VMDモーションパスを取得しました: {os.path.basename(path)}',
+                        pos='topCenter',
+                        fade=True
+                    )
         elif not silent:
             QMessageBox.information(self, "情報", "モーションタブにVMDパスが設定されていません。")
 
@@ -1499,8 +1605,10 @@ class PhysicsGuiTabWidget(QWidget):
             self, "ベイク元VMDモーションファイルを選択", self.le_vmd_source_path.text(), "VMDファイル (*.vmd);;すべてのファイル (*.*)"
         )
         if path:
-            self.le_vmd_source_path.setText(path.replace("\\", "/"))
+            norm_path = path.replace("\\", "/")
+            self.le_vmd_source_path.setText(norm_path)
             self._update_default_vmd_output_path()
+            self._save_settings()
 
     def _on_stream_frame_mode_toggled(self, checked):
         """シミュレーション範囲ラジオボタンの切り替え連動"""
@@ -1622,23 +1730,24 @@ class PhysicsGuiTabWidget(QWidget):
         target_model = None
 
         try:
-            from ..converters import physics_stream
+            from ..maya_maya_converters import physics_stream
         except Exception:
             try:
-                from converters import physics_stream
+                from maya_converters import physics_stream
             except Exception:
                 import physics_stream
 
         try:
-            from ..converters import vmdpaimaya
+            from ..maya_maya_converters import vmdpaimaya
         except Exception:
             try:
-                from converters import vmdpaimaya
+                from maya_converters import vmdpaimaya
             except Exception:
                 import vmdpaimaya
 
         substep = self.cbb_stream_substep.currentData() if hasattr(self, 'cbb_stream_substep') else 120
         bullet_ver = "2.83.7" if hasattr(self, 'rb_stream_bullet_283') and self.rb_stream_bullet_283.isChecked() else "2.75"
+        use_gpu = self.cb_stream_use_gpu.isChecked() if hasattr(self, 'cb_stream_use_gpu') else False
 
         models = []
         try:
@@ -1735,6 +1844,7 @@ class PhysicsGuiTabWidget(QWidget):
                         end_frame=end_frame,
                         substep=substep,
                         bullet_version=bullet_ver,
+                        use_gpu=use_gpu,
                         log_dialog=log_dialog
                     )
                     log_dialog.append_log(f"[{idx}/{total}] 終了: {m_label}\n\n")
@@ -1802,6 +1912,7 @@ class PhysicsGuiTabWidget(QWidget):
                 end_frame=end_frame,
                 substep=substep,
                 bullet_version=bullet_ver,
+                use_gpu=use_gpu,
                 log_dialog=log_dialog
             )
             restore_viewport_lighting()
@@ -1888,6 +1999,8 @@ class PhysicsGuiTabWidget(QWidget):
         super(PhysicsGuiTabWidget, self).showEvent(event)
         self._check_scene_import_status()
         self._refresh_stream_target_models()
+        if not self.le_vmd_source_path.text().strip():
+            self._load_settings()
 
     def dropEvent(self, event: QDropEvent):
         """ドロップ時のファイルパス反映"""
@@ -1895,27 +2008,27 @@ class PhysicsGuiTabWidget(QWidget):
             file_path = url.toLocalFile()
             ext = os.path.splitext(file_path)[1].lower()
             if ext == ".pmx":
-                self.le_pmx_path.setText(file_path)
-                self._update_default_paths(file_path)
-                mc.inViewMessage(
-                    amg=f'<span style="color:#52b7ff;">MMD Tools for Maya:</span> PMXモデルを設定しました: {os.path.basename(file_path)}',
-                    pos='topCenter',
-                    fade=True
-                )
+                norm_pmx = file_path.replace("\\", "/")
+                self.le_pmx_path.setText(norm_pmx)
+                self._update_default_paths(norm_pmx)
+                if mc:
+                    mc.inViewMessage(
+                        amg=f'<span style="color:#52b7ff;">MMD Tools for Maya:</span> PMXモデルを設定しました: {os.path.basename(file_path)}',
+                        pos='topCenter',
+                        fade=True
+                    )
                 event.acceptProposedAction()
                 return
             elif ext == ".vmd":
-                self.le_vmd_source_path.setText(file_path)
-                mc.inViewMessage(
-                    amg=f'<span style="color:#52b7ff;">MMD Tools for Maya:</span> ベイク元VMDを設定しました: {os.path.basename(file_path)}',
-                    pos='topCenter',
-                    fade=True
-                )
+                norm_vmd = file_path.replace("\\", "/")
+                self.le_vmd_source_path.setText(norm_vmd)
+                self._save_settings()
+                if mc:
+                    mc.inViewMessage(
+                        amg=f'<span style="color:#52b7ff;">MMD Tools for Maya:</span> ベイク元VMDを設定しました: {os.path.basename(file_path)}',
+                        pos='topCenter',
+                        fade=True
+                    )
                 event.acceptProposedAction()
                 return
         event.ignore()
-
-    def showEvent(self, event):
-        super(PhysicsGuiTabWidget, self).showEvent(event)
-        self._check_scene_import_status()
-        self._refresh_stream_target_models()

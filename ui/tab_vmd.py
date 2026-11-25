@@ -14,7 +14,16 @@ class VmdImportTabWidget(QWidget):
         super(VmdImportTabWidget, self).__init__(parent)
         self.parent_window = parent
         self.setAcceptDrops(True)
+        plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.settings_dir = os.path.join(plugin_root, 'asset', 'settings')
+        if not os.path.exists(self.settings_dir):
+            try:
+                os.makedirs(self.settings_dir)
+            except Exception:
+                pass
+        self.config_file = os.path.join(self.settings_dir, 'vmd_tab_settings.json')
         self._init_ui()
+        self._load_settings()
 
     def _init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -156,27 +165,93 @@ class VmdImportTabWidget(QWidget):
         scroll.setWidget(scroll_content)
         main_layout.addWidget(scroll)
 
-        # 初期化中フラグ
+    def _load_settings(self):
+        """前回のモーション・カメラ・BGM設定を復元"""
         self._is_initializing = True
+        try:
+            model_vmd = ""
+            camera_vmd = ""
+            audio_path = ""
+            scale = "8.0"
 
-        # 前回パスの復元 (空白が保存されている場合は空白を維持)
-        if mc.optionVar(exists="MMDToolsForMaya_LastModelVmdPath"):
-            last_model_vmd = mc.optionVar(q="MMDToolsForMaya_LastModelVmdPath")
-            if last_model_vmd and os.path.exists(last_model_vmd):
-                self.le_file_path.setText(last_model_vmd)
+            # 新仕様 JSON 設定ファイルからの読み込み
+            if os.path.exists(self.config_file):
+                try:
+                    with open(self.config_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    model_vmd = data.get("model_vmd_path", "")
+                    camera_vmd = data.get("camera_vmd_path", "")
+                    audio_path = data.get("audio_path", "")
+                    scale = str(data.get("scale", "8.0"))
+                except Exception:
+                    pass
 
-        if mc.optionVar(exists="MMDToolsForMaya_LastCameraVmdPath"):
-            last_cam_vmd = mc.optionVar(q="MMDToolsForMaya_LastCameraVmdPath")
-            if last_cam_vmd and os.path.exists(last_cam_vmd):
-                self.le_camera_path.setText(last_cam_vmd)
+            # optionVar からのフォールバック読み込み
+            if not model_vmd and mc and mc.optionVar(exists="MMDToolsForMaya_LastModelVmdPath"):
+                cand = mc.optionVar(q="MMDToolsForMaya_LastModelVmdPath")
+                if cand:
+                    model_vmd = cand
+            if not camera_vmd and mc and mc.optionVar(exists="MMDToolsForMaya_LastCameraVmdPath"):
+                cand = mc.optionVar(q="MMDToolsForMaya_LastCameraVmdPath")
+                if cand:
+                    camera_vmd = cand
+            if not audio_path and mc and mc.optionVar(exists="MMDToolsForMaya_LastAudioPath"):
+                cand = mc.optionVar(q="MMDToolsForMaya_LastAudioPath")
+                if cand:
+                    audio_path = cand
 
-        if mc.optionVar(exists="MMDToolsForMaya_LastAudioPath"):
-            last_audio = mc.optionVar(q="MMDToolsForMaya_LastAudioPath")
-            if last_audio and os.path.exists(last_audio):
-                self.le_audio_path.setText(last_audio)
+            # UI入力欄への反映
+            if model_vmd and os.path.exists(model_vmd):
+                self.le_file_path.setText(model_vmd.replace("\\", "/"))
+            if camera_vmd and os.path.exists(camera_vmd):
+                self.le_camera_path.setText(camera_vmd.replace("\\", "/"))
+            if audio_path and os.path.exists(audio_path):
+                self.le_audio_path.setText(audio_path.replace("\\", "/"))
+            if scale and hasattr(self, 'le_scale'):
+                self.le_scale.setText(scale)
+        except Exception:
+            pass
+        finally:
+            self._is_initializing = False
+            self._on_file_changed()
 
-        self._is_initializing = False
-        self._on_file_changed()
+    def _save_settings(self):
+        """現在のモーション・カメラ・BGM設定を保存"""
+        if getattr(self, "_is_initializing", False):
+            return
+        try:
+            if hasattr(self, 'settings_dir') and not os.path.exists(self.settings_dir):
+                os.makedirs(self.settings_dir)
+
+            path1 = self.le_file_path.text().strip().replace("\\", "/")
+            path2 = self.le_camera_path.text().strip().replace("\\", "/")
+            path3 = self.le_audio_path.text().strip().replace("\\", "/")
+            scale = self.le_scale.text().strip() if hasattr(self, 'le_scale') else "8.0"
+
+            data = {
+                "model_vmd_path": path1,
+                "camera_vmd_path": path2,
+                "audio_path": path3,
+                "scale": scale,
+            }
+
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
+
+            # optionVar へも二重保存
+            if mc:
+                mc.optionVar(sv=("MMDToolsForMaya_LastModelVmdPath", path1))
+                mc.optionVar(sv=("MMDToolsForMaya_LastCameraVmdPath", path2))
+                mc.optionVar(sv=("MMDToolsForMaya_LastAudioPath", path3))
+        except Exception:
+            pass
+
+    def showEvent(self, event):
+        super(VmdImportTabWidget, self).showEvent(event)
+        self._refresh_models()
+        # 未設定の入力欄があれば最新保存値からの復元を試行
+        if not self.le_file_path.text().strip() or not self.le_camera_path.text().strip() or not self.le_audio_path.text().strip():
+            self._load_settings()
 
     def _open_morph_window(self):
         """MMD本家風の表情操作ウィンドウを開く"""
@@ -193,7 +268,7 @@ class VmdImportTabWidget(QWidget):
 
     def _refresh_models(self):
         self.cbb_target_model.clear()
-        self.cbb_target_model.addItem("シーン内の全MMDモデル / 自動検出", None)
+        self.cbb_target_model.addItem("シーン内のMMDモデル / 自動検出", None)
         try:
             models = vmdpaimaya.get_available_mmd_models()
             for node_name, label in models:
@@ -213,27 +288,22 @@ class VmdImportTabWidget(QWidget):
         if getattr(self, "_is_initializing", False):
             return
 
-        if valid1:
-            mc.optionVar(sv=("MMDToolsForMaya_LastModelVmdPath", path1))
-        if valid2:
-            mc.optionVar(sv=("MMDToolsForMaya_LastCameraVmdPath", path2))
-        if valid3:
-            mc.optionVar(sv=("MMDToolsForMaya_LastAudioPath", path3))
+        self._save_settings()
 
     def _clear_model_file(self):
         """モデルモーション入力欄をクリア"""
         self.le_file_path.clear()
-        mc.optionVar(sv=("MMDToolsForMaya_LastModelVmdPath", ""))
+        self._save_settings()
 
     def _clear_camera_file(self):
         """カメラモーション入力欄をクリア"""
         self.le_camera_path.clear()
-        mc.optionVar(sv=("MMDToolsForMaya_LastCameraVmdPath", ""))
+        self._save_settings()
 
     def _clear_audio_file(self):
         """BGM音声ファイル入力欄をクリア"""
         self.le_audio_path.clear()
-        mc.optionVar(sv=("MMDToolsForMaya_LastAudioPath", ""))
+        self._save_settings()
 
     def _browse_file(self):
 
@@ -253,8 +323,9 @@ class VmdImportTabWidget(QWidget):
             "VMD Motion (*.vmd);;All Files (*.*)"
         )
         if path:
-            self.le_file_path.setText(path)
-            mc.optionVar(sv=("MMDToolsForMaya_LastModelVmdPath", path))
+            norm_path = path.replace("\\", "/")
+            self.le_file_path.setText(norm_path)
+            self._save_settings()
 
     def _browse_camera_file(self):
         start_dir = self.le_camera_path.text().strip()
@@ -273,8 +344,9 @@ class VmdImportTabWidget(QWidget):
             "VMD Camera (*.vmd);;All Files (*.*)"
         )
         if path:
-            self.le_camera_path.setText(path)
-            mc.optionVar(sv=("MMDToolsForMaya_LastCameraVmdPath", path))
+            norm_path = path.replace("\\", "/")
+            self.le_camera_path.setText(norm_path)
+            self._save_settings()
 
     def _browse_audio_file(self):
         start_dir = self.le_audio_path.text().strip()
@@ -297,8 +369,9 @@ class VmdImportTabWidget(QWidget):
             "WAV Audio (*.wav);;All Files (*.*)"
         )
         if path:
-            self.le_audio_path.setText(path)
-            mc.optionVar(sv=("MMDToolsForMaya_LastAudioPath", path))
+            norm_path = path.replace("\\", "/")
+            self.le_audio_path.setText(norm_path)
+            self._save_settings()
 
     def dragEnterEvent(self, e: QDragEnterEvent):
         if e.mimeData().hasUrls():
@@ -307,12 +380,11 @@ class VmdImportTabWidget(QWidget):
     def dropEvent(self, e: QDropEvent):
         urls = e.mimeData().urls()
         local_files = [u.toLocalFile() for u in urls]
-        vmd_files = [f for f in local_files if f.lower().endswith('.vmd')]
-        wav_files = [f for f in local_files if f.lower().endswith('.wav')]
+        vmd_files = [f.replace("\\", "/") for f in local_files if f.lower().endswith('.vmd')]
+        wav_files = [f.replace("\\", "/") for f in local_files if f.lower().endswith('.wav')]
 
         if wav_files:
             self.le_audio_path.setText(wav_files[0])
-            mc.optionVar(sv=("MMDToolsForMaya_LastAudioPath", wav_files[0]))
 
         if len(vmd_files) >= 2:
             # 複数ファイルドロップ時のカメラ/モデル自動振り分け
@@ -320,19 +392,16 @@ class VmdImportTabWidget(QWidget):
                 base_low = os.path.basename(f).lower()
                 if any(k in base_low for k in ["cam", "camera", "カメラ"]):
                     self.le_camera_path.setText(f)
-                    mc.optionVar(sv=("MMDToolsForMaya_LastCameraVmdPath", f))
                 else:
                     self.le_file_path.setText(f)
-                    mc.optionVar(sv=("MMDToolsForMaya_LastModelVmdPath", f))
         elif len(vmd_files) == 1:
             single = vmd_files[0]
             base_low = os.path.basename(single).lower()
             if any(k in base_low for k in ["cam", "camera", "カメラ"]):
                 self.le_camera_path.setText(single)
-                mc.optionVar(sv=("MMDToolsForMaya_LastCameraVmdPath", single))
             else:
                 self.le_file_path.setText(single)
-                mc.optionVar(sv=("MMDToolsForMaya_LastModelVmdPath", single))
+        self._save_settings()
 
     def _execute_import(self):
         file_path = self.le_file_path.text().strip() or None
@@ -366,9 +435,9 @@ class VmdImportTabWidget(QWidget):
         # VMDアナライザーによる概要診断の出力
         try:
             try:
-                from ..converters import vmd_analyzer
+                from ..maya_maya_converters import vmd_analyzer
             except Exception:
-                from converters import vmd_analyzer
+                from maya_converters import vmd_analyzer
             if file_path and os.path.exists(file_path):
                 report = vmd_analyzer.analyze_vmd(file_path)
                 print(report.generate_summary_text())
@@ -380,12 +449,7 @@ class VmdImportTabWidget(QWidget):
         # 音量調整はMaya標準機能へ委任（標準値100%を適用）
         audio_volume = 100
 
-        if audio_path and os.path.exists(audio_path):
-            mc.optionVar(sv=("MMDToolsForMaya_LastAudioPath", audio_path))
-        if file_path and os.path.exists(file_path):
-            mc.optionVar(sv=("MMDToolsForMaya_LastModelVmdPath", file_path))
-        if camera_path and os.path.exists(camera_path):
-            mc.optionVar(sv=("MMDToolsForMaya_LastCameraVmdPath", camera_path))
+        self._save_settings()
 
         prevent_darkening = True
         if self.parent_window and hasattr(self.parent_window, "tab_import"):

@@ -12,10 +12,10 @@ import time
 from .common import *
 
 try:
-    from ..converters import pmxpaimaya, vmdpaimaya, vmd_analyzer
+    from ..maya_maya_converters import pmxpaimaya, vmdpaimaya, vmd_analyzer
 except Exception:
     try:
-        from converters import pmxpaimaya, vmdpaimaya, vmd_analyzer
+        from maya_converters import pmxpaimaya, vmdpaimaya, vmd_analyzer
     except Exception:
         import pmxpaimaya
         import vmdpaimaya
@@ -481,9 +481,9 @@ class EasyImportTabWidget(QWidget):
                 if fp.lower().endswith(".pmd"):
                     try:
                         try:
-                            from ..converters.pmd2pmx import convert_pmd_to_pmx
+                            from ..maya_maya_converters.pmd2pmx import convert_pmd_to_pmx
                         except Exception:
-                            from converters.pmd2pmx import convert_pmd_to_pmx
+                            from maya_converters.pmd2pmx import convert_pmd_to_pmx
                         print("  - PMD形式を検出: PMXへ自動変換中...")
                         fp = convert_pmd_to_pmx(fp)
                         print(f"  - PMX変換完了: {os.path.basename(fp)}")
@@ -558,6 +558,42 @@ class EasyImportTabWidget(QWidget):
 
                 # ビューポートライティングを適正復元
                 restore_viewport_lighting(prevent_motion_darkening=True)
+
+                # モーションタブ用設定ファイルおよび optionVar への連動保存
+                try:
+                    plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                    vmd_settings_path = os.path.join(plugin_root, 'asset', 'settings', 'vmd_tab_settings.json')
+                    os.makedirs(os.path.dirname(vmd_settings_path), exist_ok=True)
+                    vmd_data = {}
+                    if os.path.exists(vmd_settings_path):
+                        try:
+                            with open(vmd_settings_path, 'r', encoding='utf-8') as f:
+                                vmd_data = json.load(f)
+                        except Exception:
+                            vmd_data = {}
+                    if model_vmd_path:
+                        vmd_data["model_vmd_path"] = model_vmd_path.replace("\\", "/")
+                        if mc:
+                            mc.optionVar(sv=("MMDToolsForMaya_LastModelVmdPath", model_vmd_path.replace("\\", "/")))
+                    if camera_vmd_path:
+                        vmd_data["camera_vmd_path"] = camera_vmd_path.replace("\\", "/")
+                        if mc:
+                            mc.optionVar(sv=("MMDToolsForMaya_LastCameraVmdPath", camera_vmd_path.replace("\\", "/")))
+                    if audio_wav_path:
+                        vmd_data["audio_path"] = audio_wav_path.replace("\\", "/")
+                        if mc:
+                            mc.optionVar(sv=("MMDToolsForMaya_LastAudioPath", audio_wav_path.replace("\\", "/")))
+                    with open(vmd_settings_path, 'w', encoding='utf-8') as f:
+                        json.dump(vmd_data, f, indent=4, ensure_ascii=False)
+                except Exception:
+                    pass
+
+                # 親ウィンドウのモーションタブ入力欄も即時更新
+                if self.parent_window and hasattr(self.parent_window, "tab_vmd"):
+                    try:
+                        self.parent_window.tab_vmd._load_settings()
+                    except Exception:
+                        pass
 
             # タイムライン範囲の更新
             if max_registered_frame > 0 and mc:

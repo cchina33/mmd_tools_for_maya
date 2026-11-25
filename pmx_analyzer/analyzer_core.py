@@ -12,10 +12,10 @@ import json
 import unicodedata
 
 try:
-    from .. import mmd_core
+    from .. import mmd_parser
     from ..asset import jaka, user_dict_manager
 except Exception:
-    import mmd_core
+    import mmd_parser
     from asset import jaka, user_dict_manager
 
 # CJK統合漢字の正規表現パターン
@@ -29,9 +29,9 @@ def export_pmx_structure(pmx_path, output_json_path=None):
     if not os.path.exists(pmx_path):
         raise FileNotFoundError(f"PMXファイルが見つかりません: {pmx_path}")
 
-    model = mmd_core.pmx.load(pmx_path)
+    model = mmd_parser.pmx.load(pmx_path)
 
-    # 1. モデル基本情報
+    # モデル基本情報
     analysis_data = {
         "model_info": {
             "name": model.name,
@@ -57,7 +57,7 @@ def export_pmx_structure(pmx_path, output_json_path=None):
         "joints": []
     }
 
-    # 2. 材質 (Materials)
+    # 材質 (Materials)
     for idx, mat in enumerate(model.materials):
         mat_info = {
             "index": idx,
@@ -78,7 +78,7 @@ def export_pmx_structure(pmx_path, output_json_path=None):
         }
         analysis_data["materials"].append(mat_info)
 
-    # 3. ボーン (Bones)
+    # ボーン (Bones)
     for idx, bone in enumerate(model.bones):
         bone_info = {
             "index": idx,
@@ -111,7 +111,7 @@ def export_pmx_structure(pmx_path, output_json_path=None):
                 })
         analysis_data["bones"].append(bone_info)
 
-    # 4. モーフ (Morphs)
+    # モーフ (Morphs)
     for idx, morph in enumerate(model.morphs):
         morph_info = {
             "index": idx,
@@ -123,7 +123,7 @@ def export_pmx_structure(pmx_path, output_json_path=None):
         }
         analysis_data["morphs"].append(morph_info)
 
-    # 5. 剛体 (Rigid Bodies)
+    # 剛体 (Rigid Bodies)
     for idx, rb in enumerate(model.rigid_bodies):
         rb_info = {
             "index": idx,
@@ -145,7 +145,7 @@ def export_pmx_structure(pmx_path, output_json_path=None):
         }
         analysis_data["rigid_bodies"].append(rb_info)
 
-    # 6. Joint (コンストレイント)
+    # Joint (コンストレイント)
     for idx, jt in enumerate(model.joints):
         jt_info = {
             "index": idx,
@@ -207,7 +207,7 @@ def find_unregistered_kanji_in_bones(pmx_path_or_model):
     if isinstance(pmx_path_or_model, str):
         if not os.path.exists(pmx_path_or_model):
             return []
-        model = mmd_core.pmx.load(pmx_path_or_model)
+        model = mmd_parser.pmx.load(pmx_path_or_model)
     else:
         model = pmx_path_or_model
 
@@ -264,7 +264,7 @@ def find_unregistered_morphs(pmx_path_or_model):
     if isinstance(pmx_path_or_model, str):
         if not os.path.exists(pmx_path_or_model):
             return []
-        model = mmd_core.pmx.load(pmx_path_or_model)
+        model = mmd_parser.pmx.load(pmx_path_or_model)
     else:
         model = pmx_path_or_model
 

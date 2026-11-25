@@ -176,10 +176,10 @@ class MaterialTabWidget(QWidget):
     def _create_mmd_ground_shadow(self):
         """MMD標準地面影プレーンを作成または最適化"""
         try:
-            from ..converters import pmxpaimaya
+            from ..maya_maya_converters import pmxpaimaya
         except Exception:
             try:
-                from converters import pmxpaimaya
+                from maya_converters import pmxpaimaya
             except Exception:
                 import pmxpaimaya
         try:
@@ -220,7 +220,7 @@ class MaterialTabWidget(QWidget):
             if results:
                 count = len(results)
                 msg = f"MMDシェーダーをアサインしました ({count} 個のシェーダー設定完了)。"
-                self.lbl_result.setText(f"<span style='color:#55ff77;'>✓ {msg}</span>")
+                self.lbl_result.setText(f"<span style='color:#55ff77;'>[OK] {msg}</span>")
                 mc.inViewMessage(
                     amg=f'<span style="color:#52b7ff;">MMD Tools for Maya:</span> {msg}',
                     pos='topCenter',
@@ -228,12 +228,12 @@ class MaterialTabWidget(QWidget):
                 )
             else:
                 msg = "アサイン対象のメッシュまたはシェーダーが見つかりませんでした。"
-                self.lbl_result.setText(f"<span style='color:#ffaa55;'>! {msg}</span>")
+                self.lbl_result.setText(f"<span style='color:#ffaa55;'>[注意] {msg}</span>")
                 QMessageBox.information(self, "情報", msg)
 
         except Exception as e:
             err_msg = f"シェーダーアサイン中にエラーが発生しました:\n{e}"
-            self.lbl_result.setText(f"<span style='color:#ff7777;'>✕ エラー</span>")
+            self.lbl_result.setText("<span style='color:#ff7777;'>[エラー] シェーダーアサイン失敗</span>")
             QMessageBox.critical(self, "エラー", err_msg)
 
 # ==============================================================================

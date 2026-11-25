@@ -304,9 +304,9 @@ class ExperimentalFeaturesDialog(QDialog):
         """VPDポーズ適用対象のMMDモデル一覧を更新"""
         self.cbb_vpd_target_model.clear()
         try:
-            from ..converters import vmdpaimaya
+            from ..maya_maya_converters import vmdpaimaya
         except Exception:
-            from converters import vmdpaimaya
+            from maya_converters import vmdpaimaya
         try:
             models = vmdpaimaya.get_available_mmd_models()
             for node_name, label in models:
@@ -334,9 +334,9 @@ class ExperimentalFeaturesDialog(QDialog):
         set_key = self.cb_vpd_keyframe.isChecked()
 
         try:
-            from ..converters import vmdpaimaya
+            from ..maya_maya_converters import vmdpaimaya
         except Exception:
-            from converters import vmdpaimaya
+            from maya_converters import vmdpaimaya
 
         try:
             res = vmdpaimaya.import_vpd(path, target_model_node=target_model, scale=scale, set_keyframe=set_key)
@@ -399,9 +399,9 @@ class ExperimentalFeaturesDialog(QDialog):
         """選択されているモデルまたはシーン内のMMDモデルにエッジメッシュを生成・適用"""
         try:
             try:
-                from ..converters import edge_mesh_builder
+                from ..maya_maya_converters import edge_mesh_builder
             except Exception:
-                from converters import edge_mesh_builder
+                from maya_converters import edge_mesh_builder
 
             try:
                 scale = float(self.le_vpd_scale.text())
@@ -434,9 +434,9 @@ class ExperimentalFeaturesDialog(QDialog):
         """選択されているモデルまたはシーン内のMMDモデルのエッジメッシュを解除・削除"""
         try:
             try:
-                from ..converters import edge_mesh_builder
+                from ..maya_maya_converters import edge_mesh_builder
             except Exception:
-                from converters import edge_mesh_builder
+                from maya_converters import edge_mesh_builder
 
             removed = edge_mesh_builder.remove_edge_mesh_from_scene()
             if removed:

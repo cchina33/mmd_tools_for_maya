@@ -747,10 +747,10 @@ class MMDMorphWindow(QWidget):
             return []
 
         try:
-            from ..converters import vmdpaimaya
+            from ..maya_maya_converters import vmdpaimaya
         except Exception:
             try:
-                from converters import vmdpaimaya
+                from maya_converters import vmdpaimaya
             except Exception:
                 import vmdpaimaya
 
@@ -1052,18 +1052,6 @@ class MMDMorphWindow(QWidget):
                             if model_name_lower and model_name_lower in fname.lower():
                                 score += 1000000000.0
                             candidate_files.append((score, full_path))
-
-            if not candidate_files:
-                tes_dir = os.path.join(plugin_root, "tes_model")
-                if os.path.exists(tes_dir):
-                    for root, _, files in os.walk(tes_dir):
-                        for fname in files:
-                            if fname.endswith("_pmx_analysis.json"):
-                                full_path = os.path.join(root, fname)
-                                score = os.path.getmtime(full_path)
-                                if model_name_lower and model_name_lower in fname.lower():
-                                    score += 1000000000.0
-                                candidate_files.append((score, full_path))
 
             if candidate_files:
                 candidate_files.sort(key=lambda x: x[0], reverse=True)
